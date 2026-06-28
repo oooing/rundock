@@ -8,8 +8,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/launcher-sidecar/internal/app"
+	"github.com/launcher-sidecar/internal/probe"
 	"github.com/launcher-sidecar/internal/store"
 )
 
@@ -264,6 +266,107 @@ func (s *Server) handleOpenDir(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"opened": dir})
+}
+
+// PATCH /api/apps/{id}/services/{sid}/role { role: "frontend" }
+// 手动设置服务角色，锁定为 manual（自动识别不再覆盖）。
+func (s *Server) handleServiceRole(w http.ResponseWriter, r *http.Request, appID, sid string) {
+	if r.Method != http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	switch body.Role {
+	case store.RoleFrontend, store.RoleBackend, store.RoleDatabase, store.RoleUnknown:
+		// ok
+	default:
+		writeError(w, http.StatusBadRequest, "invalid role: "+body.Role)
+		return
+	}
+	svc, err := s.Store.GetService(sid)
+	if err != nil || svc == nil {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := s.Store.SetServiceRole(sid, body.Role); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.broadcastServices(appID)
+	writeJSON(w, http.StatusOK, map[string]string{"role": body.Role, "roleSource": store.RoleSourceManual})
+}
+
+// POST /api/apps/{id}/services/{sid}/reidentify
+// 强制重新识别：重置为 auto，用端口 + HTTP 响应头重新 classify。
+func (s *Server) handleServiceReidentify(w http.ResponseWriter, r *http.Request, appID, sid string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	svc, err := s.Store.GetService(sid)
+	if err != nil || svc == nil {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := s.Store.ResetServiceRoleToAuto(sid); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// 同步重新探测：端口 + 响应头 + Title/CT。
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	hr := probe.CheckHealth(ctx, svc.URL)
+	headers := map[string]string{}
+	var title string
+	if hr != nil {
+		if hr.Server != "" {
+			headers["Server"] = hr.Server
+		}
+		if hr.PoweredBy != "" {
+			headers["X-Powered-By"] = hr.PoweredBy
+		}
+		title = hr.Title
+	}
+	role, _ := probe.Classify(probe.ClassifyInput{
+		Port:    svc.Port,
+		Headers: headers,
+		Title:   title,
+		BodyCT:  contentTypeOf(hr),
+	})
+	_, _ = s.Store.UpdateServiceRoleIfAuto(sid, string(role))
+	s.broadcastServices(appID)
+	writeJSON(w, http.StatusOK, map[string]string{"role": string(role), "roleSource": store.RoleSourceAuto})
+}
+
+// contentTypeOf 取 HealthResult 的 Content-Type，nil 安全。
+func contentTypeOf(hr *probe.HealthResult) string {
+	if hr == nil {
+		return ""
+	}
+	return hr.ContentType
+}
+
+// broadcastServices 广播某 app 的最新 services 列表（复用 app:services）。
+func (s *Server) broadcastServices(appID string) {
+	if s.Hub == nil {
+		return
+	}
+	svcs, err := s.Store.ListServicesByApp(appID)
+	if err != nil {
+		return
+	}
+	run, _ := s.Store.GetLatestRun(appID)
+	runID := ""
+	if run != nil {
+		runID = run.ID
+	}
+	s.Hub.BroadcastServices(appID, runID, svcs)
 }
 
 // openExternal 跨平台打开 URL 或目录。

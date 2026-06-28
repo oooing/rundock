@@ -123,6 +123,18 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 	case "ports":
 		s.handlePorts(w, r, id)
 	default:
+		// services/{sid}/role 与 services/{sid}/reidentify:多段子路径
+		if sid, sub := pathTail("services/", rest); sid != "" {
+			switch sub {
+			case "role":
+				s.handleServiceRole(w, r, id, sid)
+			case "reidentify":
+				s.handleServiceReidentify(w, r, id, sid)
+			default:
+				writeError(w, http.StatusNotFound, "unknown service subpath: "+sub)
+			}
+			return
+		}
 		writeError(w, http.StatusNotFound, "unknown subpath: "+rest)
 	}
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { AppView, ServiceRole } from '@/types'
 
 const props = defineProps<{ app: AppView }>()
@@ -24,8 +24,8 @@ const ROLE_OPTIONS: ServiceRole[] = ['frontend', 'backend', 'database', 'unknown
 
 // 当前展开切换菜单的 service id（null = 无）
 const roleMenuOpen = ref<string | null>(null)
-function roleMeta(role?: string) {
-  return ROLE_META[(role as ServiceRole) || 'unknown']
+function roleMeta(role: ServiceRole) {
+  return ROLE_META[role]
 }
 function toggleRoleMenu(svcId: string) {
   roleMenuOpen.value = roleMenuOpen.value === svcId ? null : svcId
@@ -38,6 +38,16 @@ function reidentify(svcId: string) {
   roleMenuOpen.value = null
   emit('reidentify', a.value.id, svcId)
 }
+
+// 服务列表变化时，若当前打开菜单的 service 已不存在，则关闭菜单并清除幻影遮罩。
+watch(
+  () => a.value.services?.map((s) => s.id),
+  (ids) => {
+    if (roleMenuOpen.value && ids && !ids.includes(roleMenuOpen.value)) {
+      roleMenuOpen.value = null
+    }
+  }
+)
 
 // 重命名
 const editingName = ref(false)

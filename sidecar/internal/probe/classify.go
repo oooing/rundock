@@ -25,7 +25,7 @@ const (
 // ClassifyInput 识别输入。所有字段可选(零值即无该信号)。
 type ClassifyInput struct {
 	Port     int               // 监听端口
-	Headers  map[string]string // HTTP 响应头(键已小写),可空
+	Headers  map[string]string // HTTP 响应头(键大小写不敏感,值做小写匹配),可空
 	Title    string            // HTML <title>,可空
 	BodyCT   string            // Content-Type,可空
 	LogHints []string          // 命中框架特征的日志片段,可空
@@ -78,13 +78,17 @@ func matchHeaders(h map[string]string) (Role, bool) {
 	if h == nil {
 		return RoleUnknown, false
 	}
-	// 合并 server 与 x-powered-by 两处文本
-	fields := []string{h["server"], h["x-powered-by"]}
-	combined := strings.ToLower(strings.Join(fields, " "))
-	if containsAny(combined, frontendHeaderKW) {
+	// 合并所有 header 值(键大小写不敏感:调用方可能传 Go canonical 大写键
+	// 如 "Server"/"X-Powered-By",也可能传小写键)。统一收集后小写匹配。
+	combined := make([]string, 0, len(h))
+	for _, v := range h {
+		combined = append(combined, v)
+	}
+	lc := strings.ToLower(strings.Join(combined, " "))
+	if containsAny(lc, frontendHeaderKW) {
 		return RoleFrontend, true
 	}
-	if containsAny(combined, backendHeaderKW) {
+	if containsAny(lc, backendHeaderKW) {
 		return RoleBackend, true
 	}
 	return RoleUnknown, false

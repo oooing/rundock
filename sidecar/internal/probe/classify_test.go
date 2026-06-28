@@ -21,6 +21,8 @@ func TestClassify(t *testing.T) {
 		{"header x-powered-by express", ClassifyInput{Headers: map[string]string{"x-powered-by": "Express"}}, RoleBackend, ConfHigh},
 		{"header server uvicorn", ClassifyInput{Headers: map[string]string{"server": "uvicorn"}}, RoleBackend, ConfHigh},
 		{"header next.js -> frontend", ClassifyInput{Headers: map[string]string{"x-powered-by": "Next.js"}}, RoleFrontend, ConfHigh},
+		// 键大小写不敏感:调用方可能传 Go canonical 大写键(Server / X-Powered-By)。
+		{"header canonical-case keys", ClassifyInput{Headers: map[string]string{"Server": "Vite", "X-Powered-By": "Express"}}, RoleFrontend, ConfHigh},
 
 		// --- Title/Content-Type(中)---
 		{"title vite+react no header", ClassifyInput{Title: "Vite + React"}, RoleFrontend, ConfMedium},

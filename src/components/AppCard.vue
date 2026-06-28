@@ -24,8 +24,9 @@ const ROLE_OPTIONS: ServiceRole[] = ['frontend', 'backend', 'database', 'unknown
 
 // 当前展开切换菜单的 service id（null = 无）
 const roleMenuOpen = ref<string | null>(null)
-function roleMeta(role: ServiceRole) {
-  return ROLE_META[role]
+// role 可能为 undefined（老数据/未填充），默认回退到 unknown，避免 ROLE_META[undefined] 崩溃。
+function roleMeta(role?: ServiceRole) {
+  return ROLE_META[role ?? 'unknown']
 }
 function toggleRoleMenu(svcId: string) {
   roleMenuOpen.value = roleMenuOpen.value === svcId ? null : svcId

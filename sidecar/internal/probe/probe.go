@@ -63,11 +63,13 @@ func FilterByPID(list []PortListener, pids map[int]bool) []PortListener {
 
 // HealthResult 健康检查结果。
 type HealthResult struct {
-	URL        string `json:"url"`
-	StatusCode int    `json:"statusCode"`
-	Reachable  bool   `json:"reachable"`
-	Title      string `json:"title"`
-	Server     string `json:"server"`
+	URL         string `json:"url"`
+	StatusCode  int    `json:"statusCode"`
+	Reachable   bool   `json:"reachable"`
+	Title       string `json:"title"`
+	Server      string `json:"server"`
+	PoweredBy   string `json:"poweredBy"`   // X-Powered-By 头(Express/FastAPI/Next 等)
+	ContentType string `json:"contentType"` // Content-Type 头(供角色识别)
 }
 
 var httpClient = &http.Client{Timeout: 3 * time.Second}
@@ -116,11 +118,13 @@ func probeURL(ctx context.Context, u string) *HealthResult {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	r := &HealthResult{
-		URL:        u,
-		StatusCode: resp.StatusCode,
-		Reachable:  resp.StatusCode >= 200 && resp.StatusCode < 400,
-		Server:     resp.Header.Get("Server"),
-		Title:      extractTitle(string(body)),
+		URL:         u,
+		StatusCode:  resp.StatusCode,
+		Reachable:   resp.StatusCode >= 200 && resp.StatusCode < 400,
+		Server:      resp.Header.Get("Server"),
+		PoweredBy:   resp.Header.Get("X-Powered-By"),
+		ContentType: resp.Header.Get("Content-Type"),
+		Title:       extractTitle(string(body)),
 	}
 	return r
 }

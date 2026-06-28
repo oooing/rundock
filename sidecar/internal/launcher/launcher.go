@@ -249,6 +249,8 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 			continue
 		}
 		url := probe.JoinHostPort("localhost", p.Port)
+		// 初判角色：端口(DB 端口高置信) + 日志特征(低置信)。
+		role, conf := probe.Classify(probe.ClassifyInput{Port: p.Port})
 		svc := &store.AppService{
 			ID:         app.NewID(),
 			AppID:      appID,
@@ -257,6 +259,8 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 			URL:        url,
 			Health:     "unknown",
 			DetectedAt: time.Now().UTC().Format(time.RFC3339),
+			Role:       string(role),
+			RoleSource: store.RoleSourceAuto,
 		}
 		_ = l.Store.UpsertService(svc)
 		_ = l.Store.InsertPort(rt.RunID, p.Port, "tcp")
@@ -266,6 +270,10 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 		a, _ := l.Store.GetApp(appID)
 		if a != nil && a.LastURL == "" {
 			_ = l.Store.TouchAppRuntime(appID, "", url, "")
+		}
+		// 异步用 HTTP 响应头升级 role（仅当当前置信度不足 High，即非 DB 端口）。
+		if conf < probe.ConfHigh {
+			go l.refineRoleWithProbe(appID, svc.ID, rt.RunID, url)
 		}
 	}
 }
@@ -285,10 +293,15 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime) {
 			healthy++
 			continue
 		}
-		ok := l.probeService(svc.URL)
+		hr := l.probeService(svc.URL)
+		ok := hr != nil && hr.Reachable
 		if ok {
 			_ = l.Store.UpdateServiceHealth(svc.ID, "healthy", now)
 			healthy++
+			// 顺带：用响应头升级 auto 服务角色（仅当前还是 unknown 时，避免覆盖已有判定）。
+			if svc.RoleSource == store.RoleSourceAuto && svc.Role == store.RoleUnknown {
+				l.tryUpgradeRole(svc, hr)
+			}
 		} else {
 			_ = l.Store.UpdateServiceHealth(svc.ID, "unhealthy", now)
 			unhealthy++
@@ -322,15 +335,70 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime) {
 	}
 }
 
-// probeService 单次健康检查某 URL。
-func (l *Launcher) probeService(url string) bool {
+// probeService 单次健康检查某 URL，返回含响应头/Title 的结果（供角色识别复用）。
+// 返回 nil 表示 URL 为空；不可达时返回的 HealthResult.Reachable=false。
+func (l *Launcher) probeService(url string) *probe.HealthResult {
 	if url == "" {
-		return false
+		return nil
 	}
 	cctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	confirmed, _ := probe.ConfirmReachable(cctx, []string{url}, 4*time.Second)
-	return confirmed != ""
+	return probe.CheckHealth(cctx, url)
+}
+
+// healthResultToHeaders 把 HealthResult 的响应头字段拼成 ClassifyInput.Headers(键大小写不敏感)。
+func healthResultToHeaders(hr *probe.HealthResult) map[string]string {
+	if hr == nil {
+		return nil
+	}
+	h := map[string]string{}
+	if hr.Server != "" {
+		h["Server"] = hr.Server
+	}
+	if hr.PoweredBy != "" {
+		h["X-Powered-By"] = hr.PoweredBy
+	}
+	return h
+}
+
+// refineRoleWithProbe 异步用 HTTP 响应头/Title 重新 classify，仅在 role_source=auto 时升级。
+// runID 用于升级成功后广播刷新前端。
+func (l *Launcher) refineRoleWithProbe(appID, serviceID, runID, url string) {
+	hr := l.probeService(url)
+	if hr == nil {
+		return
+	}
+	role, conf := probe.Classify(probe.ClassifyInput{
+		Headers: healthResultToHeaders(hr),
+		Title:   hr.Title,
+		BodyCT:  hr.ContentType,
+	})
+	// 仅中置信度(响应头/title/CT)以上才升级；低置信度(日志)不值得覆盖。
+	if conf < probe.ConfMedium {
+		return
+	}
+	if err := l.Store.UpdateServiceRoleIfAuto(serviceID, string(role)); err != nil {
+		return
+	}
+	// 广播刷新前端（复用 app:services）。
+	if l.Hub != nil {
+		if updated, err := l.Store.ListServicesByRun(runID); err == nil {
+			l.Hub.BroadcastServices(appID, runID, updated)
+		}
+	}
+}
+
+// tryUpgradeRole 在健康复查命中时用响应头升级 auto 且 unknown 的服务角色。
+func (l *Launcher) tryUpgradeRole(svc *store.AppService, hr *probe.HealthResult) {
+	role, conf := probe.Classify(probe.ClassifyInput{
+		Headers: healthResultToHeaders(hr),
+		Title:   hr.Title,
+		BodyCT:  hr.ContentType,
+	})
+	if conf < probe.ConfMedium {
+		return
+	}
+	_ = l.Store.UpdateServiceRoleIfAuto(svc.ID, string(role))
 }
 
 // watchExit 等进程退出，更新状态。

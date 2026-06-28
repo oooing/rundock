@@ -49,6 +49,10 @@ func Open(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := s.ensureSchema(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ensure schema: %w", err)
+	}
 	return s, nil
 }
 
@@ -57,6 +61,50 @@ func (s *Store) DB() *sql.DB { return s.db }
 
 // Close 关闭数据库。
 func (s *Store) Close() error { return s.db.Close() }
+
+// ensureSchema 处理 ALTER TABLE ADD COLUMN 的非幂等列(role/role_source)。
+// SQLite 的 ADD COLUMN 列已存在时报 "duplicate column name",不像 CREATE IF NOT EXISTS 那样可重复执行,
+// 故用 PRAGMA table_info 先检测列是否已存在,缺哪列补哪列。每次 Open 调用一次,安全。
+func (s *Store) ensureSchema() error {
+	cols, err := s.tableColumns("app_services")
+	if err != nil {
+		return err
+	}
+	wanted := map[string]string{
+		"role":        "TEXT NOT NULL DEFAULT 'unknown'",
+		"role_source": "TEXT NOT NULL DEFAULT 'auto'",
+	}
+	for col, def := range wanted {
+		if !cols[strings.ToUpper(col)] {
+			if _, err := s.db.Exec("ALTER TABLE app_services ADD COLUMN " + col + " " + def); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// tableColumns 返回某表已有的列名集合(键已大写,便于大小写不敏感比较)。
+func (s *Store) tableColumns(table string) (map[string]bool, error) {
+	rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[strings.ToUpper(name)] = true
+	}
+	return cols, rows.Err()
+}
 
 // migrate 按文件名顺序执行 migrations/*.sql。
 // 采用简单的"一次性执行"策略：所有脚本都是幂等的（CREATE IF NOT EXISTS / INSERT OR IGNORE），

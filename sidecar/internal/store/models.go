@@ -82,16 +82,36 @@ type AppService struct {
 	Health      string `json:"health"`      // healthy/unhealthy/unknown
 	LastChecked string `json:"lastChecked"`
 	DetectedAt  string `json:"detectedAt"`
+	Role        string `json:"role"`        // frontend|backend|database|unknown
+	RoleSource  string `json:"roleSource"`  // auto|manual
 }
+
+// AppService 的 role 取值常量。
+const (
+	RoleFrontend = "frontend"
+	RoleBackend  = "backend"
+	RoleDatabase = "database"
+	RoleUnknown  = "unknown"
+)
+
+// AppService 的 role_source 取值。
+const (
+	RoleSourceAuto   = "auto"
+	RoleSourceManual = "manual"
+)
 
 // ----- AppService CRUD（多服务模型） -----
 
 // UpsertService 插入或更新一个服务（按 app_run_id + port 去重）。
+// ON CONFLICT 不覆盖 role/role_source —— 角色更新走 SetServiceRole/UpdateServiceRoleIfAuto,
+// 避免 upsert 把手动标注(manual)抹掉。
 func (s *Store) UpsertService(svc *AppService) error {
-	_, err := s.db.Exec(`INSERT INTO app_services (id,app_id,app_run_id,port,url,health,last_checked,detected_at)
-		VALUES (?,?,?,?,?,?,?,?)
+	_, err := s.db.Exec(`INSERT INTO app_services (id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source)
+		VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET health=excluded.health, last_checked=excluded.last_checked, url=excluded.url`,
-		svc.ID, svc.AppID, svc.AppRunID, svc.Port, svc.URL, svc.Health, nullableStringEmpty(svc.LastChecked), svc.DetectedAt)
+		svc.ID, svc.AppID, svc.AppRunID, svc.Port, svc.URL, svc.Health,
+		nullableStringEmpty(svc.LastChecked), svc.DetectedAt,
+		strDefault(svc.Role, RoleUnknown), strDefault(svc.RoleSource, RoleSourceAuto))
 	return err
 }
 
@@ -111,7 +131,7 @@ func (s *Store) UpdateServiceHealth(id, health, lastChecked string) error {
 
 // ListServicesByApp 返回某项目下所有服务（按端口排序）。
 func (s *Store) ListServicesByApp(appID string) ([]*AppService, error) {
-	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at
+	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
 		FROM app_services WHERE app_id=? ORDER BY port ASC`, appID)
 	if err != nil {
 		return nil, err
@@ -122,7 +142,7 @@ func (s *Store) ListServicesByApp(appID string) ([]*AppService, error) {
 
 // ListServicesByRun 返回某次运行发现的所有服务。
 func (s *Store) ListServicesByRun(runID string) ([]*AppService, error) {
-	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at
+	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
 		FROM app_services WHERE app_run_id=? ORDER BY port ASC`, runID)
 	if err != nil {
 		return nil, err
@@ -137,7 +157,8 @@ func scanServices(rows *sql.Rows) ([]*AppService, error) {
 	for rows.Next() {
 		svc := &AppService{}
 		var lastChecked sql.NullString
-		if err := rows.Scan(&svc.ID, &svc.AppID, &svc.AppRunID, &svc.Port, &svc.URL, &svc.Health, &lastChecked, &svc.DetectedAt); err != nil {
+		if err := rows.Scan(&svc.ID, &svc.AppID, &svc.AppRunID, &svc.Port, &svc.URL, &svc.Health,
+			&lastChecked, &svc.DetectedAt, &svc.Role, &svc.RoleSource); err != nil {
 			return nil, err
 		}
 		if lastChecked.Valid {
@@ -146,6 +167,53 @@ func scanServices(rows *sql.Rows) ([]*AppService, error) {
 		out = append(out, svc)
 	}
 	return out, rows.Err()
+}
+
+// GetService 按 ID 查询单个服务。
+func (s *Store) GetService(id string) (*AppService, error) {
+	row := s.db.QueryRow(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
+		FROM app_services WHERE id=?`, id)
+	svc := &AppService{}
+	var lastChecked sql.NullString
+	if err := row.Scan(&svc.ID, &svc.AppID, &svc.AppRunID, &svc.Port, &svc.URL, &svc.Health,
+		&lastChecked, &svc.DetectedAt, &svc.Role, &svc.RoleSource); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if lastChecked.Valid {
+		svc.LastChecked = lastChecked.String
+	}
+	return svc, nil
+}
+
+// SetServiceRole 手动设置角色:置 role 并锁定 role_source=manual（自动识别不再覆盖）。
+func (s *Store) SetServiceRole(id, role string) error {
+	_, err := s.db.Exec(`UPDATE app_services SET role=?, role_source=? WHERE id=?`,
+		role, RoleSourceManual, id)
+	return err
+}
+
+// UpdateServiceRoleIfAuto 仅当 role_source='auto' 时更新 role（自动识别升级用）。
+func (s *Store) UpdateServiceRoleIfAuto(id, role string) error {
+	_, err := s.db.Exec(`UPDATE app_services SET role=? WHERE id=? AND role_source='auto'`, role, id)
+	return err
+}
+
+// ResetServiceRoleToAuto 强制重新识别:重置 role_source=auto（供 reidentify 端点用）。
+// role 本身由调用方随后重新 classify 写入。
+func (s *Store) ResetServiceRoleToAuto(id string) error {
+	_, err := s.db.Exec(`UPDATE app_services SET role_source=? WHERE id=?`, RoleSourceAuto, id)
+	return err
+}
+
+// strDefault 空串返回 def（本包私有，不与 api 包的 defaultStr 冲突）。
+func strDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 // DeleteServicesByApp 删除某项目下所有服务（项目删除/重新启动时清理）。

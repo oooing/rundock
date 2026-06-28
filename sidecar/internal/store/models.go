@@ -196,9 +196,14 @@ func (s *Store) SetServiceRole(id, role string) error {
 }
 
 // UpdateServiceRoleIfAuto 仅当 role_source='auto' 时更新 role（自动识别升级用）。
-func (s *Store) UpdateServiceRoleIfAuto(id, role string) error {
-	_, err := s.db.Exec(`UPDATE app_services SET role=? WHERE id=? AND role_source='auto'`, role, id)
-	return err
+// 返回 updated 表示是否实际更新了一行（用于决定是否广播：行被删除/已锁定/值未变时返回 false）。
+func (s *Store) UpdateServiceRoleIfAuto(id, role string) (updated bool, err error) {
+	res, err := s.db.Exec(`UPDATE app_services SET role=? WHERE id=? AND role_source='auto' AND role<>?`, role, id, role)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ResetServiceRoleToAuto 强制重新识别:重置 role_source=auto（供 reidentify 端点用）。

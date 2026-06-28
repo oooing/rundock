@@ -377,13 +377,13 @@ func (l *Launcher) refineRoleWithProbe(appID, serviceID, runID, url string) {
 	if conf < probe.ConfMedium {
 		return
 	}
-	if err := l.Store.UpdateServiceRoleIfAuto(serviceID, string(role)); err != nil {
-		return
+	if updated, err := l.Store.UpdateServiceRoleIfAuto(serviceID, string(role)); err != nil || !updated {
+		return // 未实际更新(行已删/已锁定/值未变):不广播,避免 ghost broadcast
 	}
 	// 广播刷新前端（复用 app:services）。
 	if l.Hub != nil {
-		if updated, err := l.Store.ListServicesByRun(runID); err == nil {
-			l.Hub.BroadcastServices(appID, runID, updated)
+		if svcs, err := l.Store.ListServicesByRun(runID); err == nil {
+			l.Hub.BroadcastServices(appID, runID, svcs)
 		}
 	}
 }
@@ -398,7 +398,7 @@ func (l *Launcher) tryUpgradeRole(svc *store.AppService, hr *probe.HealthResult)
 	if conf < probe.ConfMedium {
 		return
 	}
-	_ = l.Store.UpdateServiceRoleIfAuto(svc.ID, string(role))
+	_, _ = l.Store.UpdateServiceRoleIfAuto(svc.ID, string(role))
 }
 
 // watchExit 等进程退出，更新状态。

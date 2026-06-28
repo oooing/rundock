@@ -56,13 +56,19 @@ func TestRoleUpdateMethods(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// IfAuto 升级:应成功
-	if err := s.UpdateServiceRoleIfAuto("s1", RoleBackend); err != nil {
-		t.Fatalf("UpdateServiceRoleIfAuto: %v", err)
+	// IfAuto 升级:应成功且 updated=true
+	updated, err := s.UpdateServiceRoleIfAuto("s1", RoleBackend)
+	if err != nil || !updated {
+		t.Fatalf("UpdateServiceRoleIfAuto: updated=%v err=%v", updated, err)
 	}
 	g, _ := s.GetService("s1")
 	if g.Role != RoleBackend || g.RoleSource != RoleSourceAuto {
 		t.Errorf("after IfAuto: %q/%q", g.Role, g.RoleSource)
+	}
+	// 相同值再升级:应 updated=false(无变化)
+	updated, _ = s.UpdateServiceRoleIfAuto("s1", RoleBackend)
+	if updated {
+		t.Errorf("no-op upgrade should report updated=false")
 	}
 
 	// 手动锁定
@@ -74,10 +80,13 @@ func TestRoleUpdateMethods(t *testing.T) {
 		t.Errorf("after Set: %q/%q", g.Role, g.RoleSource)
 	}
 
-	// 锁定后 IfAuto 不应再改
-	_ = s.UpdateServiceRoleIfAuto("s1", RoleDatabase)
+	// 锁定后 IfAuto 不应再改(manual 守卫 => updated=false)
+	updated, _ = s.UpdateServiceRoleIfAuto("s1", RoleDatabase)
+	if updated {
+		t.Errorf("manual locked, IfAuto should report updated=false")
+	}
 	g, _ = s.GetService("s1")
 	if g.Role != RoleFrontend {
-		t.Errorf("manual locked, IfAuto should be no-op, got %q", g.Role)
+		t.Errorf("manual locked, role should stay frontend, got %q", g.Role)
 	}
 }

@@ -1,0 +1,37 @@
+# 依赖
+node_modules/
+code/sidecar/dist/
+
+# 构建产物
+dist/
+!dist/*.exe
+!dist/*.msi
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+
+# Go
+sidecar/launcher-sidecar
+sidecar/launcher-sidecar.exe
+*.exe~
+vendor/
+
+# 环境与本地数据
+.env
+.env.local
+*.local
+
+# 运行日志与误生成的保留名文件
+sidecar-dev.log
+nul
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

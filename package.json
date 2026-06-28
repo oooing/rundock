@@ -1,0 +1,27 @@
+{
+  "name": "launcher-platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Windows AI 启动平台 — 拖入 start.bat 即可托管、自动识别 URL、无窗口管理",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit",
+    "tauri": "tauri",
+    "sidecar": "echo \"Run via: cd sidecar && go run ./cmd/launcher-sidecar -port 17654\""
+  },
+  "dependencies": {
+    "pinia": "^2.2.6",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-shell": "^2.0.1",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "vue-tsc": "^2.1.10"
+  }
+}

@@ -81,6 +81,22 @@ export const useAppsStore = defineStore('apps', () => {
     patchFull(updated)
   }
 
+  /** 手动设置服务角色（锁定为 manual）。后端会广播 app:services，这里乐观更新避免等待。 */
+  async function setServiceRole(appId: string, serviceId: string, role: import('@/types').ServiceRole) {
+    await api.setServiceRole(appId, serviceId, role)
+    const a = apps.value.find((x) => x.id === appId)
+    if (a && a.services) {
+      a.services = a.services.map((s) =>
+        s.id === serviceId ? { ...s, role, roleSource: 'manual' as const } : s
+      )
+    }
+  }
+
+  /** 强制重新识别某服务角色（重置为 auto）。后端重新探测后广播 app:services，本地不乐观更新。 */
+  async function reidentifyService(appId: string, serviceId: string) {
+    await api.reidentifyService(appId, serviceId)
+  }
+
   function patch(id: string, p: Partial<AppView>) {
     const idx = apps.value.findIndex((a) => a.id === id)
     if (idx >= 0) apps.value[idx] = { ...apps.value[idx], ...p }
@@ -141,6 +157,7 @@ export const useAppsStore = defineStore('apps', () => {
   return {
     apps, loading, error, liveLogs,
     load, importRaw, createFromCandidate, start, stop, restart, remove, rename, openURL, openDir, update,
+    setServiceRole, reidentifyService,
     patch, bindWS, clearLiveLogs,
   }
 })

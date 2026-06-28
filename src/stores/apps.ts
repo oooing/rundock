@@ -81,7 +81,7 @@ export const useAppsStore = defineStore('apps', () => {
     patchFull(updated)
   }
 
-  /** 手动设置服务角色（锁定为 manual）。后端会广播 app:services，这里乐观更新避免等待。 */
+  /** 手动设置服务角色（锁定为 manual）。后端会广播 app:services，这里在请求确认后立即本地更新，避免等待 WS 广播造成闪烁。 */
   async function setServiceRole(appId: string, serviceId: string, role: import('@/types').ServiceRole) {
     await api.setServiceRole(appId, serviceId, role)
     const a = apps.value.find((x) => x.id === appId)

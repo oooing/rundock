@@ -110,6 +110,9 @@ export interface PortEntry {
   detectedAt: string
 }
 
+/** 服务角色 */
+export type ServiceRole = 'frontend' | 'backend' | 'database' | 'unknown'
+
 /** 项目下的一个服务（对应一个监听端口） */
 export interface AppService {
   id: string
@@ -120,6 +123,8 @@ export interface AppService {
   health: 'healthy' | 'unhealthy' | 'unknown'
   lastChecked: string
   detectedAt: string
+  role: ServiceRole
+  roleSource: 'auto' | 'manual'
 }
 
 /** WebSocket 消息信封 */

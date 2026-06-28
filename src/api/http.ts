@@ -8,6 +8,7 @@ import type {
   ImportCandidate,
   LogsResponse,
   PortEntry,
+  ServiceRole,
 } from '@/types'
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -62,6 +63,17 @@ export const api = {
     return req<LogsResponse>(`/api/apps/${id}/logs?${p.toString()}`)
   },
   ports: (id: string) => req<PortEntry[]>(`/api/apps/${id}/ports`),
+
+  // 服务角色
+  setServiceRole: (appId: string, serviceId: string, role: ServiceRole) =>
+    req<{ role: string; roleSource: string }>(`/api/apps/${appId}/services/${serviceId}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    }),
+  reidentifyService: (appId: string, serviceId: string) =>
+    req<{ role: string; roleSource: string }>(`/api/apps/${appId}/services/${serviceId}/reidentify`, {
+      method: 'POST',
+    }),
 
   // 分组
   listGroups: () => req<Group[]>('/api/groups'),

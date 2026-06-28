@@ -91,8 +91,13 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	// 同时收集历史端口（该 app 之前用过的端口），用于启动前清端口
 	oldSvcs, _ := l.Store.ListServicesByApp(appID)
 	historicPorts := make([]int, 0, len(oldSvcs))
+	// 快照用户手动标注的角色（按端口），以便重启后还原到新 run 的服务上。
+	manualRoles := map[int]string{}
 	for _, s := range oldSvcs {
 		historicPorts = append(historicPorts, s.Port)
+		if s.RoleSource == store.RoleSourceManual && s.Role != "" {
+			manualRoles[s.Port] = s.Role
+		}
 	}
 	_ = l.Store.DeleteServicesByApp(appID)
 
@@ -156,7 +161,7 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	go l.watchExit(appID, rt, handle, cancel)
 
 	// 后台：多服务发现 + 健康检查 + 综合状态（替代旧的单服务 watchHealth/observePorts）
-	go l.watchServices(appID, rt, beforePorts)
+	go l.watchServices(appID, rt, beforePorts, manualRoles)
 
 	return nil
 }
@@ -166,7 +171,7 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 // 项目状态按木桶原则综合：所有 service healthy => running；任一 unhealthy => degraded。
 //
 // 与旧逻辑区别：不再只盯第一个端口，而是发现全部端口，每个独立判定，综合出项目状态。
-func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.PortListener) {
+func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string) {
 	deadline := time.NewTimer(l.urlTimeout) // 发现窗口：超过这个时间仍无任何端口则标 degraded
 	defer deadline.Stop()
 	ticker := time.NewTicker(3 * time.Second)
@@ -180,7 +185,7 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 				return
 			}
 			// 扫描新增端口，登记为 service
-			l.discoverServices(appID, rt, before)
+			l.discoverServices(appID, rt, before, manualRoles)
 			// 对所有 service 做健康检查，并综合出项目状态
 			l.recheckAndAggregate(appID, rt)
 		case <-deadline.C:
@@ -205,7 +210,7 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 //   - 进程树断裂的项目（batch）→ 证据2 命中，仍能发现
 //   - 无关端口 → 两证据都不满足，排除
 //   - 多项目并存 → 各自日志只提自己的 URL，互不干扰
-func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []probe.PortListener) {
+func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string) {
 	all := probe.SnapshotListeners()
 
 	// === 证据1：进程树归属 ===
@@ -251,6 +256,14 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 		url := probe.JoinHostPort("localhost", p.Port)
 		// 初判角色：端口(DB 端口高置信) + 日志特征(低置信)。
 		role, conf := probe.Classify(probe.ClassifyInput{Port: p.Port})
+		roleStr := string(role)
+		roleSource := store.RoleSourceAuto
+		// 还原用户上次手动标注的角色（按端口匹配，重启后保留）。
+		if manualRole, ok := manualRoles[p.Port]; ok {
+			roleStr = manualRole
+			roleSource = store.RoleSourceManual
+			conf = probe.ConfHigh // manual 视为高置信，跳过异步升级
+		}
 		svc := &store.AppService{
 			ID:         app.NewID(),
 			AppID:      appID,
@@ -259,8 +272,8 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 			URL:        url,
 			Health:     "unknown",
 			DetectedAt: time.Now().UTC().Format(time.RFC3339),
-			Role:       string(role),
-			RoleSource: store.RoleSourceAuto,
+			Role:       roleStr,
+			RoleSource: roleSource,
 		}
 		_ = l.Store.UpsertService(svc)
 		_ = l.Store.InsertPort(rt.RunID, p.Port, "tcp")
@@ -271,7 +284,7 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 		if a != nil && a.LastURL == "" {
 			_ = l.Store.TouchAppRuntime(appID, "", url, "")
 		}
-		// 异步用 HTTP 响应头升级 role（仅当当前置信度不足 High，即非 DB 端口）。
+		// 异步用 HTTP 响应头升级 role（仅当当前置信度不足 High，即非 DB 端口/非 manual）。
 		if conf < probe.ConfHigh {
 			go l.refineRoleWithProbe(appID, svc.ID, rt.RunID, url)
 		}

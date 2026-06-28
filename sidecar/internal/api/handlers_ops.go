@@ -290,7 +290,7 @@ func (s *Server) handleServiceRole(w http.ResponseWriter, r *http.Request, appID
 		return
 	}
 	svc, err := s.Store.GetService(sid)
-	if err != nil || svc == nil {
+	if err != nil || svc == nil || svc.AppID != appID {
 		writeError(w, http.StatusNotFound, "service not found")
 		return
 	}
@@ -310,7 +310,7 @@ func (s *Server) handleServiceReidentify(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	svc, err := s.Store.GetService(sid)
-	if err != nil || svc == nil {
+	if err != nil || svc == nil || svc.AppID != appID {
 		writeError(w, http.StatusNotFound, "service not found")
 		return
 	}
@@ -339,7 +339,10 @@ func (s *Server) handleServiceReidentify(w http.ResponseWriter, r *http.Request,
 		Title:   title,
 		BodyCT:  contentTypeOf(hr),
 	})
-	_, _ = s.Store.UpdateServiceRoleIfAuto(sid, string(role))
+	if _, err := s.Store.UpdateServiceRoleIfAuto(sid, string(role)); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	s.broadcastServices(appID)
 	writeJSON(w, http.StatusOK, map[string]string{"role": string(role), "roleSource": store.RoleSourceAuto})
 }

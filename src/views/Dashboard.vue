@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppCard from '@/components/AppCard.vue'
-import type { AppView } from '@/types'
+import type { AppView, ServiceRole } from '@/types'
 
 defineProps<{
   apps: AppView[]
@@ -18,6 +18,8 @@ const emit = defineEmits<{
   (e: 'delete', id: string): void
   (e: 'import', path: string): void
   (e: 'rename', id: string, name: string): void
+  (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
+  (e: 'reidentify', appId: string, serviceId: string): void
 }>()
 </script>
 
@@ -87,6 +89,8 @@ const emit = defineEmits<{
         @open-dir="emit('open-dir', $event)"
         @delete="emit('delete', $event)"
         @rename="(id, name) => emit('rename', id, name)"
+        @set-role="(appId, serviceId, role) => emit('set-role', appId, serviceId, role)"
+        @reidentify="(appId, serviceId) => emit('reidentify', appId, serviceId)"
       />
     </div>
   </div>

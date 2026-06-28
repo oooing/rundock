@@ -1,15 +1,43 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { AppView } from '@/types'
+import type { AppView, ServiceRole } from '@/types'
 
 const props = defineProps<{ app: AppView }>()
 const emit = defineEmits<{
   (e: 'start' | 'stop' | 'restart' | 'log' | 'open-dir' | 'delete', id: string): void
   (e: 'open-url', id: string, url?: string): void
   (e: 'rename', id: string, name: string): void
+  (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
+  (e: 'reidentify', appId: string, serviceId: string): void
 }>()
 
 const a = computed(() => props.app)
+
+// 服务角色 → 图标/颜色/标签
+const ROLE_META: Record<ServiceRole, { icon: string; color: string; label: string }> = {
+  frontend: { icon: '🌐', color: '#3b82f6', label: '前端' },
+  backend: { icon: '⚙️', color: '#8b5cf6', label: '后端' },
+  database: { icon: '🗄️', color: '#f59e0b', label: '数据库' },
+  unknown: { icon: '❓', color: '#9ca3af', label: '未识别' },
+}
+const ROLE_OPTIONS: ServiceRole[] = ['frontend', 'backend', 'database', 'unknown']
+
+// 当前展开切换菜单的 service id（null = 无）
+const roleMenuOpen = ref<string | null>(null)
+function roleMeta(role?: string) {
+  return ROLE_META[(role as ServiceRole) || 'unknown']
+}
+function toggleRoleMenu(svcId: string) {
+  roleMenuOpen.value = roleMenuOpen.value === svcId ? null : svcId
+}
+function pickRole(svcId: string, role: ServiceRole) {
+  roleMenuOpen.value = null
+  emit('set-role', a.value.id, svcId, role)
+}
+function reidentify(svcId: string) {
+  roleMenuOpen.value = null
+  emit('reidentify', a.value.id, svcId)
+}
 
 // 重命名
 const editingName = ref(false)
@@ -101,9 +129,29 @@ const adapterLabel = computed(() => {
     </header>
 
     <div class="meta">
-      <!-- 多服务列表：每个服务一行（健康点 + 端口 + URL） -->
+      <!-- 多服务列表：每个服务一行（角色图标 + 健康点 + 端口 + URL） -->
       <div v-if="a.services && a.services.length" class="services">
+        <!-- 切换菜单遮罩：点外部关闭 -->
+        <div v-if="roleMenuOpen" class="role-backdrop" @click="roleMenuOpen = null"></div>
         <div v-for="svc in a.services" :key="svc.id" class="svc-row">
+          <div class="role-wrap">
+            <button
+              class="role-btn"
+              :class="{ locked: svc.roleSource === 'manual' }"
+              :style="{ color: roleMeta(svc.role).color }"
+              :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? '（已锁定）' : '') + ' — 点击切换'"
+              @click.stop="toggleRoleMenu(svc.id)"
+            >{{ roleMeta(svc.role).icon }}</button>
+            <div v-if="roleMenuOpen === svc.id" class="role-menu" @click.stop>
+              <button
+                v-for="r in ROLE_OPTIONS"
+                :key="r"
+                :style="{ color: ROLE_META[r].color }"
+                @click="pickRole(svc.id, r)"
+              >{{ ROLE_META[r].icon }} {{ ROLE_META[r].label }}</button>
+              <button class="reidentify" @click="reidentify(svc.id)">🔄 重新识别</button>
+            </div>
+          </div>
           <span class="svc-dot" :class="svc.health" :title="healthText(svc.health)"></span>
           <span class="svc-port mono">:{{ svc.port }}</span>
           <a class="svc-url mono" :title="svc.url" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
@@ -261,6 +309,62 @@ const adapterLabel = computed(() => {
 }
 .svc-dot.unknown {
   background: var(--amber);
+}
+/* 角色图标 + 切换菜单 */
+.role-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.role-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.role-btn.locked {
+  border-color: currentColor;
+  border-style: dashed;
+}
+.role-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+}
+.role-menu {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 10;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 124px;
+}
+.role-menu button {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+.role-menu button:hover {
+  background: var(--bg-elev-2);
+}
+.role-menu .reidentify {
+  color: var(--text-faint);
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 6px;
 }
 .svc-port {
   color: var(--text-faint);

@@ -212,6 +212,8 @@ onMounted(async () => {
           @open-dir="apps.openDir($event)"
           @delete="apps.remove($event)"
           @rename="(id, name) => apps.rename(id, name)"
+          @set-role="(appId, serviceId, role) => apps.setServiceRole(appId, serviceId, role)"
+          @reidentify="(appId, serviceId) => apps.reidentifyService(appId, serviceId)"
           @import="importScript"
         />
       </section>

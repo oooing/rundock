@@ -54,7 +54,25 @@ function importConfig() {
   input.click()
 }
 
-onMounted(load)
+// 关闭行为记忆：当前是否「记住最小化」。重置 = 删除记忆，恢复每次询问。
+const closeRemembered = ref(false)
+async function loadCloseBehavior() {
+  try {
+    const s = await api.getSettings()
+    closeRemembered.value = s.closeBehavior === 'minimize'
+  } catch {
+    closeRemembered.value = false
+  }
+}
+async function resetCloseBehavior() {
+  await api.setSettings({ closeBehavior: '' })
+  closeRemembered.value = false
+}
+
+onMounted(() => {
+  load()
+  loadCloseBehavior()
+})
 </script>
 
 <template>
@@ -96,6 +114,14 @@ onMounted(load)
             <button @click="exportConfig">⬇ 导出配置</button>
             <button @click="importConfig">⬆ 导入配置</button>
           </div>
+        </section>
+
+        <section class="block">
+          <h4>关闭行为</h4>
+          <p class="desc">
+            {{ closeRemembered ? '当前：关闭窗口时自动最小化到托盘（已记住）。' : '当前：关闭窗口时每次询问。' }}
+          </p>
+          <button v-if="closeRemembered" @click="resetCloseBehavior">恢复每次询问</button>
         </section>
       </div>
     </div>

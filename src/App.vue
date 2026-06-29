@@ -9,6 +9,10 @@ import ConfirmCard from '@/components/ConfirmCard.vue'
 import LogDrawer from '@/components/LogDrawer.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
 import HelpModal from '@/components/HelpModal.vue'
+import CloseDialog from '@/components/CloseDialog.vue'
+import QuitConfirm from '@/components/QuitConfirm.vue'
+import { api } from '@/api/http'
+import { hideMainWindow, isTauri as isTauriShell, onTauriEvent, quitApp } from '@/tauri/window'
 import type { ImportCandidate } from '@/types'
 
 const conn = useConnectionStore()
@@ -24,6 +28,12 @@ const logAppId = ref<string | null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pathInput = ref('')
+
+// 窗口关闭行为：CloseDialog（最小化/退出选择）与 QuitConfirm（托盘退出二次确认）
+const showCloseDialog = ref(false)
+const showQuitConfirm = ref(false)
+// 记忆 key（复用 sidecar settings 表）
+const CLOSE_BEHAVIOR_KEY = 'closeBehavior'
 
 // 浏览器环境拿不到拖入文件的真实磁盘路径（File.path 仅 Tauri 有）。
 // 用这个标志决定走哪条导入路径：Tauri 走拖放，浏览器走路径输入框。
@@ -118,9 +128,64 @@ function openLog(id: string) {
   logAppId.value = id
 }
 
+// ===== 窗口关闭 / 托盘退出处理 =====
+
+// 读取关闭行为记忆（sidecar settings 表）。返回 'minimize' 表示记住最小化，其它为每次询问。
+async function readCloseBehavior(): Promise<string> {
+  try {
+    const s = await api.getSettings()
+    return s[CLOSE_BEHAVIOR_KEY] || ''
+  } catch {
+    return ''
+  }
+}
+
+// 点 X 关闭时（Rust prevent_close + emit "close-requested"）。
+async function onCloseRequested() {
+  if (!isTauriShell) return
+  const behavior = await readCloseBehavior()
+  if (behavior === 'minimize') {
+    // 记住了最小化，直接隐藏
+    await hideMainWindow()
+  } else {
+    // 每次询问：弹选择框
+    showCloseDialog.value = true
+  }
+}
+
+// CloseDialog：选「最小化到托盘」—— 隐藏窗口并记住选择
+async function onCloseMinimize() {
+  showCloseDialog.value = false
+  await hideMainWindow()
+  try {
+    await api.setSettings({ [CLOSE_BEHAVIOR_KEY]: 'minimize' })
+  } catch {
+    /* 记忆失败不影响隐藏 */
+  }
+}
+
+// CloseDialog：选「退出」—— 不记忆，直接退出（CloseDialog 已说明会停服务）
+async function onCloseQuit() {
+  showCloseDialog.value = false
+  await quitApp()
+}
+
+// 托盘右键「退出」菜单（Rust emit "tray-quit-requested"）—— 弹二次确认
+function onTrayQuitRequested() {
+  showQuitConfirm.value = true
+}
+
+async function onQuitConfirm() {
+  showQuitConfirm.value = false
+  await quitApp()
+}
+
 onMounted(async () => {
   conn.startPolling()
   apps.bindWS()
+  // 监听 Tauri 壳事件：点 X 关闭、托盘右键退出
+  void onTauriEvent('close-requested', onCloseRequested)
+  void onTauriEvent('tray-quit-requested', onTrayQuitRequested)
   // 快捷键：? 显示帮助，Esc 关闭
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     // 在输入框/确认卡里不触发，避免误触
@@ -223,6 +288,17 @@ onMounted(async () => {
     <LogDrawer v-if="logAppId" :app-id="logAppId" @close="logAppId = null" />
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
     <HelpModal v-if="showHelp" @close="showHelp = false" />
+    <CloseDialog
+      v-if="showCloseDialog"
+      @minimize="onCloseMinimize"
+      @quit="onCloseQuit"
+      @close="showCloseDialog = false"
+    />
+    <QuitConfirm
+      v-if="showQuitConfirm"
+      @confirm="onQuitConfirm"
+      @cancel="showQuitConfirm = false"
+    />
   </div>
 </template>
 

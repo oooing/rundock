@@ -151,6 +151,16 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, map[string]bool{"stopped": true})
 }
 
+// POST /api/apps/stop-all 停止所有正在运行的项目（退出前清理用）。
+func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	stopped := s.Launcher.StopAll()
+	writeJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
+}
+
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

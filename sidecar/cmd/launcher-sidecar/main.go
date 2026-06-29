@@ -44,6 +44,14 @@ func main() {
 	}
 	defer st.Close()
 
+	// 重置残留的活跃状态：sidecar 重启意味着没有 app 在本进程管理下运行，
+	// 上次若崩溃/被强杀，DB 里可能残留 starting/running 等假状态，必须清理。
+	if n, err := st.ResetActiveAppStatus("stopped"); err != nil {
+		log.Printf("warn: reset active app status: %v", err)
+	} else if n > 0 {
+		log.Printf("startup: reset %d app(s) from active to stopped", n)
+	}
+
 	// 事件总线
 	hub := logbus.NewHub()
 

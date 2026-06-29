@@ -295,6 +295,19 @@ func (s *Store) TouchAppRuntime(id string, lastStartedAt, lastURL, lastStatus st
 	return err
 }
 
+// ResetActiveAppStatus 把所有处于活跃态(starting/running/degraded/stopping)的 app 状态
+// 重置为给定 status（通常 "stopped"）。返回受影响行数。
+// 用于 sidecar 重启时清理上次崩溃/强杀残留的"运行中"状态——重启后不可能有任何 app 真在运行。
+func (s *Store) ResetActiveAppStatus(status string) (int64, error) {
+	res, err := s.db.Exec(`UPDATE apps SET last_status=? WHERE last_status IN ('starting','running','degraded','stopping')`,
+		status)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // DeleteApp 删除 App。
 func (s *Store) DeleteApp(id string) error {
 	_, err := s.db.Exec(`DELETE FROM apps WHERE id=?`, id)

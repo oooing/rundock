@@ -477,6 +477,43 @@ func (l *Launcher) Stop(appID string) error {
 	return nil
 }
 
+// StopAll 停止所有正在运行的 app（用于退出前清理）。并发停止，等待全部完成或超时。
+// 返回成功停止的数量。
+func (l *Launcher) StopAll() int {
+	runnings := l.Manager.Registry.All()
+	if len(runnings) == 0 {
+		return 0
+	}
+	type result struct{ ok bool }
+	done := make(chan result, len(runnings))
+	for _, rt := range runnings {
+		appID := rt.AppID
+		go func() {
+			// Stop 对不在 runs 里的会报错，忽略——以 Registry 状态为准
+			if err := l.Stop(appID); err == nil {
+				done <- result{ok: true}
+			} else {
+				done <- result{ok: false}
+			}
+		}()
+	}
+	// 总超时：单个 Stop 最多 grace+几秒，这里给充裕上限
+	deadline := time.NewTimer(time.Duration(l.graceSeconds)*time.Second + 5*time.Second)
+	defer deadline.Stop()
+	stopped := 0
+	for i := 0; i < len(runnings); i++ {
+		select {
+		case r := <-done:
+			if r.ok {
+				stopped++
+			}
+		case <-deadline.C:
+			return stopped // 超时，返回已停止的数量
+		}
+	}
+	return stopped
+}
+
 // Restart = Stop + Start。
 func (l *Launcher) Restart(ctx context.Context, appID string) error {
 	if l.Manager.Registry.IsRunning(appID) {

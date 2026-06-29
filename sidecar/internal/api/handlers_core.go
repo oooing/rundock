@@ -103,6 +103,11 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "app id required")
 		return
 	}
+	// 批量动作（无具体 app id）：POST /api/apps/stop-all
+	if id == "stop-all" && rest == "" {
+		s.handleStopAll(w, r)
+		return
+	}
 	if rest == "" {
 		s.handleAppRoot(w, r, id)
 		return

@@ -1,6 +1,29 @@
 package probe
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestCheckRootDoesNotUseHealthEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<script type="module" src="/@vite/client"></script>`))
+	}))
+	defer server.Close()
+
+	got := CheckRoot(context.Background(), server.URL)
+	if got == nil || got.ContentType != "text/html" || !containsAny(got.Body, frontendBodyKW) {
+		t.Fatalf("CheckRoot() = %#v, want root HTML", got)
+	}
+}
 
 func TestParseNetstat(t *testing.T) {
 	// 真实 netstat 片段（含 LISTENING 与 ESTABLISHED 噪声）
@@ -55,10 +78,10 @@ func TestDiffListeners(t *testing.T) {
 
 func TestPortFromAddr(t *testing.T) {
 	cases := map[string]int{
-		"0.0.0.0:5173":    5173,
-		"127.0.0.1:3000":  3000,
-		"[::]:445":        445,
-		"bad":             0,
+		"0.0.0.0:5173":   5173,
+		"127.0.0.1:3000": 3000,
+		"[::]:445":       445,
+		"bad":            0,
 	}
 	for addr, want := range cases {
 		if got := portFromAddr(addr); got != want {

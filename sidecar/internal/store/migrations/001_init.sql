@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS apps (
     last_started_at TEXT,
     last_url        TEXT,                            -- 最近一次识别到的 URL
     last_status     TEXT NOT NULL DEFAULT 'stopped', -- 缓存的最近状态
-    sort_order      INTEGER NOT NULL DEFAULT 0
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    card_color      TEXT NOT NULL DEFAULT ''         -- 卡片背景色（文字色由前端计算）
 );
 
 CREATE INDEX IF NOT EXISTS idx_apps_group ON apps(group_id);

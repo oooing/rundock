@@ -3,7 +3,25 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '@/api/http'
 import { wsClient } from '@/api/ws'
-import type { AppView, CreateAppBody, ImportCandidate, WSMessage } from '@/types'
+import { pickNextCardColor } from '@/utils/cardColors'
+import type {
+  AppView,
+  CreateAppBody,
+  ImportCandidate,
+  PendingOp,
+  ScriptConfirmationResponse,
+  WSMessage,
+} from '@/types'
+
+/**
+ * 启动/重启结果。
+ * - confirmation：脚本风险变化需确认时返回（后端 409），调用方据此弹 ConfirmCard。
+ * - configUpdatedToast：后端自动同步了脚本派生字段，调用方据此提示"脚本配置已自动更新"。
+ */
+export interface StartResult {
+  confirmation?: ScriptConfirmationResponse
+  configUpdatedToast?: boolean
+}
 
 export const useAppsStore = defineStore('apps', () => {
   const apps = ref<AppView[]>([])
@@ -43,23 +61,85 @@ export const useAppsStore = defineStore('apps', () => {
       portHints: c.portHints,
       healthUrl: '',
       scriptHash: c.scriptHash,
+      cardColor: pickNextCardColor(apps.value.map((a) => a.cardColor)),
     }
     const created = await api.createApp(body)
     apps.value.push(created)
     return created
   }
 
-  async function start(id: string) {
-    await api.start(id)
-    patch(id, { status: 'starting' })
+  /**
+   * 启动一个 app。可能返回 confirmation（脚本风险变化需确认）。
+   * 调用方（App.vue）在 confirmation 时记下 pending op + 候选，由 ConfirmCard 二次确认。
+   * confirmedScriptHash：用户确认风险后回带，让后端校验哈希是否仍匹配。
+   */
+  async function start(id: string, confirmedScriptHash?: string): Promise<StartResult> {
+    try {
+      const r = await api.start(id, confirmedScriptHash)
+      if (!r.ok) {
+        // 409：脚本风险变化需确认，不动本地状态
+        return { confirmation: r.confirmation }
+      }
+      if (r.data.configUpdated && r.data.app) {
+        patchFull(r.data.app)
+      }
+      patch(id, { status: 'starting' })
+      return { configUpdatedToast: !!r.data.configUpdated }
+    } catch (e: any) {
+      error.value = e?.message || String(e)
+      throw e
+    }
   }
   async function stop(id: string) {
+    const prev = apps.value.find(a => a.id === id)?.status
     patch(id, { status: 'stopping' })
-    await api.stop(id)
+    try {
+      await api.stop(id)
+      // 兜底：API 成功但 WS 未推送 stopped（应用已停止的幂等情况），直接收敛状态
+      const cur = apps.value.find(a => a.id === id)?.status
+      if (cur === 'stopping') {
+        patch(id, { status: 'stopped' })
+      }
+    } catch (e: any) {
+      if (prev) patch(id, { status: prev })
+      error.value = e?.message || String(e)
+      throw e
+    }
   }
-  async function restart(id: string) {
-    patch(id, { status: 'starting' })
-    await api.restart(id)
+  /**
+   * 重启一个 app。同 start，可能返回 confirmation。
+   * confirmedScriptHash：用户确认风险后回带。
+   */
+  async function restart(id: string, confirmedScriptHash?: string): Promise<StartResult> {
+    const prev = apps.value.find(a => a.id === id)?.status
+    patch(id, { restarting: true })
+    try {
+      const r = await api.restart(id, confirmedScriptHash)
+      if (!r.ok) {
+        // 409：取消 restarting 标志，等用户确认后再发起
+        patch(id, { ...(prev ? { status: prev } : {}), restarting: false })
+        return { confirmation: r.confirmation }
+      }
+      if (r.data.configUpdated && r.data.app) {
+        patchFull(r.data.app)
+      }
+      return { configUpdatedToast: !!r.data.configUpdated }
+    } catch (e: any) {
+      patch(id, { ...(prev ? { status: prev } : {}), restarting: false })
+      error.value = e?.message || String(e)
+      throw e
+    }
+  }
+
+  /**
+   * 用户在 ConfirmCard 上确认风险后，按记下的 pending op 重试原操作。
+   *   - op='start' → apps.start(id, hash)
+   *   - op='restart' → apps.restart(id, hash)
+   * 返回值与 start/restart 一致（若期间脚本再次变化，会再带 confirmation）。
+   */
+  async function resumeAfterConfirm(id: string, op: PendingOp, confirmedScriptHash: string): Promise<StartResult> {
+    if (op === 'restart') return restart(id, confirmedScriptHash)
+    return start(id, confirmedScriptHash)
   }
   async function remove(id: string) {
     await api.deleteApp(id)
@@ -78,6 +158,12 @@ export const useAppsStore = defineStore('apps', () => {
 
   async function update(id: string, body: Record<string, unknown>) {
     const updated = await api.updateApp(id, body)
+    patchFull(updated)
+  }
+
+  /** 设置卡片背景色（文字色由前端实时计算，不持久化）。 */
+  async function setCardColor(id: string, cardColor: string) {
+    const updated = await api.updateApp(id, { cardColor })
     patchFull(updated)
   }
 
@@ -117,7 +203,14 @@ export const useAppsStore = defineStore('apps', () => {
     }
     switch (msg.type) {
       case 'app:status':
-        if (a) patch(a.id, { status: (msg.status as AppView['status']) || a.status })
+        if (a) {
+          const status = (msg.status as AppView['status']) || a.status
+          const restartFinished = ['running', 'degraded', 'failed'].includes(status)
+          patch(a.id, {
+            status,
+            ...(a.restarting && restartFinished ? { restarting: false } : {}),
+          })
+        }
         break
       case 'app:url':
         if (a) patch(a.id, { lastUrl: msg.url || a.lastUrl })
@@ -156,7 +249,7 @@ export const useAppsStore = defineStore('apps', () => {
 
   return {
     apps, loading, error, liveLogs,
-    load, importRaw, createFromCandidate, start, stop, restart, remove, rename, openURL, openDir, update,
+    load, importRaw, createFromCandidate, start, stop, restart, resumeAfterConfirm, remove, rename, openURL, openDir, update, setCardColor,
     setServiceRole, reidentifyService,
     patch, bindWS, clearLiveLogs,
   }

@@ -2,6 +2,7 @@ package logbus
 
 import (
 	"sync"
+	"time"
 
 	"github.com/launcher-sidecar/internal/store"
 )
@@ -17,9 +18,8 @@ type Collector struct {
 	// OnEvent 在解析出事件时回调（由 launcher 注入，用于触发状态机/URL 识别）。
 	OnEvent func(*Collector, Event)
 
-	// OnURL 首次发现 URL 时回调（launcher 据此更新 app.last_url）。
+	// OnURL 每发现一个本地 URL 回调一次（launcher 收集 candidateURLs 做多端口发现）。
 	OnURL func(*Collector, string)
-	urlSeen bool
 
 	mu sync.Mutex
 }
@@ -44,14 +44,7 @@ func (c *Collector) ingest(stream, line string) {
 		return
 	}
 	level := InferLevel(stream, line)
-
-	// 落库（原始流）
-	_ = c.store.InsertLog(c.RunID, stream, level, line)
-
-	// 广播原始日志
-	if c.hub != nil {
-		c.hub.BroadcastLog(c.AppID, c.RunID, stream, level, line)
-	}
+	c.writeAndBroadcast(stream, level, line)
 
 	// 解析事件
 	events := ParseLine(line)
@@ -62,13 +55,10 @@ func (c *Collector) ingest(stream, line string) {
 		if c.OnEvent != nil {
 			c.OnEvent(c, ev)
 		}
-		// URL 首次发现
+		// 每个本地 URL 都回调（多服务：backend+frontend 不能只收第一个）。
+		// last_url 等“只取首次”的语义由 launcher 侧自行去重。
 		if ev.Kind == EventURLListen && ev.URL != "" {
-			c.mu.Lock()
-			first := !c.urlSeen
-			c.urlSeen = true
-			c.mu.Unlock()
-			if first && c.OnURL != nil {
+			if c.OnURL != nil {
 				c.OnURL(c, ev.URL)
 			}
 		}
@@ -85,13 +75,35 @@ func (c *Collector) EmitEvent(ev Event) {
 	}
 }
 
-// EmitLog 允许外部写入一条带级别标注的日志（如 sidecar 自身的提示）。
+// EmitLog 允许外部写入一条带级别标注的日志（如 sidecar 自身的诊断/提示）。
 func (c *Collector) EmitLog(stream, level, text string) {
 	if text == "" {
 		return
 	}
-	_ = c.store.InsertLog(c.RunID, stream, level, text)
+	c.writeAndBroadcast(stream, level, text)
+}
+
+// Info / Warn / Error / Debug 是 event 流的便捷方法，便于 launcher 写诊断日志。
+func (c *Collector) Info(text string)  { c.EmitLog("event", "info", text) }
+func (c *Collector) Warn(text string)  { c.EmitLog("event", "warn", text) }
+func (c *Collector) Error(text string) { c.EmitLog("event", "error", text) }
+func (c *Collector) Debug(text string) { c.EmitLog("event", "debug", text) }
+
+func (c *Collector) writeAndBroadcast(stream, level, text string) {
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	id, err := c.store.InsertLog(c.RunID, stream, level, text)
+	if err != nil {
+		// 落库失败仍尝试广播（id=0），前端可用 ts+text 兜底去重。
+		id = 0
+	}
 	if c.hub != nil {
-		c.hub.BroadcastLog(c.AppID, c.RunID, stream, level, text)
+		c.hub.BroadcastLog(c.AppID, &store.LogEntry{
+			ID:       id,
+			AppRunID: c.RunID,
+			Ts:       ts,
+			Stream:   stream,
+			Level:    level,
+			Text:     text,
+		})
 	}
 }

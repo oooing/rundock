@@ -24,30 +24,33 @@ const (
 
 // ClassifyInput 识别输入。所有字段可选(零值即无该信号)。
 type ClassifyInput struct {
-	Port     int               // 监听端口
-	Headers  map[string]string // HTTP 响应头(键大小写不敏感,值做小写匹配),可空
-	Title    string            // HTML <title>,可空
-	BodyCT   string            // Content-Type,可空
-	LogHints []string          // 命中框架特征的日志片段,可空
+	Port         int               // 监听端口
+	DeclaredRole Role              // 启动脚本明确声明的角色,可空
+	Headers      map[string]string // HTTP 响应头(键大小写不敏感,值做小写匹配),可空
+	Title        string            // HTML <title>,可空
+	BodyCT       string            // Content-Type,可空
+	Body         string            // HTTP 响应体片段,可空
+	LogHints     []string          // 命中框架特征的日志片段,可空
 }
 
 // 标准 DB 端口(高置信,直接判 database)。
 var dbPorts = map[int]bool{
-	5432: true,  // PostgreSQL
-	3306: true,  // MySQL
-	6379: true,  // Redis
+	5432:  true, // PostgreSQL
+	3306:  true, // MySQL
+	6379:  true, // Redis
 	27017: true, // MongoDB
-	1433: true,  // SQL Server
-	8529: true,  // Dgraph
-	9092: true,  // Kafka
-	9200: true,  // Elasticsearch
+	1433:  true, // SQL Server
+	8529:  true, // Dgraph
+	9092:  true, // Kafka
+	9200:  true, // Elasticsearch
 	11211: true, // Memcached
 }
 
 // 响应头/Title 关键词表。小写匹配。
 var frontendHeaderKW = []string{"vite", "webpack", "next", "nuxt"}
-var backendHeaderKW = []string{"express", "fastapi", "uvicorn", "gunicorn", "php", "kestrel", "django", "flask", "gin", "koa"}
+var backendHeaderKW = []string{"fastapi", "uvicorn", "gunicorn", "php", "kestrel", "django", "flask", "gin"}
 var frontendTitleKW = []string{"vite", "react app", "vue", "angular", "nuxt"}
+var frontendBodyKW = []string{"/@vite/client", "@react-refresh", "/_next/static/", "webpackhotupdate"}
 
 // 日志特征正则片段(用 Contains 子串,大小写不敏感)。
 var frontendLogKW = []string{"vite v", "webpack compiled", "ready in", "local: http"}
@@ -55,19 +58,26 @@ var backendLogKW = []string{"uvicorn running", "started server on", "listening o
 
 // Classify 纯函数:按置信度从高到低短路返回。
 func Classify(in ClassifyInput) (Role, Confidence) {
-	// 1. DB 端口(高)
+	// 1. 启动脚本/端口日志的明确声明(高)
+	if in.DeclaredRole == RoleFrontend || in.DeclaredRole == RoleBackend || in.DeclaredRole == RoleDatabase {
+		return in.DeclaredRole, ConfHigh
+	}
+	if role, ok := matchDeclaredLogs(in.LogHints); ok {
+		return role, ConfHigh
+	}
+	// 2. DB 端口(高)
 	if in.Port > 0 && dbPorts[in.Port] {
 		return RoleDatabase, ConfHigh
 	}
-	// 2. 响应头(高)
+	// 3. 响应头(高)
 	if role, ok := matchHeaders(in.Headers); ok {
 		return role, ConfHigh
 	}
-	// 3. Title / Content-Type(中)
-	if role, ok := matchTitleOrCT(in.Title, in.BodyCT); ok {
+	// 4. Title / Content-Type(中)
+	if role, ok := matchTitleOrCT(in.Title, in.BodyCT, in.Body); ok {
 		return role, ConfMedium
 	}
-	// 4. 日志(低)
+	// 5. 框架日志(低)
 	if role, ok := matchLogs(in.LogHints); ok {
 		return role, ConfLow
 	}
@@ -94,9 +104,12 @@ func matchHeaders(h map[string]string) (Role, bool) {
 	return RoleUnknown, false
 }
 
-func matchTitleOrCT(title, ct string) (Role, bool) {
+func matchTitleOrCT(title, ct, body string) (Role, bool) {
 	lt := strings.ToLower(title)
 	if containsAny(lt, frontendTitleKW) {
+		return RoleFrontend, true
+	}
+	if containsAny(strings.ToLower(body), frontendBodyKW) {
 		return RoleFrontend, true
 	}
 	// 根路径返回 application/json 强烈提示 API
@@ -104,6 +117,22 @@ func matchTitleOrCT(title, ct string) (Role, bool) {
 		return RoleBackend, true
 	}
 	return RoleUnknown, false
+}
+
+func matchDeclaredLogs(logs []string) (Role, bool) {
+	frontend, backend := false, false
+	for _, log := range logs {
+		lc := strings.ToLower(log)
+		frontend = frontend || strings.Contains(lc, "frontend")
+		backend = backend || strings.Contains(lc, "backend")
+	}
+	if frontend == backend {
+		return RoleUnknown, false
+	}
+	if frontend {
+		return RoleFrontend, true
+	}
+	return RoleBackend, true
 }
 
 func matchLogs(logs []string) (Role, bool) {

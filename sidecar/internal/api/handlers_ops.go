@@ -31,6 +31,7 @@ type createAppBody struct {
 	HealthURL   string             `json:"healthUrl"`
 	ScriptHash  string             `json:"scriptHash"`
 	SortOrder   int                `json:"sortOrder"`
+	CardColor   string             `json:"cardColor"`
 }
 
 type updateAppBody struct {
@@ -45,6 +46,7 @@ type updateAppBody struct {
 	GroupID     *string            `json:"groupId"`
 	PortHints   *[]int             `json:"portHints"`
 	HealthURL   *string            `json:"healthUrl"`
+	CardColor   *string            `json:"cardColor"`
 }
 
 func applyUpdate(a *store.App, b *updateAppBody) {
@@ -78,6 +80,9 @@ func applyUpdate(a *store.App, b *updateAppBody) {
 	if b.HealthURL != nil {
 		a.HealthURL = *b.HealthURL
 	}
+	if b.CardColor != nil {
+		a.CardColor = *b.CardColor
+	}
 }
 
 // appView 把 App 与其运行态拼成前端需要的视图。
@@ -100,6 +105,7 @@ func appView(a *store.App, s *Server) map[string]any {
 		"lastStartedAt": a.LastStartedAt,
 		"lastUrl":     a.LastURL,
 		"sortOrder":   a.SortOrder,
+		"cardColor":   a.CardColor,
 	}
 	if a.GroupID != nil {
 		row["groupId"] = *a.GroupID
@@ -132,11 +138,22 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, id string) 
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	var body struct {
+		ConfirmedScriptHash string `json:"confirmedScriptHash"`
+	}
+	// body 可选：未传 body 时忽略
+	_ = readJSONOptional(r, &body)
+
+	// 启动前预检：校验脚本哈希、必要时同步派生字段或要求确认
+	outcome, err := s.runPreflight(w, id, body.ConfirmedScriptHash)
+	if err != nil || outcome == outcomeAbort {
+		return // runPreflight 已写响应
+	}
 	if err := s.Launcher.Start(context.Background(), id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"started": true})
+	writeJSON(w, http.StatusOK, s.startResponse(id, outcome, "started"))
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, id string) {
@@ -166,11 +183,21 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, id string
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	var body struct {
+		ConfirmedScriptHash string `json:"confirmedScriptHash"`
+	}
+	_ = readJSONOptional(r, &body)
+
+	// 重启预检：必须在停止旧进程之前完成（确认/同步不通过就不动旧进程）。
+	outcome, err := s.runPreflight(w, id, body.ConfirmedScriptHash)
+	if err != nil || outcome == outcomeAbort {
+		return
+	}
 	if err := s.Launcher.Restart(context.Background(), id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"restarted": true})
+	writeJSON(w, http.StatusOK, s.startResponse(id, outcome, "restarted"))
 }
 
 // GET /api/apps/{id}/logs?since=<id>&limit=<n>&keyword=<kw>
@@ -331,9 +358,10 @@ func (s *Server) handleServiceReidentify(w http.ResponseWriter, r *http.Request,
 	// 同步重新探测：端口 + 响应头 + Title/CT。
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	hr := probe.CheckHealth(ctx, svc.URL)
+	hr := probe.CheckRoot(ctx, svc.URL)
 	headers := map[string]string{}
 	var title string
+	var body string
 	if hr != nil {
 		if hr.Server != "" {
 			headers["Server"] = hr.Server
@@ -342,12 +370,25 @@ func (s *Server) handleServiceReidentify(w http.ResponseWriter, r *http.Request,
 			headers["X-Powered-By"] = hr.PoweredBy
 		}
 		title = hr.Title
+		body = hr.Body
+	}
+	logs, _ := s.Store.SearchLogs(svc.AppRunID, strconv.Itoa(svc.Port), 20)
+	logHints := make([]string, 0, len(logs))
+	for _, entry := range logs {
+		logHints = append(logHints, entry.Text)
+	}
+	var declaredRole probe.Role
+	if a, _ := s.Store.GetApp(appID); a != nil {
+		declaredRole = probe.DeclaredRoles(a.EntryScript)[svc.Port]
 	}
 	role, _ := probe.Classify(probe.ClassifyInput{
-		Port:    svc.Port,
-		Headers: headers,
-		Title:   title,
-		BodyCT:  contentTypeOf(hr),
+		Port:         svc.Port,
+		DeclaredRole: declaredRole,
+		Headers:      headers,
+		Title:        title,
+		BodyCT:       contentTypeOf(hr),
+		Body:         body,
+		LogHints:     logHints,
 	})
 	if _, err := s.Store.UpdateServiceRoleIfAuto(sid, string(role)); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

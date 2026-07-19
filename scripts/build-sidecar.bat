@@ -21,6 +21,20 @@ set "PATH=%USERPROFILE%\go\bin;%PATH%"
 
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
+REM Remove old output to avoid "already exists and is not an object file".
+REM A previous interrupted build leaves a corrupt exe, or the file may be locked,
+REM either of which makes `go build -o` refuse to overwrite.
+if exist "%OUT%" (
+    attrib -r "%OUT%" >nul 2>nul
+    del /f /q "%OUT%" >nul 2>nul
+    if exist "%OUT%" (
+        echo [build] WARNING: cannot delete old %OUT%
+        echo [build] It may be locked by a running sidecar / Tauri. Close them and retry.
+        pause
+        exit /b 1
+    )
+)
+
 echo [build] 编译 Go 后端 -> %OUT%
 cd /d "%SIDECAR_DIR%"
 go build -o "%OUT%" ./cmd/launcher-sidecar

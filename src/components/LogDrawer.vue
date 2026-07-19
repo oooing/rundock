@@ -20,11 +20,19 @@ const bodyRef = ref<HTMLElement | null>(null)
 
 const app = computed(() => apps.apps.find((a) => a.id === props.appId))
 const combined = computed(() => {
-  // 合并历史与实时，按 id 去重排序
-  const map = new Map<number, LogEntry>()
-  for (const l of historyLogs.value) map.set(l.id, l)
-  for (const l of liveLogs.value) map.set(l.id, l)
-  return [...map.values()].sort((a, b) => a.id - b.id)
+  // 合并历史与实时。优先按 id 去重；id 缺失/为 0 时用 ts+stream+text 兜底，避免实时日志互相覆盖。
+  const map = new Map<string, LogEntry>()
+  const keyOf = (l: LogEntry, fallbackIdx: number) => {
+    if (l.id && l.id > 0) return `id:${l.id}`
+    return `f:${l.ts}|${l.stream}|${l.text}|${fallbackIdx}`
+  }
+  let i = 0
+  for (const l of historyLogs.value) map.set(keyOf(l, i++), l)
+  for (const l of liveLogs.value) map.set(keyOf(l, i++), l)
+  return [...map.values()].sort((a, b) => {
+    if (a.id && b.id && a.id !== b.id) return a.id - b.id
+    return (a.ts || '').localeCompare(b.ts || '')
+  })
 })
 
 const filtered = computed(() => {
@@ -61,6 +69,13 @@ watch(
 
 function scrollBottom() {
   if (bodyRef.value) bodyRef.value.scrollTop = bodyRef.value.scrollHeight
+}
+
+function levelTag(level: string) {
+  if (level === 'error') return 'ERR'
+  if (level === 'warn') return 'WRN'
+  if (level === 'debug') return 'DBG'
+  return '   '
 }
 
 async function clearAndReload() {
@@ -110,8 +125,9 @@ onMounted(async () => {
           class="log-line"
           :class="[l.stream, l.level]"
         >
-          <span class="ts">{{ l.ts.slice(11, 19) }}</span>
-          <span class="lvl">{{ l.level === 'error' ? 'ERR' : l.level === 'warn' ? 'WRN' : '   ' }}</span>
+          <span class="ts">{{ (l.ts || '').slice(11, 19) || '--:--:--' }}</span>
+          <span class="lvl">{{ levelTag(l.level) }}</span>
+          <span class="stream" v-if="l.stream === 'event'">EVT</span>
           <span class="txt">{{ l.text }}</span>
         </div>
       </div>
@@ -199,6 +215,13 @@ onMounted(async () => {
 .log-line .lvl {
   color: var(--text-faint);
   flex-shrink: 0;
+  width: 3ch;
+}
+.log-line .stream {
+  color: var(--purple);
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.85;
 }
 .log-line.stderr,
 .log-line.error {
@@ -206,6 +229,9 @@ onMounted(async () => {
 }
 .log-line.warn {
   color: var(--amber);
+}
+.log-line.debug .txt {
+  color: var(--text-dim);
 }
 .log-line.event .txt {
   color: var(--purple);

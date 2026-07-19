@@ -4,8 +4,8 @@ import "testing"
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
-		name string
-		in   ClassifyInput
+		name     string
+		in       ClassifyInput
 		wantRole Role
 		wantConf Confidence
 	}{
@@ -18,7 +18,7 @@ func TestClassify(t *testing.T) {
 
 		// --- 响应头(高)---
 		{"header vite", ClassifyInput{Headers: map[string]string{"server": "vite"}}, RoleFrontend, ConfHigh},
-		{"header x-powered-by express", ClassifyInput{Headers: map[string]string{"x-powered-by": "Express"}}, RoleBackend, ConfHigh},
+		{"header express is ambiguous", ClassifyInput{Headers: map[string]string{"x-powered-by": "Express"}}, RoleUnknown, ConfNone},
 		{"header server uvicorn", ClassifyInput{Headers: map[string]string{"server": "uvicorn"}}, RoleBackend, ConfHigh},
 		{"header next.js -> frontend", ClassifyInput{Headers: map[string]string{"x-powered-by": "Next.js"}}, RoleFrontend, ConfHigh},
 		// 键大小写不敏感:调用方可能传 Go canonical 大写键(Server / X-Powered-By)。
@@ -26,7 +26,11 @@ func TestClassify(t *testing.T) {
 
 		// --- Title/Content-Type(中)---
 		{"title vite+react no header", ClassifyInput{Title: "Vite + React"}, RoleFrontend, ConfMedium},
+		{"generic spa mount is ambiguous", ClassifyInput{Body: `<div id="root"></div>`}, RoleUnknown, ConfNone},
+		{"vite client body", ClassifyInput{Body: `<script type="module" src="/@vite/client"></script>`}, RoleFrontend, ConfMedium},
 		{"content-type json no header", ClassifyInput{BodyCT: "application/json"}, RoleBackend, ConfMedium},
+		{"declared frontend overrides uvicorn", ClassifyInput{DeclaredRole: RoleFrontend, Headers: map[string]string{"server": "uvicorn"}}, RoleFrontend, ConfHigh},
+		{"frontend log overrides uvicorn", ClassifyInput{LogHints: []string{"Frontend running at http://localhost:1111"}, Headers: map[string]string{"server": "uvicorn"}}, RoleFrontend, ConfHigh},
 
 		// --- 日志(低)---
 		{"log vite version", ClassifyInput{LogHints: []string{"VITE v5.0.0 ready in 312 ms"}}, RoleFrontend, ConfLow},

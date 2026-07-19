@@ -1,0 +1,422 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Launcher Release Tool</title>
+  <hta:application
+    id="ReleaseTool"
+    applicationname="Launcher Release Tool"
+    border="thin"
+    caption="yes"
+    maximizebutton="no"
+    minimizebutton="yes"
+    scroll="no"
+    singleinstance="yes"
+    sysmenu="yes"
+    windowstate="normal"
+  />
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #10141d;
+      color: #e5ecff;
+      font-family: "Microsoft YaHei", Segoe UI, Arial, sans-serif;
+      font-size: 14px;
+    }
+    .wrap {
+      padding: 18px;
+    }
+    h1 {
+      margin: 0 0 14px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .card {
+      background: #151b26;
+      border: 1px solid #2b3548;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .row {
+      display: table;
+      width: 100%;
+      margin-bottom: 10px;
+    }
+    .label,
+    .field {
+      display: table-cell;
+      vertical-align: middle;
+    }
+    .label {
+      width: 120px;
+      color: #9ca8c3;
+    }
+    .mono {
+      font-family: Consolas, "Courier New", monospace;
+    }
+    input {
+      width: 180px;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid #334057;
+      border-radius: 8px;
+      background: #0c111a;
+      color: #ffffff;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 15px;
+      outline: none;
+    }
+    input:focus {
+      border-color: #4f8cff;
+    }
+    button {
+      padding: 8px 12px;
+      border: 1px solid #334057;
+      border-radius: 8px;
+      background: #1d2636;
+      color: #e5ecff;
+      cursor: pointer;
+      font-family: "Microsoft YaHei", Segoe UI, Arial, sans-serif;
+    }
+    button.primary {
+      border-color: #4f8cff;
+      background: #2f5fb8;
+      color: #fff;
+      font-weight: 700;
+    }
+    button:disabled {
+      color: #6b7280;
+      cursor: default;
+      opacity: 0.6;
+    }
+    .btns {
+      margin-top: 12px;
+    }
+    .btns button {
+      margin-right: 8px;
+    }
+    .hint {
+      color: #9ca8c3;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .ok {
+      color: #34d399;
+    }
+    .warn {
+      color: #fbbf24;
+    }
+    .err {
+      color: #fb7185;
+    }
+    #log {
+      height: 235px;
+      overflow: auto;
+      white-space: pre-wrap;
+      background: #070b11;
+      border: 1px solid #263244;
+      border-radius: 10px;
+      padding: 10px;
+      color: #c7d2fe;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+  </style>
+  <script language="javascript">
+    var fso = new ActiveXObject("Scripting.FileSystemObject");
+    var shell = new ActiveXObject("WScript.Shell");
+    var execProc = null;
+    var pollTimer = null;
+
+    var codeDir = "";
+    var paths = {};
+
+    function init() {
+      window.resizeTo(680, 620);
+      codeDir = fso.GetParentFolderName(fso.GetParentFolderName(htaPath()));
+      paths = {
+        pkg: fso.BuildPath(codeDir, "package.json"),
+        tauri: fso.BuildPath(fso.BuildPath(codeDir, "src-tauri"), "tauri.conf.json"),
+        cargo: fso.BuildPath(fso.BuildPath(codeDir, "src-tauri"), "Cargo.toml"),
+        releaseBat: fso.BuildPath(fso.BuildPath(codeDir, "scripts"), "release.bat"),
+        dist: fso.BuildPath(codeDir, "dist")
+      };
+      document.getElementById("codeDir").innerText = codeDir;
+      refreshVersion();
+    }
+
+    function htaPath() {
+      var p = decodeURIComponent(location.pathname);
+      if (p.charAt(0) === "/" && p.charAt(2) === ":") {
+        p = p.substring(1);
+      }
+      return p.replace(/\//g, "\\");
+    }
+
+    function readUtf8(path) {
+      var s = new ActiveXObject("ADODB.Stream");
+      s.Type = 2;
+      s.Charset = "utf-8";
+      s.Open();
+      s.LoadFromFile(path);
+      var text = s.ReadText();
+      s.Close();
+      return text;
+    }
+
+    function writeUtf8(path, text) {
+      var textStream = new ActiveXObject("ADODB.Stream");
+      textStream.Type = 2;
+      textStream.Charset = "utf-8";
+      textStream.Open();
+      textStream.WriteText(text);
+
+      // ADODB text stream writes a UTF-8 BOM. Skip it before saving so Cargo.toml stays clean.
+      textStream.Position = 0;
+      textStream.Type = 1;
+      textStream.Position = 3;
+
+      var binStream = new ActiveXObject("ADODB.Stream");
+      binStream.Type = 1;
+      binStream.Open();
+      textStream.CopyTo(binStream);
+      binStream.SaveToFile(path, 2);
+      binStream.Close();
+      textStream.Close();
+    }
+
+    function getJsonVersion(path) {
+      var m = readUtf8(path).match(/"version"\s*:\s*"(\d+\.\d+\.\d+)"/);
+      return m ? m[1] : "";
+    }
+
+    function getCargoVersion(path) {
+      var m = readUtf8(path).match(/^\s*version\s*=\s*"(\d+\.\d+\.\d+)"/m);
+      return m ? m[1] : "";
+    }
+
+    function isVersion(v) {
+      return /^\d+\.\d+\.\d+$/.test(v);
+    }
+
+    function nextVersion(v) {
+      var parts = v.split(".");
+      parts[2] = String(parseInt(parts[2], 10) + 1);
+      return parts.join(".");
+    }
+
+    function refreshVersion() {
+      clearLog();
+      try {
+        ensureFile(paths.pkg);
+        ensureFile(paths.tauri);
+        ensureFile(paths.cargo);
+        ensureFile(paths.releaseBat);
+
+        var pkgV = getJsonVersion(paths.pkg);
+        var tauriV = getJsonVersion(paths.tauri);
+        var cargoV = getCargoVersion(paths.cargo);
+        var current = tauriV || pkgV || cargoV;
+        if (!isVersion(current)) {
+          throw new Error("无法读取有效版本号，请检查 package.json / tauri.conf.json / Cargo.toml");
+        }
+
+        document.getElementById("currentVersion").innerText = current;
+        document.getElementById("nextVersion").innerText = nextVersion(current);
+        document.getElementById("targetVersion").value = nextVersion(current);
+
+        if (pkgV !== current || cargoV !== current) {
+          log("版本不一致：package=" + pkgV + " tauri=" + tauriV + " cargo=" + cargoV, "warn");
+          log("打包时会统一写成目标版本。", "warn");
+        } else {
+          log("当前版本：" + current, "ok");
+          log("默认下一版：" + nextVersion(current), "ok");
+        }
+      } catch (e) {
+        log(e.message || e, "err");
+      }
+    }
+
+    function ensureFile(path) {
+      if (!fso.FileExists(path)) {
+        throw new Error("文件不存在：" + path);
+      }
+    }
+
+    function setVersionText(path, type, version) {
+      var text = readUtf8(path);
+      var next = "";
+      if (type === "json") {
+        next = text.replace(/("version"\s*:\s*")\d+\.\d+\.\d+(")/, "$1" + version + "$2");
+      } else {
+        next = text.replace(/(^\s*version\s*=\s*")\d+\.\d+\.\d+(")/m, "$1" + version + "$2");
+      }
+      if (next === text) {
+        throw new Error("没有找到可替换的版本号：" + path);
+      }
+      writeUtf8(path, next);
+    }
+
+    function syncVersion(version) {
+      setVersionText(paths.pkg, "json", version);
+      setVersionText(paths.tauri, "json", version);
+      setVersionText(paths.cargo, "toml", version);
+    }
+
+    function startRelease() {
+      if (execProc) return;
+      var version = document.getElementById("targetVersion").value.replace(/^\s+|\s+$/g, "");
+      clearLog();
+      try {
+        if (!isVersion(version)) {
+          throw new Error("版本号格式必须是 x.y.z，例如 0.1.2");
+        }
+        syncVersion(version);
+        document.getElementById("currentVersion").innerText = version;
+        document.getElementById("nextVersion").innerText = nextVersion(version);
+        setBusy(true);
+        log("已同步版本：" + version, "ok");
+        log("开始打包，请不要关闭窗口。");
+
+        shell.CurrentDirectory = codeDir;
+        execProc = shell.Exec('cmd.exe /d /c call "' + paths.releaseBat + '" <nul');
+        pollTimer = window.setInterval(function () {
+          pollRelease(version);
+        }, 500);
+      } catch (e) {
+        setBusy(false);
+        log(e.message || e, "err");
+      }
+    }
+
+    function pollRelease(version) {
+      try {
+        readProcessOutput();
+        if (execProc && execProc.Status !== 0) {
+          readProcessOutput();
+          var code = execProc.ExitCode;
+          window.clearInterval(pollTimer);
+          pollTimer = null;
+          execProc = null;
+          setBusy(false);
+          if (code === 0) {
+            log("打包完成。", "ok");
+            checkOutputs(version);
+            document.getElementById("targetVersion").value = nextVersion(version);
+          } else {
+            log("打包失败，退出码：" + code, "err");
+          }
+        }
+      } catch (e) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+        execProc = null;
+        setBusy(false);
+        log(e.message || e, "err");
+      }
+    }
+
+    function readProcessOutput() {
+      while (execProc && !execProc.StdOut.AtEndOfStream) {
+        log(execProc.StdOut.ReadLine());
+      }
+      while (execProc && !execProc.StdErr.AtEndOfStream) {
+        log(execProc.StdErr.ReadLine(), "warn");
+      }
+    }
+
+    function checkOutputs(version) {
+      var exe = fso.BuildPath(paths.dist, "Launcher_" + version + "_x64-setup.exe");
+      var msi = fso.BuildPath(paths.dist, "Launcher_" + version + "_x64_en-US.msi");
+      if (fso.FileExists(exe)) {
+        log("EXE：" + exe, "ok");
+      } else {
+        log("未找到 EXE：" + exe, "warn");
+      }
+      if (fso.FileExists(msi)) {
+        log("MSI：" + msi, "ok");
+      } else {
+        log("未找到 MSI：" + msi, "warn");
+      }
+    }
+
+    function openDist() {
+      if (fso.FolderExists(paths.dist)) {
+        shell.Run('explorer.exe "' + paths.dist + '"', 1, false);
+      }
+    }
+
+    function setBusy(busy) {
+      document.getElementById("releaseBtn").disabled = busy;
+      document.getElementById("refreshBtn").disabled = busy;
+      document.getElementById("targetVersion").disabled = busy;
+      document.getElementById("status").innerText = busy ? "打包中..." : "就绪";
+    }
+
+    function clearLog() {
+      document.getElementById("log").innerText = "";
+    }
+
+    function log(msg, type) {
+      var el = document.getElementById("log");
+      var prefix = "";
+      if (type === "ok") prefix = "[OK] ";
+      if (type === "warn") prefix = "[WARN] ";
+      if (type === "err") prefix = "[ERROR] ";
+      el.innerText += prefix + msg + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+  </script>
+</head>
+<body onload="init()">
+  <div class="wrap">
+    <h1>Launcher 打包工具</h1>
+
+    <div class="card">
+      <div class="row">
+        <div class="label">项目目录</div>
+        <div class="field mono" id="codeDir">-</div>
+      </div>
+      <div class="row">
+        <div class="label">状态</div>
+        <div class="field" id="status">就绪</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div class="label">当前版本</div>
+        <div class="field mono" id="currentVersion">-</div>
+      </div>
+      <div class="row">
+        <div class="label">默认下一版</div>
+        <div class="field mono" id="nextVersion">-</div>
+      </div>
+      <div class="row">
+        <div class="label">本次版本</div>
+        <div class="field">
+          <input id="targetVersion" value="" />
+          <span class="hint">格式：0.1.2</span>
+        </div>
+      </div>
+      <div class="btns">
+        <button id="refreshBtn" onclick="refreshVersion()">刷新版本</button>
+        <button id="releaseBtn" class="primary" onclick="startRelease()">写入版本并打包</button>
+        <button onclick="openDist()">打开 dist</button>
+      </div>
+      <div class="hint">
+        打包前会同步 package.json、tauri.conf.json、Cargo.toml。打包仍调用 scripts\release.bat。
+      </div>
+    </div>
+
+    <div id="log"></div>
+  </div>
+</body>
+</html>

@@ -62,7 +62,7 @@ func (s *Store) DB() *sql.DB { return s.db }
 // Close 关闭数据库。
 func (s *Store) Close() error { return s.db.Close() }
 
-// ensureSchema 处理 ALTER TABLE ADD COLUMN 的非幂等列(role/role_source)。
+// ensureSchema 处理 ALTER TABLE ADD COLUMN 的非幂等列(role/role_source、apps.card_color)。
 // SQLite 的 ADD COLUMN 列已存在时报 "duplicate column name",不像 CREATE IF NOT EXISTS 那样可重复执行,
 // 故用 PRAGMA table_info 先检测列是否已存在,缺哪列补哪列。每次 Open 调用一次,安全。
 func (s *Store) ensureSchema() error {
@@ -79,6 +79,17 @@ func (s *Store) ensureSchema() error {
 			if _, err := s.db.Exec("ALTER TABLE app_services ADD COLUMN " + col + " " + def); err != nil {
 				return err
 			}
+		}
+	}
+
+	// apps.card_color：旧库升级补列
+	appCols, err := s.tableColumns("apps")
+	if err != nil {
+		return err
+	}
+	if !appCols["CARD_COLOR"] {
+		if _, err := s.db.Exec("ALTER TABLE apps ADD COLUMN card_color TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
 		}
 	}
 	return nil

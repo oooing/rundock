@@ -2,10 +2,22 @@
 import { computed } from 'vue'
 import type { ImportCandidate } from '@/types'
 
-const props = defineProps<{ candidate: ImportCandidate }>()
+/**
+ * mode:
+ *   - 'import'（默认）：导入新应用，标题"确认导入此应用"，允许编辑名称
+ *   - 'script-change'：启动/重启时脚本内容变化，标题强调"脚本已变更"，只读名称
+ */
+const props = defineProps<{
+  candidate: ImportCandidate
+  mode?: 'import' | 'script-change'
+  /** script-change 模式下展示的待执行操作文案，如 "启动" / "重启" */
+  action?: string
+}>()
 const emit = defineEmits<{ (e: 'confirm' | 'cancel'): void }>()
 
 const c = computed(() => props.candidate)
+const mode = computed(() => props.mode || 'import')
+const isScriptChange = computed(() => mode.value === 'script-change')
 
 const hasDanger = computed(
   () => (c.value.findings || []).some((f) => f.level === 'danger')
@@ -18,22 +30,39 @@ const envEntries = computed(() => Object.entries(c.value.env || {}))
 const markers = computed(() => c.value.markers || [])
 
 const levelText = (l: string) => ({ danger: '危险', warn: '警告', info: '提示' }[l] || l)
+
+const title = computed(() =>
+  isScriptChange.value
+    ? `脚本已变更 — 确认${props.action || '启动'}`
+    : '确认导入此应用',
+)
+const hint = computed(() =>
+  isScriptChange.value
+    ? '入口脚本的内容在上次确认后发生了变化。运行脚本等于执行任意代码，请核对新的风险项，确认后再继续。'
+    : '运行脚本等于执行任意代码。请核对以下信息，确认无误后再导入。这是平台的安全基线。',
+)
+const confirmText = computed(() => {
+  if (!isScriptChange.value) {
+    return hasDanger.value ? '我已知晓风险，确认导入' : '确认导入'
+  }
+  return hasDanger.value ? `我已知晓风险，确认${props.action || '启动'}` : `确认${props.action || '启动'}`
+})
 </script>
 
 <template>
   <div class="overlay">
     <div class="modal">
       <header class="m-head">
-        <h2>确认导入此应用</h2>
+        <h2>{{ title }}</h2>
         <button class="ghost icon" @click="emit('cancel')">✕</button>
       </header>
 
       <div class="m-body">
         <p class="hint">
-          运行脚本等于执行任意代码。请核对以下信息，确认无误后再导入。这是平台的安全基线。
+          {{ hint }}
         </p>
 
-        <section class="block">
+        <section class="block" v-if="!isScriptChange">
           <h4>应用名称</h4>
           <input v-model="c.name" class="name-input" />
         </section>
@@ -82,7 +111,7 @@ const levelText = (l: string) => ({ danger: '危险', warn: '警告', info: '提
           :class="{ danger: hasDanger }"
           @click="emit('confirm')"
         >
-          {{ hasDanger ? '我已知晓风险，确认导入' : '确认导入' }}
+          {{ confirmText }}
         </button>
       </footer>
     </div>

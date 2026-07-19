@@ -10,26 +10,27 @@ import (
 
 // App 是一个被托管的启动单元。
 type App struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	EntryScript   string   `json:"entryScript"`
-	Cwd           string   `json:"cwd"`
-	AdapterType   string   `json:"adapterType"`
-	Cmd           string   `json:"cmd"`
-	Args          []string `json:"args"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	EntryScript   string            `json:"entryScript"`
+	Cwd           string            `json:"cwd"`
+	AdapterType   string            `json:"adapterType"`
+	Cmd           string            `json:"cmd"`
+	Args          []string          `json:"args"`
 	Env           map[string]string `json:"env"`
-	Tags          []string `json:"tags"`
-	GroupID       *string  `json:"groupId"`
-	PortHints     []int    `json:"portHints"`
-	HealthURL     string   `json:"healthUrl"`
-	ScriptHash    string   `json:"scriptHash"`
-	Confirmed     bool     `json:"confirmed"`
-	ConfirmedHash string   `json:"confirmedHash"`
-	CreatedAt     string   `json:"createdAt"`
-	LastStartedAt *string  `json:"lastStartedAt"`
-	LastURL       string   `json:"lastUrl"`
-	LastStatus    string   `json:"lastStatus"`
-	SortOrder     int      `json:"sortOrder"`
+	Tags          []string          `json:"tags"`
+	GroupID       *string           `json:"groupId"`
+	PortHints     []int             `json:"portHints"`
+	HealthURL     string            `json:"healthUrl"`
+	ScriptHash    string            `json:"scriptHash"`
+	Confirmed     bool              `json:"confirmed"`
+	ConfirmedHash string            `json:"confirmedHash"`
+	CreatedAt     string            `json:"createdAt"`
+	LastStartedAt *string           `json:"lastStartedAt"`
+	LastURL       string            `json:"lastUrl"`
+	LastStatus    string            `json:"lastStatus"`
+	SortOrder     int               `json:"sortOrder"`
+	CardColor     string            `json:"cardColor"`
 }
 
 // Group 分组。
@@ -55,12 +56,12 @@ type AppRun struct {
 
 // LogEntry 一条日志。
 type LogEntry struct {
-	ID        int64  `json:"id"`
-	AppRunID  string `json:"appRunId"`
-	Ts        string `json:"ts"`
-	Stream    string `json:"stream"`
-	Level     string `json:"level"`
-	Text      string `json:"text"`
+	ID       int64  `json:"id"`
+	AppRunID string `json:"appRunId"`
+	Ts       string `json:"ts"`
+	Stream   string `json:"stream"`
+	Level    string `json:"level"`
+	Text     string `json:"text"`
 }
 
 // PortEntry 端口发现记录。
@@ -79,11 +80,11 @@ type AppService struct {
 	AppRunID    string `json:"appRunId"`
 	Port        int    `json:"port"`
 	URL         string `json:"url"`
-	Health      string `json:"health"`      // healthy/unhealthy/unknown
+	Health      string `json:"health"` // healthy/unhealthy/unknown
 	LastChecked string `json:"lastChecked"`
 	DetectedAt  string `json:"detectedAt"`
-	Role        string `json:"role"`        // frontend|backend|database|unknown
-	RoleSource  string `json:"roleSource"`  // auto|manual
+	Role        string `json:"role"`       // frontend|backend|database|unknown
+	RoleSource  string `json:"roleSource"` // auto|manual
 }
 
 // AppService 的 role 取值常量。
@@ -236,11 +237,11 @@ func (s *Store) CreateApp(a *App) error {
 	tags, _ := json.Marshal(a.Tags)
 	hints := hintsJSON(a.PortHints)
 	_, err := s.db.Exec(`INSERT INTO apps
-		(id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,last_status,sort_order)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,last_status,sort_order,card_color)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.Name, a.EntryScript, a.Cwd, a.AdapterType, a.Cmd, string(args), string(env),
 		string(tags), nullableString(a.GroupID), hints, a.HealthURL, a.ScriptHash, boolToInt(a.Confirmed),
-		a.ConfirmedHash, a.LastStatus, a.SortOrder)
+		a.ConfirmedHash, a.LastStatus, a.SortOrder, a.CardColor)
 	return err
 }
 
@@ -248,7 +249,7 @@ func (s *Store) CreateApp(a *App) error {
 func (s *Store) GetApp(id string) (*App, error) {
 	row := s.db.QueryRow(`SELECT id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,
 		group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,created_at,
-		last_started_at,last_url,last_status,sort_order FROM apps WHERE id=?`, id)
+		last_started_at,last_url,last_status,sort_order,card_color FROM apps WHERE id=?`, id)
 	return scanApp(row)
 }
 
@@ -256,7 +257,7 @@ func (s *Store) GetApp(id string) (*App, error) {
 func (s *Store) ListApps() ([]*App, error) {
 	rows, err := s.db.Query(`SELECT id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,
 		group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,created_at,
-		last_started_at,last_url,last_status,sort_order FROM apps ORDER BY sort_order ASC, name ASC`)
+		last_started_at,last_url,last_status,sort_order,card_color FROM apps ORDER BY sort_order ASC, name ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -280,10 +281,10 @@ func (s *Store) UpdateApp(a *App) error {
 	hints := hintsJSON(a.PortHints)
 	_, err := s.db.Exec(`UPDATE apps SET name=?,entry_script=?,cwd=?,adapter_type=?,cmd=?,args_json=?,env_json=?,
 		tags_json=?,group_id=?,port_hints_json=?,health_url=?,script_hash=?,confirmed=?,confirmed_hash=?,
-		last_started_at=?,last_url=?,last_status=?,sort_order=? WHERE id=?`,
+		last_started_at=?,last_url=?,last_status=?,sort_order=?,card_color=? WHERE id=?`,
 		a.Name, a.EntryScript, a.Cwd, a.AdapterType, a.Cmd, string(args), string(env), string(tags),
 		nullableString(a.GroupID), hints, a.HealthURL, a.ScriptHash, boolToInt(a.Confirmed), a.ConfirmedHash,
-		nullableString(a.LastStartedAt), nullableStringEmpty(a.LastURL), a.LastStatus, a.SortOrder, a.ID)
+		nullableString(a.LastStartedAt), nullableStringEmpty(a.LastURL), a.LastStatus, a.SortOrder, a.CardColor, a.ID)
 	return err
 }
 
@@ -295,13 +296,21 @@ func (s *Store) TouchAppRuntime(id string, lastStartedAt, lastURL, lastStatus st
 	return err
 }
 
-// ResetActiveAppStatus 把所有处于活跃态(starting/running/degraded/stopping)的 app 状态
-// 重置为给定 status（通常 "stopped"）。返回受影响行数。
-// 用于 sidecar 重启时清理上次崩溃/强杀残留的"运行中"状态——重启后不可能有任何 app 真在运行。
-func (s *Store) ResetActiveAppStatus(status string) (int64, error) {
-	res, err := s.db.Exec(`UPDATE apps SET last_status=? WHERE last_status IN ('starting','running','degraded','stopping')`,
-		status)
+// ResetRuntimeState 清除上次 sidecar 的运行态缓存；端口不等于项目身份，不能据此恢复。
+func (s *Store) ResetRuntimeState() (int64, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE apps SET last_status='stopped' WHERE last_status <> 'stopped'`)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE app_services SET health='unknown', last_checked=NULL WHERE health <> 'unknown' OR last_checked IS NOT NULL`); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
@@ -333,6 +342,12 @@ func (s *Store) UpdateRunStatus(id, status string, exitCode *int) error {
 	return err
 }
 
+// UpdateRunPID 在进程创建后回填 pid/root_pid（CreateRun 时可能尚未拿到 PID）。
+func (s *Store) UpdateRunPID(id string, pid, rootPID int) error {
+	_, err := s.db.Exec(`UPDATE app_runs SET pid=?, root_pid=? WHERE id=?`, pid, rootPID, id)
+	return err
+}
+
 func (s *Store) GetLatestRun(appID string) (*AppRun, error) {
 	row := s.db.QueryRow(`SELECT id,app_id,pid,root_pid,status,started_at,stopped_at,exit_code
 		FROM app_runs WHERE app_id=? ORDER BY started_at DESC LIMIT 1`, appID)
@@ -357,10 +372,18 @@ func (s *Store) GetLatestRun(appID string) (*AppRun, error) {
 
 // ----- Logs -----
 
-func (s *Store) InsertLog(runID, stream, level, text string) error {
-	_, err := s.db.Exec(`INSERT INTO logs (app_run_id,stream,level,text) VALUES (?,?,?,?)`,
+// InsertLog 写入一条日志，返回自增 id（供 WS 广播带 id，避免前端按 id 去重时互相覆盖）。
+func (s *Store) InsertLog(runID, stream, level, text string) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO logs (app_run_id,stream,level,text) VALUES (?,?,?,?)`,
 		runID, stream, level, text)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // RecentLogs 返回自 sinceID 之后最多 limit 条日志。
@@ -529,7 +552,7 @@ func scanApp(sc scanner) (*App, error) {
 	var confirmed int
 	if err := sc.Scan(&a.ID, &a.Name, &a.EntryScript, &a.Cwd, &a.AdapterType, &a.Cmd,
 		&argsJSON, &envJSON, &tagsJSON, &groupID, &hintsJSON, &a.HealthURL, &a.ScriptHash,
-		&confirmed, &a.ConfirmedHash, &a.CreatedAt, &lastStarted, &lastURL, &a.LastStatus, &a.SortOrder); err != nil {
+		&confirmed, &a.ConfirmedHash, &a.CreatedAt, &lastStarted, &lastURL, &a.LastStatus, &a.SortOrder, &a.CardColor); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}

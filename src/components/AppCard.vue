@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { AppView, ServiceRole } from '@/types'
+import backendIcon from '@/assets/backend-server.svg'
+import { CARD_COLOR_PALETTE, getReadableTextColor, normalizeHexColor } from '@/utils/cardColors'
 
 const props = defineProps<{ app: AppView }>()
 const emit = defineEmits<{
@@ -9,14 +11,15 @@ const emit = defineEmits<{
   (e: 'rename', id: string, name: string): void
   (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
   (e: 'reidentify', appId: string, serviceId: string): void
+  (e: 'set-color', id: string, color: string): void
 }>()
 
 const a = computed(() => props.app)
 
 // 服务角色 → 图标/颜色/标签
-const ROLE_META: Record<ServiceRole, { icon: string; color: string; label: string }> = {
+const ROLE_META: Record<ServiceRole, { icon: string; iconSrc?: string; color: string; label: string }> = {
   frontend: { icon: '🌐', color: '#3b82f6', label: '前端' },
-  backend: { icon: '⚙️', color: '#8b5cf6', label: '后端' },
+  backend: { icon: '', iconSrc: backendIcon, color: '#8b5cf6', label: '后端' },
   database: { icon: '🗄️', color: '#f59e0b', label: '数据库' },
   unknown: { icon: '❓', color: '#9ca3af', label: '未识别' },
 }
@@ -68,8 +71,11 @@ function commitRename() {
 const isActive = computed(
   () => ['starting', 'running', 'degraded', 'stopping'].includes(a.value.status)
 )
+// URL 仅在服务运行时才可达；停止/失败时置灰，避免点了浏览器显示无法访问造成"链接坏了"的误会。
+const urlReachable = computed(() => isActive.value)
 
 const statusLabel = computed(() => {
+  if (a.value.restarting) return '重启中'
   const m: Record<string, string> = {
     starting: '启动中',
     running: '运行中',
@@ -90,6 +96,23 @@ function healthText(h: string): string {
   }
   return m[h] || h
 }
+
+// 展示顺序：前端 > 后端 > 数据库 > 未识别，同角色按端口
+const ROLE_ORDER: Record<ServiceRole, number> = {
+  frontend: 0,
+  backend: 1,
+  database: 2,
+  unknown: 3,
+}
+const sortedServices = computed(() => {
+  const list = [...(a.value.services || [])]
+  return list.sort((x, y) => {
+    const rx = ROLE_ORDER[(x.role as ServiceRole) || 'unknown'] ?? 9
+    const ry = ROLE_ORDER[(y.role as ServiceRole) || 'unknown'] ?? 9
+    if (rx !== ry) return rx - ry
+    return (x.port || 0) - (y.port || 0)
+  })
+})
 
 // 打开某个服务的 URL（通过 open-url 事件，后端会用系统浏览器打开）
 function openServiceUrl(url: string) {
@@ -113,10 +136,38 @@ const adapterLabel = computed(() => {
   }
   return m[a.value.adapterType] || a.value.adapterType
 })
+
+// ===== 卡片背景色 =====
+// 只持久化背景色；文字色按背景亮度自动计算（深底浅字 / 浅底深字）。
+const colorMenuOpen = ref(false)
+function toggleColorMenu() {
+  colorMenuOpen.value = !colorMenuOpen.value
+}
+function chooseColor(color: string) {
+  colorMenuOpen.value = false
+  emit('set-color', a.value.id, color)
+}
+function clearColor() {
+  colorMenuOpen.value = false
+  emit('set-color', a.value.id, '')
+}
+const cardStyle = computed(() => {
+  const bg = normalizeHexColor(a.value.cardColor)
+  if (!bg) return {}
+  const fg = getReadableTextColor(bg)
+  const darkText = fg === '#111827'
+  return {
+    '--card-bg': bg,
+    '--card-fg': fg,
+    '--card-muted': darkText ? 'rgba(17, 24, 39, 0.70)' : 'rgba(248, 250, 252, 0.72)',
+    '--card-panel': darkText ? 'rgba(17, 24, 39, 0.07)' : 'rgba(255, 255, 255, 0.08)',
+    '--card-border': darkText ? 'rgba(17, 24, 39, 0.18)' : 'rgba(255, 255, 255, 0.16)',
+  } as Record<string, string>
+})
 </script>
 
 <template>
-  <article class="card" :class="['s-' + a.status]">
+  <article class="card" :class="['s-' + a.status]" :style="cardStyle" :aria-busy="a.restarting || undefined">
     <header class="head">
       <div class="name-row">
         <span class="adapter-tag">{{ adapterLabel }}</span>
@@ -133,7 +184,33 @@ const adapterLabel = computed(() => {
       </div>
       <div class="head-right">
         <button v-if="!editingName" class="ghost icon rename-btn" title="改名" @click="startRename">✎</button>
-        <span class="badge" :class="a.status">
+        <div class="color-wrap">
+          <button
+            class="ghost icon color-btn"
+            title="卡片背景色"
+            @click.stop="toggleColorMenu"
+          >🎨</button>
+          <div v-if="colorMenuOpen" class="color-backdrop" @click="colorMenuOpen = false"></div>
+          <div v-if="colorMenuOpen" class="color-menu" @click.stop>
+            <div class="palette">
+              <button
+                v-for="c in CARD_COLOR_PALETTE"
+                :key="c"
+                class="swatch"
+                :class="{ active: normalizeHexColor(a.cardColor) === c }"
+                :style="{ background: c }"
+                :title="c"
+                @click="chooseColor(c)"
+              ></button>
+            </div>
+            <label class="custom-color">
+              <input type="color" :value="normalizeHexColor(a.cardColor) || '#1e293b'" @input="chooseColor(($event.target as HTMLInputElement).value)" />
+              <span>自定义</span>
+            </label>
+            <button v-if="a.cardColor" class="clear-color" @click="clearColor">清除颜色</button>
+          </div>
+        </div>
+        <span class="badge" :class="a.restarting ? 'starting' : a.status">
           <span class="dot"></span>{{ statusLabel }}
         </span>
       </div>
@@ -144,7 +221,7 @@ const adapterLabel = computed(() => {
       <div v-if="a.services && a.services.length" class="services">
         <!-- 切换菜单遮罩：点外部关闭 -->
         <div v-if="roleMenuOpen" class="role-backdrop" @click="roleMenuOpen = null"></div>
-        <div v-for="svc in a.services" :key="svc.id" class="svc-row">
+        <div v-for="svc in sortedServices" :key="svc.id" class="svc-row">
           <div class="role-wrap">
             <button
               class="role-btn"
@@ -152,26 +229,33 @@ const adapterLabel = computed(() => {
               :style="{ color: roleMeta(svc.role).color }"
               :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? '（已锁定）' : '') + ' — 点击切换'"
               @click.stop="toggleRoleMenu(svc.id)"
-            >{{ roleMeta(svc.role).icon }}</button>
+            >
+              <img v-if="roleMeta(svc.role).iconSrc" class="role-icon" :src="roleMeta(svc.role).iconSrc" alt="" />
+              <template v-else>{{ roleMeta(svc.role).icon }}</template>
+            </button>
             <div v-if="roleMenuOpen === svc.id" class="role-menu" @click.stop>
               <button
                 v-for="r in ROLE_OPTIONS"
                 :key="r"
                 :style="{ color: ROLE_META[r].color }"
                 @click="pickRole(svc.id, r)"
-              >{{ ROLE_META[r].icon }} {{ ROLE_META[r].label }}</button>
+              >
+                <img v-if="ROLE_META[r].iconSrc" class="role-icon" :src="ROLE_META[r].iconSrc" alt="" />
+                <span v-else>{{ ROLE_META[r].icon }}</span>
+                {{ ROLE_META[r].label }}
+              </button>
               <button class="reidentify" @click="reidentify(svc.id)">🔄 重新识别</button>
             </div>
           </div>
           <span class="svc-dot" :class="svc.health" :title="healthText(svc.health)"></span>
           <span class="svc-port mono">:{{ svc.port }}</span>
-          <a class="svc-url mono" :title="svc.url" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
+          <a class="svc-url mono" :class="{ dim: !urlReachable }" :title="svc.url + (urlReachable ? '' : '（服务未运行）')" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
         </div>
       </div>
       <!-- 无服务时回退到旧的 lastUrl -->
-      <div class="meta-row url" v-else-if="a.lastUrl">
+      <div class="meta-row url" :class="{ dim: !urlReachable }" v-else-if="a.lastUrl">
         <span class="k">URL</span>
-        <a class="v mono" :title="a.lastUrl" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
+        <a class="v mono" :title="a.lastUrl + (urlReachable ? '' : '（服务未运行）')" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
       </div>
       <div class="meta-row">
         <span class="k">PID</span>
@@ -188,7 +272,11 @@ const adapterLabel = computed(() => {
     </div>
 
     <footer class="actions">
-      <template v-if="isActive">
+      <template v-if="a.restarting">
+        <button class="danger" disabled>停止</button>
+        <button disabled>重启中…</button>
+      </template>
+      <template v-else-if="isActive">
         <button @click="emit('stop', a.id)" class="danger">停止</button>
         <button @click="emit('restart', a.id)">重启</button>
       </template>
@@ -198,7 +286,8 @@ const adapterLabel = computed(() => {
       <button class="ghost icon" title="查看日志" @click="emit('log', a.id)">📜</button>
       <button
         class="ghost icon"
-        title="打开 URL"
+        :class="{ dim: a.lastUrl && !urlReachable }"
+        :title="a.lastUrl ? (urlReachable ? '打开 URL' : '服务未运行，URL 可能无法访问') : '暂无 URL'"
         :disabled="!a.lastUrl"
         @click="emit('open-url', a.id)"
       >🌐</button>
@@ -210,8 +299,9 @@ const adapterLabel = computed(() => {
 
 <style scoped>
 .card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: var(--card-bg, var(--bg-elev));
+  color: var(--card-fg, var(--text));
+  border: 1px solid var(--card-border, var(--border));
   border-radius: var(--radius);
   padding: 14px;
   display: flex;
@@ -256,6 +346,7 @@ const adapterLabel = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
+  color: var(--card-fg, var(--text));
 }
 .name-edit {
   flex: 1;
@@ -279,7 +370,7 @@ const adapterLabel = computed(() => {
   padding: 2px 6px;
   border-radius: 4px;
   background: var(--bg-elev-2);
-  color: var(--text-dim);
+  color: var(--card-muted, var(--text-dim));
   flex-shrink: 0;
 }
 .meta {
@@ -294,9 +385,9 @@ const adapterLabel = computed(() => {
   flex-direction: column;
   gap: 5px;
   padding: 8px 10px;
-  background: var(--bg);
+  background: var(--card-panel, var(--bg));
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--card-border, var(--border));
 }
 .svc-row {
   display: flex;
@@ -335,6 +426,11 @@ const adapterLabel = computed(() => {
   line-height: 1;
   cursor: pointer;
 }
+.role-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
 .role-btn.locked {
   border-color: currentColor;
   border-style: dashed;
@@ -367,6 +463,9 @@ const adapterLabel = computed(() => {
   font-size: 13px;
   border-radius: 4px;
   color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .role-menu button:hover {
   background: var(--bg-elev-2);
@@ -378,7 +477,7 @@ const adapterLabel = computed(() => {
   padding-top: 6px;
 }
 .svc-port {
-  color: var(--text-faint);
+  color: var(--card-muted, var(--text-faint));
   flex-shrink: 0;
   font-size: 11.5px;
   min-width: 44px;
@@ -394,18 +493,26 @@ const adapterLabel = computed(() => {
 .svc-url:hover {
   text-decoration: underline;
 }
+/* 服务未运行时，URL 置灰提示（仍可点击，但访问可能失败） */
+.svc-url.dim,
+.meta-row.url.dim .v {
+  opacity: 0.5;
+}
+button.dim {
+  opacity: 0.5;
+}
 .meta-row {
   display: flex;
   gap: 8px;
   align-items: baseline;
 }
 .meta-row .k {
-  color: var(--text-faint);
+  color: var(--card-muted, var(--text-faint));
   width: 56px;
   flex-shrink: 0;
 }
 .meta-row .v {
-  color: var(--text-dim);
+  color: var(--card-muted, var(--text-dim));
   word-break: break-all;
 }
 .meta-row.url .v {
@@ -425,12 +532,94 @@ const adapterLabel = computed(() => {
   gap: 6px;
   flex-wrap: wrap;
   padding-top: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--card-border, var(--border));
 }
 .actions button {
   flex-shrink: 0;
 }
 .danger-ico:hover {
   color: var(--red);
+}
+/* ===== 卡片背景色选择 ===== */
+.color-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.color-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.card:hover .color-btn {
+  opacity: 0.7;
+}
+.color-btn:hover {
+  opacity: 1 !important;
+}
+.color-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+}
+.color-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+.palette {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+.swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.custom-color {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.custom-color input[type='color'] {
+  width: 28px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+}
+.clear-color {
+  background: none;
+  border: none;
+  text-align: center;
+  padding: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 4px;
+  color: var(--text-faint);
+}
+.clear-color:hover {
+  background: var(--bg-elev-2);
 }
 </style>

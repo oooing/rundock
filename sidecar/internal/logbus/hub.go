@@ -88,11 +88,16 @@ func (h *Hub) Register() (*Client, func()) {
 	}
 }
 
-// BroadcastLog 广播一条原始日志。
-func (h *Hub) BroadcastLog(appID, runID, stream, level, text string) {
+// BroadcastLog 广播一条原始日志（必须带 DB id，否则前端按 id 去重会互相覆盖）。
+func (h *Hub) BroadcastLog(appID string, entry *store.LogEntry) {
+	if entry == nil {
+		return
+	}
+	// 拷贝一份，避免调用方后续改动影响已入队消息。
+	e := *entry
 	msg := WSMessage{
-		Type: WSLog, Time: nowRFC3339(), App: appID, Run: runID,
-		Log: &store.LogEntry{AppRunID: runID, Stream: stream, Level: level, Text: text, Ts: nowRFC3339()},
+		Type: WSLog, Time: nowRFC3339(), App: appID, Run: e.AppRunID,
+		Log: &e,
 	}
 	h.send(msg)
 }

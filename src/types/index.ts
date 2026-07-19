@@ -54,11 +54,34 @@ export interface AppView {
   lastStartedAt: string | null
   lastUrl: string
   status: AppStatus
+  /** 仅用于前端交互：重启请求及启动恢复期间保持为 true */
+  restarting?: boolean
   runId: string
   pid: number
   sortOrder: number
   services: AppService[] // 项目下所有服务（前端/后端/DB 各一个端口）
+  cardColor: string
 }
+
+/** 启动/重启接口的成功响应体 */
+export interface StartResponse {
+  started?: boolean
+  restarted?: boolean
+  /** true 表示后端在启动前自动同步了脚本派生字段，附带最新 app */
+  configUpdated?: boolean
+  app?: AppView
+}
+
+/** 启动/重启时返回 409 的响应体（脚本风险变化需确认） */
+export interface ScriptConfirmationResponse {
+  /** 固定 "script_confirmation_required"，前端据此识别 */
+  code: 'script_confirmation_required'
+  /** 最新的导入候选（含 findings），用 ConfirmCard 展示 */
+  candidate: ImportCandidate
+}
+
+/** 启动/重启待执行操作的类型 */
+export type PendingOp = 'start' | 'restart'
 
 /** 创建 App 请求体 */
 export interface CreateAppBody {
@@ -74,6 +97,7 @@ export interface CreateAppBody {
   portHints: number[]
   healthUrl: string
   scriptHash: string
+  cardColor: string
 }
 
 /** 分组 */
@@ -91,7 +115,7 @@ export interface LogEntry {
   appRunId: string
   ts: string
   stream: 'stdout' | 'stderr' | 'event'
-  level: 'info' | 'warn' | 'error'
+  level: 'info' | 'warn' | 'error' | 'debug'
   text: string
 }
 

@@ -81,6 +81,7 @@ func (s *Server) handleApps(w http.ResponseWriter, r *http.Request) {
 			ConfirmedHash: body.ScriptHash,
 			LastStatus:    app.StatusStopped,
 			SortOrder:     body.SortOrder,
+			CardColor:     body.CardColor,
 		}
 		if a.Cwd == "" {
 			a.Cwd = dirOf(a.EntryScript)

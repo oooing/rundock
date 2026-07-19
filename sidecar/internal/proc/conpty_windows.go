@@ -19,8 +19,11 @@ import (
 
 // conPTYSession 封装 conpty 进程。
 type conPTYSession struct {
-	c       *conpty.ConPty
-	writeMu sync.Mutex
+	c          *conpty.ConPty
+	writeMu    sync.Mutex
+	closeOnce  sync.Once
+	closeErr   error
+	outputDone chan struct{}
 }
 
 // startConPTY 用伪控制台启动一条命令，返回会话与根 PID。
@@ -31,7 +34,7 @@ func startConPTY(ctx context.Context, cmd string, args []string, cwd string, env
 		cmdLine += " " + quoteIfSpace(a)
 	}
 
-	opts := []conpty.ConPtyOption{}
+	opts := []conpty.ConPtyOption{conpty.ConPtyEnv(env)}
 	if cwd != "" {
 		opts = append(opts, conpty.ConPtyWorkDir(cwd))
 	}
@@ -43,7 +46,9 @@ func startConPTY(ctx context.Context, cmd string, args []string, cwd string, env
 	pid := c.Pid()
 
 	// 后台读 pty 输出，转发给 onOutput
+	session := &conPTYSession{c: c, outputDone: make(chan struct{})}
 	go func() {
+		defer close(session.outputDone)
 		buf := make([]byte, 4096)
 		for {
 			n, err := c.Read(buf)
@@ -58,7 +63,7 @@ func startConPTY(ctx context.Context, cmd string, args []string, cwd string, env
 		}
 	}()
 
-	return &conPTYSession{c: c}, pid, nil
+	return session, pid, nil
 }
 
 // sendCtrlC 通过向 pty 写 Ctrl+C(0x03) 触发优雅停止。
@@ -70,10 +75,12 @@ func (s *conPTYSession) sendCtrlC() error {
 }
 
 // close 释放所有资源。
-func (s *conPTYSession) close() {
-	if s.c != nil {
-		s.c.Close()
+func (s *conPTYSession) close() error {
+	if s == nil || s.c == nil {
+		return nil
 	}
+	s.closeOnce.Do(func() { s.closeErr = s.c.Close() })
+	return s.closeErr
 }
 
 // wait 等待进程退出，返回退出码。
@@ -87,52 +94,52 @@ func (s *conPTYSession) wait() (int, error) {
 
 // terminate 强制终止（Close 会终止进程）。
 func (s *conPTYSession) terminate() error {
-	if s.c != nil {
-		return s.c.Close()
-	}
-	return nil
+	return s.close()
 }
 
 // ----- proc 包集成：StartWithConPTY + helpers -----
 
-// StartWithConPTY 用 ConPTY 启动命令。
+// StartWithConPTY 通过 Session 0 runner Service 启动 ConPTY 命令。
 // onLine 收到按行切分的输出（pty 不区分 stdout/stderr，统一输出）。
 func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line string)) (*Handle, error) {
 	if pc == nil {
 		return nil, fmt.Errorf("nil prepared command")
 	}
 	innerCtx, cancel := context.WithCancel(ctx)
-
 	lb := newLineBuffer(onLine)
-
-	// 把 env map 合并进环境（conpty 库默认继承父进程环境，这里用注入的覆盖）
-	env := mergeEnv(pc.Env)
-	sess, pid, err := startConPTY(innerCtx, pc.Cmd, pc.Args, pc.Cwd, env, lb.feed)
+	pipe, err := openRunnerPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("connect session 0 runner service: %w", err)
+	}
+	sess, pid, err := startServiceSession(pipe, pc, lb.feed)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-
 	h := &Handle{
-		rootPID: pid,
-		cancel:  cancel,
-		pty:     sess,
+		rootPID:    pid,
+		cancel:     cancel,
+		pty:        sess,
+		remoteTree: true,
 	}
-	// ConPTY 进程也加入 Job Object（保证整树可回收）
-	h.jobCloser = assignJob(pid)
+	go func() {
+		<-innerCtx.Done()
+		_ = sess.close()
+	}()
 	return h, nil
 }
 
 // closeConPTY 关闭 ConPTY 会话资源。
 func closeConPTY(s interface{}) {
-	if sess, ok := s.(*conPTYSession); ok {
-		sess.close()
+	if sess, ok := s.(interface{ close() error }); ok {
+		_ = sess.close()
 	}
 }
 
 // waitConPTY 等待进程退出。
 func waitConPTY(s interface{}) (int, error) {
-	if sess, ok := s.(*conPTYSession); ok {
+	if sess, ok := s.(interface{ wait() (int, error) }); ok {
 		return sess.wait()
 	}
 	return -1, fmt.Errorf("not conpty session")
@@ -140,7 +147,7 @@ func waitConPTY(s interface{}) (int, error) {
 
 // gracefulStopConPTY 向 pty 发 Ctrl+C。
 func gracefulStopConPTY(s interface{}) error {
-	if sess, ok := s.(*conPTYSession); ok {
+	if sess, ok := s.(interface{ sendCtrlC() error }); ok {
 		return sess.sendCtrlC()
 	}
 	return nil
@@ -148,7 +155,7 @@ func gracefulStopConPTY(s interface{}) error {
 
 // terminateConPTY 强制终止。
 func terminateConPTY(s interface{}) error {
-	if sess, ok := s.(*conPTYSession); ok {
+	if sess, ok := s.(interface{ terminate() error }); ok {
 		return sess.terminate()
 	}
 	return nil

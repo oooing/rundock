@@ -2,12 +2,14 @@
 import { onMounted, ref } from 'vue'
 import { api } from '@/api/http'
 import type { ExportSnapshot } from '@/types'
+import { getAppVersion } from '@/tauri/window'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const settings = ref<Record<string, string>>({})
 const saving = ref(false)
 const saved = ref(false)
+const appVersion = ref('0.1.0')
 
 async function load() {
   settings.value = await api.getSettings()
@@ -72,6 +74,9 @@ async function resetCloseBehavior() {
 onMounted(() => {
   load()
   loadCloseBehavior()
+  getAppVersion().then((v) => {
+    appVersion.value = v
+  })
 })
 </script>
 
@@ -84,6 +89,13 @@ onMounted(() => {
       </header>
 
       <div class="m-body">
+        <section class="block">
+          <div class="version-row">
+            <span>当前版本</span>
+            <code>v{{ appVersion }}</code>
+          </div>
+        </section>
+
         <section class="block">
           <h4>运行参数</h4>
           <div class="row">
@@ -174,6 +186,22 @@ onMounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-faint);
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.version-row code {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .row {
   display: flex;

@@ -1,9 +1,9 @@
 // Package probe 负责端口/URL/健康的"观测式"发现，是日志解析之外的兜底与确认。
 //
 // 报告建议的三段式：
-//   1. 日志正则抽 URL（logbus 已实现，probe 复用 ExtractURLs）。
-//   2. 端口观测：启动前后监听端口差异（本包 snapshot 对比）。
-//   3. HTTP/HTTPS 健康检查：候选 URL GET / / /health，分析状态码/标题。
+//  1. 日志正则抽 URL（logbus 已实现，probe 复用 ExtractURLs）。
+//  2. 端口观测：启动前后监听端口差异（本包 snapshot 对比）。
+//  3. HTTP/HTTPS 健康检查：候选 URL GET / / /health，分析状态码/标题。
 package probe
 
 import (
@@ -23,8 +23,8 @@ import (
 // PortListener 描述一个监听端口。
 type PortListener struct {
 	Port int    `json:"port"`
-	Addr string `json:"addr"`  // 监听地址，如 0.0.0.0:3000
-	PID  int    `json:"pid"`   // 拥有该端口的进程（尽力获取）
+	Addr string `json:"addr"` // 监听地址，如 0.0.0.0:3000
+	PID  int    `json:"pid"`  // 拥有该端口的进程（尽力获取）
 }
 
 // SnapshotListeners 获取当前所有 TCP 监听端口。
@@ -70,6 +70,7 @@ type HealthResult struct {
 	Server      string `json:"server"`
 	PoweredBy   string `json:"poweredBy"`   // X-Powered-By 头(Express/FastAPI/Next 等)
 	ContentType string `json:"contentType"` // Content-Type 头(供角色识别)
+	Body        string `json:"-"`           // 仅供本地角色识别，不对外返回
 }
 
 var httpClient = &http.Client{Timeout: 3 * time.Second}
@@ -91,6 +92,11 @@ func CheckHealth(ctx context.Context, baseURL string) *HealthResult {
 		}
 	}
 	return &HealthResult{URL: baseURL}
+}
+
+// CheckRoot 固定探测服务根路径，仅用于角色识别，避免把代理的健康端点误当成服务本身。
+func CheckRoot(ctx context.Context, baseURL string) *HealthResult {
+	return probeURL(ctx, strings.TrimRight(baseURL, "/")+"/")
 }
 
 func healthPaths(base string) []string {
@@ -125,6 +131,7 @@ func probeURL(ctx context.Context, u string) *HealthResult {
 		PoweredBy:   resp.Header.Get("X-Powered-By"),
 		ContentType: resp.Header.Get("Content-Type"),
 		Title:       extractTitle(string(body)),
+		Body:        string(body),
 	}
 	return r
 }

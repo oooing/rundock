@@ -23,6 +23,9 @@ vendor/
 
 # 运行日志与误生成的保留名文件
 sidecar-dev.log
+.gocache/
+sidecar/.launcher-data/
+*.log
 nul
 
 # IDE

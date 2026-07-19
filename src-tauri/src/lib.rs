@@ -11,17 +11,20 @@
 //   - 托盘图标：双击显示窗口；右键菜单「显示窗口」「退出」。
 //   - 退出(quit_app)前调 sidecar stop-all 停止所有项目，再 exit。
 
+use std::fs::OpenOptions;
 use std::io::{Read, Write as IoWrite};
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
-use tauri_plugin_shell::process::CommandEvent;
-use tauri_plugin_shell::ShellExt;
 
 const SIDECAR_PORT: &str = "17654";
+
+struct SidecarState(Mutex<Option<Child>>);
 
 /// 解析 sidecar 数据目录（%APPDATA%\launcher-sidecar）。
 /// 与 Go config.Default() 保持一致。
@@ -47,11 +50,90 @@ fn wait_for_sidecar(data_dir: &PathBuf, wait_secs: u64) -> Option<String> {
     let deadline = Instant::now() + Duration::from_secs(wait_secs);
     while Instant::now() < deadline {
         if let Some(port) = read_port_file(data_dir) {
-            return Some(port);
+            if sidecar_health_ok(&port) {
+                return Some(port);
+            }
         }
         std::thread::sleep(Duration::from_millis(300));
     }
-    read_port_file(data_dir)
+    read_port_file(data_dir).filter(|port| sidecar_health_ok(port))
+}
+
+fn sidecar_health_ok(port: &str) -> bool {
+    let addr = format!("127.0.0.1:{}", port);
+    let Ok(mut stream) = TcpStream::connect_timeout(
+        &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+        Duration::from_millis(500),
+    ) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let req = "GET /api/health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 128];
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n]).contains(" 200 "),
+        _ => false,
+    }
+}
+
+fn sidecar_exe_path() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidates = [
+        exe_dir.join("launcher-sidecar.exe"),
+        exe_dir.join("launcher-sidecar-x86_64-pc-windows-msvc.exe"),
+        exe_dir
+            .join("binaries")
+            .join("launcher-sidecar-x86_64-pc-windows-msvc.exe"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn append_shell_log(data_dir: &PathBuf, msg: &str) {
+    let _ = std::fs::create_dir_all(data_dir);
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir.join("shell-sidecar.log"))
+    {
+        let _ = writeln!(f, "{}", msg);
+    }
+}
+
+fn spawn_sidecar(data_dir: &PathBuf) -> std::io::Result<Child> {
+    let exe = sidecar_exe_path().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "launcher-sidecar.exe not found")
+    })?;
+    append_shell_log(data_dir, &format!("[shell] spawn sidecar: {}", exe.display()));
+    let exe_dir = exe.parent().map(|p| p.to_path_buf());
+    let log_path = data_dir.join("shell-sidecar.log");
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let mut cmd = Command::new(exe);
+    cmd.args(["-port", SIDECAR_PORT])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    if let Some(dir) = exe_dir {
+        cmd.current_dir(dir);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    cmd.spawn()
 }
 
 #[tauri::command]
@@ -59,6 +141,7 @@ fn sidecar_base() -> Option<String> {
     // 前端通过此命令取 sidecar 基址（壳启动时已确定端口）。
     sidecar_data_dir()
         .and_then(|d| read_port_file(&d))
+        .filter(|port| sidecar_health_ok(port))
         .map(|port| format!("http://127.0.0.1:{}", port))
 }
 
@@ -95,49 +178,48 @@ fn sidecar_stop_all(data_dir: &PathBuf) {
 /// 退出应用：先停止所有项目服务，再退出。供前端「退出」调用。
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
-    let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
-    // 1) 优雅停止所有项目
-    sidecar_stop_all(&data_dir);
-    // 2) 退出（Job Object 关闭会级联回收 sidecar 及其子进程作为兜底）
-    app.exit(0);
+    // 停服务可能需要几秒，放到后台线程，避免前端窗口看起来卡死。
+    std::thread::spawn(move || {
+        let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
+        // 1) 优雅停止所有项目
+        sidecar_stop_all(&data_dir);
+        if let Ok(mut child) = app.state::<SidecarState>().0.lock() {
+            if let Some(mut child) = child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        // 2) 退出（Job Object 关闭会级联回收 sidecar 及其子进程作为兜底）
+        app.exit(0);
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // 1. spawn sidecar
-            let sidecar = app
-                .shell()
-                .sidecar("launcher-sidecar")
-                .expect("sidecar binary not bundled");
-            let (mut rx, _child) = sidecar
-                .args(["-port", SIDECAR_PORT])
-                .spawn()
-                .expect("failed to spawn sidecar");
-
-            // sidecar 输出转发到日志（便于排障）
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(bytes) => {
-                            log_sidecar("OUT", &bytes);
-                        }
-                        CommandEvent::Stderr(bytes) => {
-                            log_sidecar("ERR", &bytes);
-                        }
-                        CommandEvent::Terminated(p) => {
-                            eprintln!("[sidecar] terminated: code={:?}", p.code);
-                        }
-                        _ => {}
-                    }
+            let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
+            let child = if sidecar_health_ok(SIDECAR_PORT) {
+                println!("[shell] reuse existing sidecar on {}", SIDECAR_PORT);
+                None
+            } else {
+                let _ = std::fs::remove_file(data_dir.join("sidecar.port"));
+                let mut child = spawn_sidecar(&data_dir).expect("failed to spawn launcher-sidecar.exe");
+                std::thread::sleep(Duration::from_millis(300));
+                if let Ok(Some(status)) = child.try_wait() {
+                    append_shell_log(
+                        &data_dir,
+                        &format!("[shell] sidecar exited immediately: {:?}", status.code()),
+                    );
                 }
-            });
+                Some(child)
+            };
+            app.manage(SidecarState(Mutex::new(child)));
 
             // 2. 等端口就绪（最多 15s）
-            let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
-            let port = wait_for_sidecar(&data_dir, 15).unwrap_or_else(|| SIDECAR_PORT.to_string());
+            let port = wait_for_sidecar(&data_dir, 15)
+                .or_else(|| sidecar_health_ok(SIDECAR_PORT).then(|| SIDECAR_PORT.to_string()))
+                .unwrap_or_else(|| SIDECAR_PORT.to_string());
             let base = format!("http://127.0.0.1:{}", port);
             println!("[shell] sidecar base = {}", base);
 
@@ -183,8 +265,21 @@ pub fn run() {
                         }
                     }
                     "quit" => {
-                        // 托盘退出：通知前端弹二次确认（前端确认后调 quit_app）
-                        let _ = app.emit("tray-quit-requested", ());
+                        // 托盘退出：先显示主窗口，否则确认弹窗会渲染在隐藏窗口里。
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.unminimize();
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                            // 1) 直接发给 main 窗口。
+                            let _ = win.emit("tray-quit-requested", ());
+                            // 2) 再注入一个普通 DOM 事件作为兜底，不依赖 Tauri JS 事件监听是否注册成功。
+                            let _ = win.eval(
+                                "window.dispatchEvent(new CustomEvent('launcher-tray-quit-requested'));",
+                            );
+                        } else {
+                            // 找不到窗口时没有地方弹确认，退化为直接退出。
+                            app.exit(0);
+                        }
                     }
                     _ => {}
                 })
@@ -202,11 +297,4 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![sidecar_base, quit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn log_sidecar(tag: &str, bytes: &[u8]) {
-    let s = String::from_utf8_lossy(bytes);
-    for line in s.lines() {
-        println!("[sidecar/{}] {}", tag, line);
-    }
 }

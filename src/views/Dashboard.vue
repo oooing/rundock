@@ -20,6 +20,7 @@ const emit = defineEmits<{
   (e: 'rename', id: string, name: string): void
   (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
   (e: 'reidentify', appId: string, serviceId: string): void
+  (e: 'set-color', id: string, color: string): void
 }>()
 </script>
 
@@ -91,6 +92,7 @@ const emit = defineEmits<{
         @rename="(id, name) => emit('rename', id, name)"
         @set-role="(appId, serviceId, role) => emit('set-role', appId, serviceId, role)"
         @reidentify="(appId, serviceId) => emit('reidentify', appId, serviceId)"
+        @set-color="(id, color) => emit('set-color', id, color)"
       />
     </div>
   </div>

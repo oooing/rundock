@@ -90,3 +90,35 @@ func TestRoleUpdateMethods(t *testing.T) {
 		t.Errorf("manual locked, role should stay frontend, got %q", g.Role)
 	}
 }
+
+func TestResetRuntimeStateClearsFailedStatusAndServiceHealth(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	for _, status := range []string{"failed", "running"} {
+		a := &App{ID: status, Name: status, EntryScript: "C:\\x.bat", Cwd: "C:\\", LastStatus: status}
+		if err := s.CreateApp(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UpsertService(&AppService{ID: "svc", AppID: "failed", AppRunID: "run", Port: 7890, Health: "healthy", LastChecked: "2026-07-15T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.ResetRuntimeState(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"failed", "running"} {
+		a, err := s.GetApp(id)
+		if err != nil || a.LastStatus != "stopped" {
+			t.Fatalf("%s status = %q, err = %v", id, a.LastStatus, err)
+		}
+	}
+	svcs, err := s.ListServicesByApp("failed")
+	if err != nil || svcs[0].Health != "unknown" || svcs[0].LastChecked != "" {
+		t.Fatalf("service = %#v, err = %v", svcs, err)
+	}
+}

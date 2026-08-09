@@ -4,8 +4,11 @@ package proc
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,5 +53,51 @@ func TestConPTYStopClosesOnce(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("%s did not finish", item.name)
 		}
+	}
+}
+
+func TestStartWithConPTYRunsInCurrentUserSession(t *testing.T) {
+	t.Setenv("PROJECTS_START_MANAGER_PERMISSION_TEST", "standard-user")
+
+	var output strings.Builder
+	var outputMu sync.Mutex
+	handle, err := StartWithConPTY(context.Background(), &PreparedCommand{
+		Cmd:  os.Getenv("ComSpec"),
+		Args: []string{"/d", "/s", "/c", "echo %PROJECTS_START_MANAGER_PERMISSION_TEST%"},
+	}, func(line string) {
+		outputMu.Lock()
+		output.WriteString(line)
+		output.WriteByte('\n')
+		outputMu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("start current-user ConPTY: %v", err)
+	}
+	defer func() { _ = handle.Close() }()
+
+	done := make(chan error, 1)
+	go func() {
+		code, waitErr := handle.Wait()
+		if waitErr == nil && code != 0 {
+			waitErr = fmt.Errorf("unexpected ConPTY exit code: %d", code)
+		}
+		done <- waitErr
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = handle.Terminate()
+		t.Fatal("current-user ConPTY command did not exit")
+	}
+
+	outputMu.Lock()
+	got := output.String()
+	outputMu.Unlock()
+	if !strings.Contains(got, "standard-user") {
+		t.Fatalf("environment/output was not preserved: %q", got)
 	}
 }

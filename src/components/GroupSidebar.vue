@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useGroupsStore } from '@/stores/groups'
 import { useAppsStore } from '@/stores/apps'
+import { getAppVersion } from '@/tauri/window'
+import pkg from '../../package.json'
 
 const props = defineProps<{ selected: string | null }>()
 const emit = defineEmits<{
@@ -14,6 +16,14 @@ const apps = useAppsStore()
 
 const countAll = computed(() => apps.apps.length)
 const countByGroup = (id: string) => apps.apps.filter((a) => a.groupId === id).length
+
+// 版本号：Tauri 壳里读打包版本，浏览器开发模式回退到 package.json
+const appVersion = ref(pkg.version)
+onMounted(() => {
+  getAppVersion().then((v) => {
+    appVersion.value = v
+  })
+})
 
 async function newGroup() {
   const name = prompt('分组名称')
@@ -59,7 +69,10 @@ async function newGroup() {
     </nav>
 
     <div class="footer">
-      <button class="ghost" @click="emit('settings')">⚙ 设置</button>
+      <div class="footer-row">
+        <button class="ghost" @click="emit('settings')">⚙ 设置</button>
+        <span class="version" title="当前版本">v{{ appVersion }}</span>
+      </div>
     </div>
   </aside>
 </template>
@@ -150,9 +163,21 @@ async function newGroup() {
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
+.footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .footer button {
-  width: 100%;
   text-align: left;
   justify-content: flex-start;
+  flex: 1;
+}
+.version {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 </style>

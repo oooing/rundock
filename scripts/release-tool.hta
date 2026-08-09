@@ -134,6 +134,7 @@
     var shell = new ActiveXObject("WScript.Shell");
     var execProc = null;
     var pollTimer = null;
+    var processLogOffset = 0;
 
     var codeDir = "";
     var paths = {};
@@ -146,6 +147,7 @@
         tauri: fso.BuildPath(fso.BuildPath(codeDir, "src-tauri"), "tauri.conf.json"),
         cargo: fso.BuildPath(fso.BuildPath(codeDir, "src-tauri"), "Cargo.toml"),
         releaseBat: fso.BuildPath(fso.BuildPath(codeDir, "scripts"), "release.bat"),
+        releaseLog: fso.BuildPath(codeDir, "release-build.log"),
         dist: fso.BuildPath(codeDir, "dist")
       };
       document.getElementById("codeDir").innerText = codeDir;
@@ -286,7 +288,13 @@
         log("开始打包，请不要关闭窗口。");
 
         shell.CurrentDirectory = codeDir;
-        execProc = shell.Exec('cmd.exe /d /c call "' + paths.releaseBat + '" <nul');
+        processLogOffset = 0;
+        if (fso.FileExists(paths.releaseLog)) {
+          fso.DeleteFile(paths.releaseLog, true);
+        }
+        // Do not read WshScriptExec.StdOut while the command is still running.
+        // AtEndOfStream may block the HTA UI. Redirect to a relative log file and poll it instead.
+        execProc = shell.Exec('cmd.exe /d /c call "' + paths.releaseBat + '" <nul >"' + paths.releaseLog + '" 2>&1');
         pollTimer = window.setInterval(function () {
           pollRelease(version);
         }, 500);
@@ -324,11 +332,21 @@
     }
 
     function readProcessOutput() {
-      while (execProc && !execProc.StdOut.AtEndOfStream) {
-        log(execProc.StdOut.ReadLine());
-      }
-      while (execProc && !execProc.StdErr.AtEndOfStream) {
-        log(execProc.StdErr.ReadLine(), "warn");
+      if (!fso.FileExists(paths.releaseLog)) return;
+
+      var stream = null;
+      try {
+        stream = fso.OpenTextFile(paths.releaseLog, 1, false, -2);
+        var text = stream.ReadAll();
+        stream.Close();
+        stream = null;
+        if (text.length > processLogOffset) {
+          appendRawLog(text.substring(processLogOffset));
+          processLogOffset = text.length;
+        }
+      } catch (e) {
+        if (stream) stream.Close();
+        // The command may briefly hold the file while appending. Retry on the next poll.
       }
     }
 
@@ -371,6 +389,12 @@
       if (type === "warn") prefix = "[WARN] ";
       if (type === "err") prefix = "[ERROR] ";
       el.innerText += prefix + msg + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function appendRawLog(text) {
+      var el = document.getElementById("log");
+      el.innerText += text;
       el.scrollTop = el.scrollHeight;
     }
   </script>

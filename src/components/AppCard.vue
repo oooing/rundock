@@ -12,6 +12,7 @@ const emit = defineEmits<{
   (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
   (e: 'reidentify', appId: string, serviceId: string): void
   (e: 'set-color', id: string, color: string): void
+  (e: 'drag-start', event: PointerEvent, id: string): void
 }>()
 
 const a = computed(() => props.app)
@@ -119,24 +120,6 @@ function openServiceUrl(url: string) {
   emit('open-url', a.value.id, url)
 }
 
-const lastStartShort = computed(() => {
-  if (!a.value.lastStartedAt) return '—'
-  const d = new Date(a.value.lastStartedAt.replace(' ', 'T') + 'Z')
-  if (isNaN(d.getTime())) return a.value.lastStartedAt
-  return d.toLocaleString('zh-CN', { hour12: false })
-})
-
-const adapterLabel = computed(() => {
-  const m: Record<string, string> = {
-    batch: '批处理',
-    ps1: 'PowerShell',
-    npm: 'npm',
-    yarn: 'yarn',
-    pnpm: 'pnpm',
-  }
-  return m[a.value.adapterType] || a.value.adapterType
-})
-
 // ===== 卡片背景色 =====
 // 只持久化背景色；文字色按背景亮度自动计算（深底浅字 / 浅底深字）。
 const colorMenuOpen = ref(false)
@@ -170,7 +153,12 @@ const cardStyle = computed(() => {
   <article class="card" :class="['s-' + a.status]" :style="cardStyle" :aria-busy="a.restarting || undefined">
     <header class="head">
       <div class="name-row">
-        <span class="adapter-tag">{{ adapterLabel }}</span>
+        <button
+          class="ghost icon drag-handle"
+          title="按住拖拽调整卡片顺序"
+          aria-label="拖拽调整卡片顺序"
+          @pointerdown.stop.prevent="emit('drag-start', $event, a.id)"
+        >⠿</button>
         <h3 v-if="!editingName" :title="a.name + '（点✎改名）'" @dblclick="startRename">{{ a.name }}</h3>
         <input
           v-else
@@ -261,10 +249,6 @@ const cardStyle = computed(() => {
         <span class="k">PID</span>
         <span class="v mono">{{ a.pid || '—' }}</span>
       </div>
-      <div class="meta-row">
-        <span class="k">上次启动</span>
-        <span class="v">{{ lastStartShort }}</span>
-      </div>
       <div class="meta-row path" :title="a.entryScript">
         <span class="k">入口</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
@@ -331,6 +315,16 @@ const cardStyle = computed(() => {
   gap: 6px;
   flex-shrink: 0;
 }
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  font-size: 17px;
+  line-height: 1;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
 .name-row {
   display: flex;
   align-items: center;
@@ -364,14 +358,6 @@ const cardStyle = computed(() => {
 }
 .rename-btn:hover {
   opacity: 1 !important;
-}
-.adapter-tag {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--bg-elev-2);
-  color: var(--card-muted, var(--text-dim));
-  flex-shrink: 0;
 }
 .meta {
   display: flex;

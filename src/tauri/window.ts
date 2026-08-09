@@ -10,6 +10,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import pkg from '../../package.json'
 
+export type FileDragDropEvent =
+  | { type: 'enter'; paths: string[] }
+  | { type: 'over' }
+  | { type: 'drop'; paths: string[] }
+  | { type: 'leave' }
+
 /** 是否看起来运行在 Tauri 壳内。只用于 UI 提示，不再作为调用 Tauri API 的硬门禁。 */
 export const isTauri =
   !!(window as any).__TAURI_INTERNALS__ ||
@@ -49,4 +55,13 @@ export async function onTauriEvent<T = unknown>(
   handler: (payload: T) => void,
 ): Promise<UnlistenFn | null> {
   return listen<T>(name, (e) => handler(e.payload)).catch(() => null)
+}
+
+/** 监听 Tauri 原生文件拖放；桌面端开启 dragDropEnabled 后不会触发浏览器 DOM file drop。 */
+export async function onFileDragDrop(
+  handler: (event: FileDragDropEvent) => void,
+): Promise<UnlistenFn | null> {
+  return getCurrentWindow()
+    .onDragDropEvent((event) => handler(event.payload as FileDragDropEvent))
+    .catch(() => null)
 }

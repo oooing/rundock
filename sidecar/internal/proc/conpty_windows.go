@@ -99,7 +99,8 @@ func (s *conPTYSession) terminate() error {
 
 // ----- proc 包集成：StartWithConPTY + helpers -----
 
-// StartWithConPTY 通过 Session 0 runner Service 启动 ConPTY 命令。
+// StartWithConPTY 在当前用户会话中直接启动隐藏的 ConPTY 命令。
+// ConPTY 本身不创建可见控制台，因此无需安装系统服务或请求管理员权限。
 // onLine 收到按行切分的输出（pty 不区分 stdout/stderr，统一输出）。
 func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line string)) (*Handle, error) {
 	if pc == nil {
@@ -107,22 +108,19 @@ func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line 
 	}
 	innerCtx, cancel := context.WithCancel(ctx)
 	lb := newLineBuffer(onLine)
-	pipe, err := openRunnerPipe()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("connect session 0 runner service: %w", err)
-	}
-	sess, pid, err := startServiceSession(pipe, pc, lb.feed)
+	env := mergeEnv(pc.Env)
+	sess, pid, err := startConPTY(innerCtx, pc.Cmd, pc.Args, pc.Cwd, env, lb.feed)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	h := &Handle{
-		rootPID:    pid,
-		cancel:     cancel,
-		pty:        sess,
-		remoteTree: true,
+		rootPID: pid,
+		cancel:  cancel,
+		pty:     sess,
 	}
+	// 把根进程加入 Job Object，sidecar 退出时整棵进程树仍会被回收。
+	h.jobCloser = assignJob(pid)
 	go func() {
 		<-innerCtx.Done()
 		_ = sess.close()

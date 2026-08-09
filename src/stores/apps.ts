@@ -62,6 +62,7 @@ export const useAppsStore = defineStore('apps', () => {
       healthUrl: '',
       scriptHash: c.scriptHash,
       cardColor: pickNextCardColor(apps.value.map((a) => a.cardColor)),
+      sortOrder: apps.value.reduce((max, a) => Math.max(max, a.sortOrder), -1) + 1,
     }
     const created = await api.createApp(body)
     apps.value.push(created)
@@ -167,6 +168,33 @@ export const useAppsStore = defineStore('apps', () => {
     patchFull(updated)
   }
 
+  /**
+   * 按当前可见卡片的新顺序重排；分组视图只替换这些卡片在全局列表中占用的位置。
+   * 先乐观更新 UI，后端原子落库失败时恢复原顺序。
+   */
+  async function reorderCards(orderedVisibleIds: string[]) {
+    if (orderedVisibleIds.length < 2) return
+    const previous = [...apps.value]
+    const moving = new Set(orderedVisibleIds)
+    const byId = new Map(previous.map((a) => [a.id, a]))
+    if (moving.size !== orderedVisibleIds.length || orderedVisibleIds.some((id) => !byId.has(id))) {
+      throw new Error('卡片顺序数据无效，请刷新后重试')
+    }
+
+    let visibleIndex = 0
+    const reordered = previous.map((a) =>
+      moving.has(a.id) ? byId.get(orderedVisibleIds[visibleIndex++])! : a
+    )
+    const optimistic = reordered.map((a, sortOrder) => ({ ...a, sortOrder }))
+    apps.value = optimistic
+    try {
+      await api.reorderApps(optimistic.map((a) => a.id))
+    } catch (e) {
+      apps.value = previous
+      throw e
+    }
+  }
+
   /** 手动设置服务角色（锁定为 manual）。后端会广播 app:services，这里在请求确认后立即本地更新，避免等待 WS 广播造成闪烁。 */
   async function setServiceRole(appId: string, serviceId: string, role: import('@/types').ServiceRole) {
     await api.setServiceRole(appId, serviceId, role)
@@ -249,7 +277,7 @@ export const useAppsStore = defineStore('apps', () => {
 
   return {
     apps, loading, error, liveLogs,
-    load, importRaw, createFromCandidate, start, stop, restart, resumeAfterConfirm, remove, rename, openURL, openDir, update, setCardColor,
+    load, importRaw, createFromCandidate, start, stop, restart, resumeAfterConfirm, remove, rename, openURL, openDir, update, setCardColor, reorderCards,
     setServiceRole, reidentifyService,
     patch, bindWS, clearLiveLogs,
   }

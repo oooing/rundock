@@ -18,15 +18,10 @@ import (
 	"github.com/launcher-sidecar/internal/api"
 	"github.com/launcher-sidecar/internal/config"
 	"github.com/launcher-sidecar/internal/logbus"
-	"github.com/launcher-sidecar/internal/proc"
 	"github.com/launcher-sidecar/internal/store"
 )
 
 func main() {
-	if handled, code := proc.RunInternalMode(os.Args[1:]); handled {
-		os.Exit(code)
-	}
-
 	addrFlag := flag.String("addr", "", "监听地址（覆盖默认/环境变量）")
 	portFlag := flag.Int("port", 0, "固定端口（0=随机）；非 0 时覆盖 addr")
 	flag.Parse()
@@ -41,9 +36,6 @@ func main() {
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Printf("launcher-sidecar starting: %s", cfg)
-	if err := proc.EnsureSession0Service(); err != nil {
-		log.Fatalf("session 0 runner service: %v", err)
-	}
 
 	// 打开数据库
 	st, err := store.Open(cfg.DBPath)

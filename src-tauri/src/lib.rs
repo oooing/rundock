@@ -35,14 +35,15 @@ fn sidecar_data_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(appdata).join("launcher-sidecar"));
         }
     }
-    std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(".launcher-sidecar"))
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".launcher-sidecar"))
 }
 
 /// 读取 sidecar 写出的端口发现文件。空表示尚未就绪。
 fn read_port_file(data_dir: &PathBuf) -> Option<String> {
     let path = data_dir.join("sidecar.port");
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 /// 轮询等待 sidecar 端口文件出现，最多 wait_secs 秒。
@@ -62,7 +63,9 @@ fn wait_for_sidecar(data_dir: &PathBuf, wait_secs: u64) -> Option<String> {
 fn sidecar_health_ok(port: &str) -> bool {
     let addr = format!("127.0.0.1:{}", port);
     let Ok(mut stream) = TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+        &addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
         Duration::from_millis(500),
     ) else {
         return false;
@@ -105,9 +108,15 @@ fn append_shell_log(data_dir: &PathBuf, msg: &str) {
 
 fn spawn_sidecar(data_dir: &PathBuf) -> std::io::Result<Child> {
     let exe = sidecar_exe_path().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "launcher-sidecar.exe not found")
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "launcher-sidecar.exe not found",
+        )
     })?;
-    append_shell_log(data_dir, &format!("[shell] spawn sidecar: {}", exe.display()));
+    append_shell_log(
+        data_dir,
+        &format!("[shell] spawn sidecar: {}", exe.display()),
+    );
     let exe_dir = exe.parent().map(|p| p.to_path_buf());
     let log_path = data_dir.join("shell-sidecar.log");
     let stdout = OpenOptions::new()
@@ -156,7 +165,9 @@ fn sidecar_stop_all(data_dir: &PathBuf) {
     let req = "POST /api/apps/stop-all HTTP/1.0\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     // 停止项目可能耗时（grace period），给充裕超时
     let Ok(mut stream) = TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+        &addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
         Duration::from_secs(3),
     ) else {
         return;
@@ -196,8 +207,22 @@ fn quit_app(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
+    let mut builder = tauri::Builder::default();
+
+    // 必须最先注册：第二次启动时立即终止新实例，并恢复、显示和聚焦已有窗口。
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }));
+    }
+
+    builder
+		.setup(|app| {
             let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
             let child = if sidecar_health_ok(SIDECAR_PORT) {
                 println!("[shell] reuse existing sidecar on {}", SIDECAR_PORT);

@@ -45,6 +45,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/apps", s.handleApps)
+	mux.HandleFunc("/api/apps/reorder", s.handleAppsReorder)
 	mux.HandleFunc("/api/apps/", s.handleAppDetail) // /api/apps/{id}...
 	mux.HandleFunc("/api/groups", s.handleGroups)
 	mux.HandleFunc("/api/groups/", s.handleGroupDetail)

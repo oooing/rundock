@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -286,6 +287,46 @@ func (s *Store) UpdateApp(a *App) error {
 		nullableString(a.GroupID), hints, a.HealthURL, a.ScriptHash, boolToInt(a.Confirmed), a.ConfirmedHash,
 		nullableString(a.LastStartedAt), nullableStringEmpty(a.LastURL), a.LastStatus, a.SortOrder, a.CardColor, a.ID)
 	return err
+}
+
+// ReorderApps 按 ids 的先后顺序原子更新 sort_order。
+// 任一 ID 不存在或重复时整笔回滚，避免前端与数据库出现半套顺序。
+func (s *Store) ReorderApps(ids []string) error {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			return fmt.Errorf("app id cannot be empty")
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("duplicate app id in order: %s", id)
+		}
+		seen[id] = struct{}{}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`UPDATE apps SET sort_order=? WHERE id=?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for order, id := range ids {
+		res, err := stmt.Exec(order, id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("app not found while reordering: %s", id)
+		}
+	}
+	return tx.Commit()
 }
 
 // TouchAppRuntime 更新运行态字段（启动时间/URL/状态）。

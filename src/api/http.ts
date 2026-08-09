@@ -84,6 +84,8 @@ export const api = {
     req<AppView>('/api/apps', { method: 'POST', body: JSON.stringify(body) }),
   updateApp: (id: string, body: Record<string, unknown>) =>
     req<AppView>(`/api/apps/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  reorderApps: (order: string[]) =>
+    req<{ updated: number }>('/api/apps/reorder', { method: 'PATCH', body: JSON.stringify({ order }) }),
   deleteApp: (id: string) => req<{ deleted: boolean }>(`/api/apps/${id}`, { method: 'DELETE' }),
 
   // 操作

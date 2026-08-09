@@ -201,7 +201,7 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 
 	// 用 ConPTY 启动（提供完整伪控制台，让 timeout/pause/Ctrl+C 等正常工作）。
 	// ConPTY 不区分 stdout/stderr，统一走 OnStdout（logbus 会按内容推断级别）。
-	collector.Info("[启动] 正在创建进程（Session0 ConPTY）...")
+	collector.Info("[启动] 正在创建进程（当前用户 ConPTY，无需管理员权限）...")
 	handle, err := l.startProcess(runCtx, &proc.PreparedCommand{Cmd: cmd, Args: args, Cwd: cwd, Env: env},
 		collector.OnStdout)
 	if err != nil {

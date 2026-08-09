@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useAppsStore } from '@/stores/apps'
 import { useGroupsStore } from '@/stores/groups'
@@ -15,6 +15,7 @@ import { api } from '@/api/http'
 import {
   hideMainWindow,
   isTauri as isTauriShell,
+  onFileDragDrop,
   onTauriEvent,
   quitApp,
   showMainWindow,
@@ -34,6 +35,7 @@ const logAppId = ref<string | null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pathInput = ref('')
+let unlistenFileDragDrop: (() => void) | null = null
 
 // 启动/重启时脚本风险变化需确认：记下待执行的 op + appId + 最新候选。
 // 与导入用的 candidate 互斥（不会同时出现，但语义独立，避免互相覆盖）。
@@ -56,8 +58,19 @@ const appsInGroup = computed(() => {
 })
 
 function onDrop(paths: string[]) {
-  if (paths.length === 0) return
-  void importScript(paths[0])
+  const scripts = paths.filter((path) => /\.(bat|cmd|ps1)$/i.test(path))
+  if (scripts.length === 0) {
+    showToast('请拖入 .bat、.cmd 或 .ps1 启动脚本', 3500, 'warn')
+    return
+  }
+  if (importing.value || candidate.value) {
+    showToast('请先完成当前脚本的导入确认', 3500, 'warn')
+    return
+  }
+  if (scripts.length > 1) {
+    showToast('一次导入一个脚本，已读取第一个文件', 3000, 'info')
+  }
+  void importScript(scripts[0])
 }
 
 // 浏览器文件选择：拿不到完整路径，只能用文件名回填到输入框，由用户补全目录。
@@ -82,6 +95,7 @@ function onFileChange(e: Event) {
 
 function onContentDrop(e: DragEvent) {
   dragOver.value = false
+  if (e.dataTransfer?.types.includes('application/x-projects-start-manager-card')) return
   const dt = e.dataTransfer
   if (dt?.files?.length) {
     const path = (dt.files[0] as any).path as string | undefined
@@ -92,6 +106,11 @@ function onContentDrop(e: DragEvent) {
       pathInputHint.value = '浏览器无法获取拖入文件的路径，请点「浏览」选择，或直接粘贴路径'
     }
   }
+}
+
+function onContentDragOver(e: DragEvent) {
+  if (e.dataTransfer?.types.includes('application/x-projects-start-manager-card')) return
+  dragOver.value = true
 }
 
 const pathInputHint = ref('')
@@ -133,6 +152,14 @@ async function confirmCreate() {
     candidate.value = null
   } catch (e: any) {
     showToast('创建失败：' + (e?.message || e), 5000, 'error')
+  }
+}
+
+async function handleReorder(order: string[]) {
+  try {
+    await apps.reorderCards(order)
+  } catch (e: any) {
+    showToast('保存卡片顺序失败：' + (e?.message || e), 5000, 'error')
   }
 }
 
@@ -292,6 +319,16 @@ onMounted(async () => {
   // 监听 Tauri 壳事件：点 X 关闭、托盘右键退出
   void onTauriEvent('close-requested', onCloseRequested)
   void onTauriEvent('tray-quit-requested', onTrayQuitRequested)
+  unlistenFileDragDrop = await onFileDragDrop((event) => {
+    if (event.type === 'enter' || event.type === 'over') {
+      dragOver.value = true
+    } else if (event.type === 'leave') {
+      dragOver.value = false
+    } else if (event.type === 'drop') {
+      dragOver.value = false
+      onDrop(event.paths)
+    }
+  })
   // 托盘退出兜底：Rust 直接向 WebView 注入普通 DOM 事件，避免 Tauri 事件监听未注册时无响应。
   window.addEventListener('launcher-tray-quit-requested', () => {
     void onTrayQuitRequested()
@@ -315,6 +352,11 @@ onMounted(async () => {
       await Promise.all([apps.load(), groups.load()])
     }
   }, 500)
+})
+
+onUnmounted(() => {
+  unlistenFileDragDrop?.()
+  unlistenFileDragDrop = null
 })
 </script>
 
@@ -371,7 +413,7 @@ onMounted(async () => {
       <section
         class="content"
         :class="{ dragover: dragOver }"
-        @dragover.prevent="dragOver = true"
+        @dragover.prevent="onContentDragOver"
         @dragleave.prevent="dragOver = false"
         @drop.prevent="onContentDrop"
       >
@@ -390,6 +432,7 @@ onMounted(async () => {
           @set-role="(appId, serviceId, role) => apps.setServiceRole(appId, serviceId, role)"
           @reidentify="(appId, serviceId) => apps.reidentifyService(appId, serviceId)"
           @set-color="(id, color) => apps.setCardColor(id, color)"
+          @reorder="handleReorder"
           @import="importScript"
         />
       </section>

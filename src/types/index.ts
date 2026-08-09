@@ -98,6 +98,7 @@ export interface CreateAppBody {
   healthUrl: string
   scriptHash: string
   cardColor: string
+  sortOrder: number
 }
 
 /** 分组 */

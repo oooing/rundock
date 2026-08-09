@@ -97,6 +97,30 @@ func (s *Server) handleApps(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// PATCH /api/apps/reorder { order: [appId...] } -> 原子更新卡片顺序。
+func (s *Server) handleAppsReorder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Order []string `json:"order"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if len(body.Order) == 0 {
+		writeError(w, http.StatusBadRequest, "order required")
+		return
+	}
+	if err := s.Store.ReorderApps(body.Order); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"updated": len(body.Order)})
+}
+
 // /api/apps/{id} 子路由：GET/PATCH/DELETE + start/stop/restart/open-url/open-dir/logs。
 func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 	id, rest := pathTail("/api/apps/", r.URL.Path)

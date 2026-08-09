@@ -26,12 +26,11 @@ type PreparedCommand struct {
 
 // Handle 代表一个被托管的进程句柄。
 type Handle struct {
-	cmd        *exec.Cmd
-	rootPID    int
-	jobCloser  func() error // Windows: 关闭 Job Object 句柄；其他平台 nil
-	cancel     context.CancelFunc
-	pty        interface{} // Windows ConPTY 会话（*conPTYSession），非 Windows 或普通模式为 nil
-	remoteTree bool        // 进程树由外部 runner Service 管理
+	cmd       *exec.Cmd
+	rootPID   int
+	jobCloser func() error // Windows: 关闭 Job Object 句柄；其他平台 nil
+	cancel    context.CancelFunc
+	pty       interface{} // Windows ConPTY 会话（*conPTYSession），非 Windows 或普通模式为 nil
 }
 
 // IsConPTY 是否运行在 ConPTY 模式下。
@@ -115,9 +114,6 @@ func (h *Handle) Terminate() error {
 		// ConPTY 模式：先 TerminateProcess，再靠 taskkill 兜底清子进程
 		if err := terminateConPTY(h.pty); err != nil {
 			return err
-		}
-		if h.remoteTree {
-			return nil
 		}
 		return terminateTree(h)
 	}

@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { onBeforeUnmount, ref } from 'vue'
 import AppCard from '@/components/AppCard.vue'
 import type { AppView, ServiceRole } from '@/types'
 
-defineProps<{
+const props = defineProps<{
   apps: AppView[]
   loading: boolean
   ready: boolean
@@ -21,7 +22,66 @@ const emit = defineEmits<{
   (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
   (e: 'reidentify', appId: string, serviceId: string): void
   (e: 'set-color', id: string, color: string): void
+  (e: 'reorder', order: string[]): void
 }>()
+
+const draggingId = ref<string | null>(null)
+const dragOverId = ref<string | null>(null)
+
+function onCardDragStart(event: PointerEvent, id: string) {
+  if (event.button !== 0) return
+  draggingId.value = id
+  dragOverId.value = null
+  document.body.classList.add('card-reordering')
+  window.addEventListener('pointermove', onCardPointerMove, { passive: false })
+  window.addEventListener('pointerup', onCardPointerUp)
+  window.addEventListener('pointercancel', resetCardDrag)
+}
+
+function cardIdAtPoint(x: number, y: number) {
+  const slot = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-card-id]')
+  return slot?.dataset.cardId || null
+}
+
+function onCardPointerMove(event: PointerEvent) {
+  if (!draggingId.value) return
+  event.preventDefault()
+  const targetId = cardIdAtPoint(event.clientX, event.clientY)
+  dragOverId.value = targetId && targetId !== draggingId.value ? targetId : null
+}
+
+function onCardPointerUp(event: PointerEvent) {
+  const sourceId = draggingId.value
+  const targetId = cardIdAtPoint(event.clientX, event.clientY)
+  if (!sourceId || !targetId || sourceId === targetId) {
+    resetCardDrag()
+    return
+  }
+  const order = props.apps.map((a) => a.id)
+  const from = order.indexOf(sourceId)
+  const to = order.indexOf(targetId)
+  if (from < 0 || to < 0) {
+    resetCardDrag()
+    return
+  }
+  const [moved] = order.splice(from, 1)
+  const targetAfterRemoval = order.indexOf(targetId)
+  const insertAt = from < to ? targetAfterRemoval + 1 : targetAfterRemoval
+  order.splice(insertAt, 0, moved)
+  emit('reorder', order)
+  resetCardDrag()
+}
+
+function resetCardDrag() {
+  draggingId.value = null
+  dragOverId.value = null
+  document.body.classList.remove('card-reordering')
+  window.removeEventListener('pointermove', onCardPointerMove)
+  window.removeEventListener('pointerup', onCardPointerUp)
+  window.removeEventListener('pointercancel', resetCardDrag)
+}
+
+onBeforeUnmount(resetCardDrag)
 </script>
 
 <template>
@@ -78,22 +138,29 @@ const emit = defineEmits<{
 
     <!-- 卡片网格 -->
     <div v-else class="grid">
-      <AppCard
+      <div
         v-for="a in apps"
         :key="a.id"
-        :app="a"
-        @start="emit('start', $event)"
-        @stop="emit('stop', $event)"
-        @restart="emit('restart', $event)"
-        @log="emit('log', $event)"
-        @open-url="(id, url) => emit('open-url', id, url)"
-        @open-dir="emit('open-dir', $event)"
-        @delete="emit('delete', $event)"
-        @rename="(id, name) => emit('rename', id, name)"
-        @set-role="(appId, serviceId, role) => emit('set-role', appId, serviceId, role)"
-        @reidentify="(appId, serviceId) => emit('reidentify', appId, serviceId)"
-        @set-color="(id, color) => emit('set-color', id, color)"
-      />
+        class="card-slot"
+        :data-card-id="a.id"
+        :class="{ dragging: draggingId === a.id, 'drag-over': dragOverId === a.id }"
+      >
+        <AppCard
+          :app="a"
+          @start="emit('start', $event)"
+          @stop="emit('stop', $event)"
+          @restart="emit('restart', $event)"
+          @log="emit('log', $event)"
+          @open-url="(id, url) => emit('open-url', id, url)"
+          @open-dir="emit('open-dir', $event)"
+          @delete="emit('delete', $event)"
+          @rename="(id, name) => emit('rename', id, name)"
+          @set-role="(appId, serviceId, role) => emit('set-role', appId, serviceId, role)"
+          @reidentify="(appId, serviceId) => emit('reidentify', appId, serviceId)"
+          @set-color="(id, color) => emit('set-color', id, color)"
+          @drag-start="onCardDragStart"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -107,6 +174,27 @@ const emit = defineEmits<{
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
+}
+.card-slot {
+  min-width: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.card-slot :deep(.card) {
+  height: 100%;
+}
+.card-slot.dragging {
+  opacity: 0.42;
+}
+.card-slot.drag-over {
+  transform: translateY(-4px);
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius);
+}
+:global(body.card-reordering),
+:global(body.card-reordering *) {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 .empty {
   display: flex;

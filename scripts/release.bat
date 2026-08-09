@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "CODE_DIR=%~dp0.."
 set "BIN_DIR=%CODE_DIR%\src-tauri\binaries"
@@ -7,7 +7,9 @@ set "TRIPLE=x86_64-pc-windows-msvc"
 set "DIST_DIR=%CODE_DIR%\dist"
 set "NSIS_DIR=%CODE_DIR%\src-tauri\target\release\bundle\nsis"
 set "MSI_DIR=%CODE_DIR%\src-tauri\target\release\bundle\msi"
-set "GOCACHE=%CODE_DIR%\.gocache"
+set "GOCACHE=%TEMP%\launcher-go-cache"
+set "TAURI_TARGET_DIR=%CODE_DIR%\src-tauri\target"
+set "TAURI_TARGET_ROOT_FILE=%TAURI_TARGET_DIR%\.launcher-build-root"
 
 echo ==================================================
 echo   Launcher release build
@@ -53,6 +55,26 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Cargo build outputs embed absolute paths. A copied project needs a clean Tauri cache once.
+set "CLEAN_TAURI_TARGET=0"
+if exist "%TAURI_TARGET_DIR%" (
+    if not exist "%TAURI_TARGET_ROOT_FILE%" (
+        set "CLEAN_TAURI_TARGET=1"
+    ) else (
+        set /p "LAST_TAURI_BUILD_ROOT="<"%TAURI_TARGET_ROOT_FILE%"
+        if /i not "!LAST_TAURI_BUILD_ROOT!"=="%CODE_DIR%" set "CLEAN_TAURI_TARGET=1"
+    )
+)
+if "!CLEAN_TAURI_TARGET!"=="1" (
+    echo [INFO] Tauri target belongs to a different workspace. Cleaning cache...
+    cargo clean --manifest-path "%CODE_DIR%\src-tauri\Cargo.toml"
+    if errorlevel 1 (
+        echo [ERROR] Cannot clean stale Tauri cache.
+        pause
+        exit /b 1
+    )
+)
+
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
 echo       OK
@@ -94,6 +116,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+> "%TAURI_TARGET_ROOT_FILE%" echo %CODE_DIR%
 echo       OK
 echo.
 

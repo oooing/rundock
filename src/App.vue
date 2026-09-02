@@ -371,8 +371,7 @@ onUnmounted(() => {
     <main class="main">
       <header class="topbar">
         <div class="title">
-          <span class="logo">⚡</span>
-          <h1>启动平台</h1>
+          <h1>项目启动器</h1>
           <button class="ghost icon help-btn" title="使用说明（快捷键 ?）" @click="showHelp = true">?</button>
           <span class="conn" :class="{ ok: conn.sidecarReady }">
             {{ conn.sidecarReady ? '已连接' : '等待 sidecar…' }}

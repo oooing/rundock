@@ -1,6 +1,6 @@
 # scripts 说明
 
-本目录下的脚本用于启动 / 构建 Launcher。**双击即可运行**（在资源管理器里双击 `.bat` 文件）。
+本目录下的脚本用于启动 / 构建 RunDock。**双击即可运行**（在资源管理器里双击 `.bat` 文件）。
 
 ---
 
@@ -75,14 +75,14 @@ cargo tauri dev
 
 **产物**（在 `code\dist\`）：
 ```
-Launcher_2.0.0_x64-setup.exe   ← NSIS 安装包（推荐，小）
-Launcher_2.0.0_x64_en-US.msi   ← MSI 安装包（企业部署）
+RunDock_2.0.0_x64-setup.exe   ← NSIS 安装包（推荐，小）
+RunDock_2.0.0_x64_en-US.msi   ← MSI 安装包（企业部署）
 SHA256SUMS.txt                  ← 安装包完整性校验值
 ```
 
 **发版前改版本号**：双击 `scripts\release-tool.hta`，填写目标版本并点击“写入版本并打包”。工具会自动同步所有版本文件；无需手工逐个修改。
 
-**发给别人**：把 `dist\Launcher_x.x.x_x64-setup.exe` 发给对方，双击安装即可。对方只需 Windows 10/11，不需要任何开发环境。
+**发给别人**：把 `dist\RunDock_x.x.x_x64-setup.exe` 发给对方，双击安装即可。对方只需 Windows 10/11，不需要任何开发环境。
 
 GitHub 自动发布使用同一个 `release-build.ps1`：推送严格的 annotated `vX.Y.Z` Tag 后，Actions 会校验 Tag 中的隐藏发布计划。选择 Windows 时自动打包并创建 GitHub Release；明确选择“仅提交代码”时只发布源码。Actions 的手动运行入口永远是 dry-run，不会创建真实 Release。
 
@@ -94,7 +94,7 @@ GitHub 自动发布使用同一个 `release-build.ps1`：推送严格的 annotat
 - `release-build.ps1`：真实生成 EXE、MSI 和校验和，不创建 GitHub Release。后端测试强制重新执行，避免沿用旧结果。
 - GitHub Actions 手动运行：选择主分支 `master`，保持 `source_only=false`，仅保存 7 天测试安装包；公开发布仍只由正式 Tag 触发。
 
-Launcher 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-push`；不要填写本地 `build/package` 命令。构建和打包步骤由 GitHub 工作流执行。
+RunDock 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-push`；不要填写本地 `build/package` 命令。构建和打包步骤由 GitHub 工作流执行。
 
 若 MSI 报“无法访问 Windows Installer 服务”，先检查打包环境的服务权限。受限沙箱可能阻止 MSI 校验；不要通过跳过安装包校验来掩盖该问题。
 

@@ -1,7 +1,7 @@
 [package]
 name = "launcher-platform"
-version = "2.0.2"
-description = "Windows AI 启动平台 — 拖入 start.bat 即可托管"
+version = "2.0.3"
+description = "RunDock 启动坞 — AI 小工具与开发项目的 Windows 启动器"
 authors = ["Launcher"]
 edition = "2021"
 rust-version = "1.77.2"

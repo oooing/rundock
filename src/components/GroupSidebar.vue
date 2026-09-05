@@ -36,7 +36,7 @@ async function newGroup() {
   <aside class="sidebar">
     <div class="brand">
       <span class="logo">⚡</span>
-      <span class="name">.bat启动器管理</span>
+      <span class="name">RunDock 启动坞</span>
     </div>
 
     <nav class="nav">

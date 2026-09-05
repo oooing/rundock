@@ -8,7 +8,7 @@ if not exist "%BUILD_SCRIPT%" (
 )
 
 echo ==================================================
-echo   Launcher release build
+echo   RunDock release build
 echo ==================================================
 echo.
 

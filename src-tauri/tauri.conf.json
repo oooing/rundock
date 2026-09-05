@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Launcher",
-  "version": "2.0.2",
+  "productName": "RunDock",
+  "version": "2.0.3",
   "identifier": "com.launcher.platform",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "启动平台",
+        "title": "RunDock 启动坞",
         "width": 1100,
         "height": 720,
         "minWidth": 800,
@@ -35,6 +35,8 @@
     ],
     "externalBin": ["binaries/launcher-sidecar"],
     "windows": {
+      "wix": { "upgradeCode": "3dab43c3-d2d7-5eba-adb3-07bfe05728bb" },
+      "nsis": { "installerHooks": "windows/installer-hooks.nsh" },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }

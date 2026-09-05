@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>Launcher Release Tool</title>
+  <title>RunDock Release Tool</title>
   <hta:application
     id="ReleaseTool"
-    applicationname="Launcher Release Tool"
+    applicationname="RunDock Release Tool"
     border="thin"
     caption="yes"
     maximizebutton="no"
@@ -382,8 +382,8 @@
     }
 
     function checkOutputs(version) {
-      var exe = fso.BuildPath(paths.dist, "Launcher_" + version + "_x64-setup.exe");
-      var msi = fso.BuildPath(paths.dist, "Launcher_" + version + "_x64_en-US.msi");
+      var exe = fso.BuildPath(paths.dist, "RunDock_" + version + "_x64-setup.exe");
+      var msi = fso.BuildPath(paths.dist, "RunDock_" + version + "_x64_en-US.msi");
       if (fso.FileExists(exe)) {
         log("EXE：" + exe, "ok");
       } else {
@@ -432,7 +432,7 @@
 </head>
 <body onload="init()">
   <div class="wrap">
-    <h1>Launcher 打包工具</h1>
+    <h1>RunDock 打包工具</h1>
 
     <div class="card">
       <div class="row">

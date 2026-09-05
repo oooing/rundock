@@ -3,8 +3,8 @@
   "versionGroups": [
     {
       "id": "product",
-      "name": "Launcher 版本",
-      "currentVersion": "2.0.2",
+      "name": "RunDock 版本",
+      "currentVersion": "2.0.3",
       "versionFiles": [
         {
           "path": "package.json",
@@ -51,8 +51,8 @@
         "publish": "tag-push"
       },
       "artifacts": [
-        "Launcher_X.Y.Z_x64-setup.exe",
-        "Launcher_X.Y.Z_x64_en-US.msi",
+        "RunDock_X.Y.Z_x64-setup.exe",
+        "RunDock_X.Y.Z_x64_en-US.msi",
         "SHA256SUMS.txt"
       ]
     }

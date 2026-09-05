@@ -48,3 +48,10 @@ Mode: built-in image editing. Input: `hero.zh-CN.png`.
 ```text
 Use case: text-localization. Edit target: the supplied wide Launcher README hero. Change ONLY the Chinese text to English, preserving the exact dimensions, background, lighting, orange lightning logo, LAUNCHER label, layout, 3D terminal/play/tag tiles and blue connectors. Headline at left must read exactly two lines: "Every project." and "Under control." in large elegant ivory sans-serif. Subtitle must read exactly "Launch · Logs · Git releases" in restrained readable slate. Keep generous margins, left-text/right-art composition, dark navy premium visual identity. No other text or changes.
 ```
+# RunDock brand refresh — v2.0.3
+
+Current README heroes: `hero-rundock.zh-CN.webp` and `hero-rundock.en.webp`, with full-resolution PNG siblings. Created with the built-in imagegen tool. The original Launcher banners are retained as source references.
+
+Edit prompts: replace only the upper-left LAUNCHER wordmark with `RunDock 启动坞` (Chinese) or `RunDock` (English); preserve the lightning icon, navy background, terminal/play/tag tiles, blue connectors, existing headline and subtitle, and wide 2.5:1 composition.
+
+Dashboard and release screenshots were recaptured from the actual RunDock UI with isolated demo data; no real project data or release request was used. WebP heroes are 1440px wide at quality 86; UI screenshots use lossless WebP.

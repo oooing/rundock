@@ -265,7 +265,7 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().expect("no window icon"))
-                .tooltip("启动平台")
+                .tooltip("RunDock 启动坞")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {

@@ -1,9 +1,9 @@
 {
   "name": "launcher-platform",
   "private": true,
-  "version": "2.0.2",
+  "version": "2.0.3",
   "type": "module",
-  "description": "Windows AI 启动平台 — 拖入 start.bat 即可托管、自动识别 URL、无窗口管理",
+  "description": "RunDock 启动坞 — AI 小工具与开发项目的 Windows 启动器",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

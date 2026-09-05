@@ -195,8 +195,8 @@ try {
     Invoke-Npm @('run', 'tauri', '--', 'build', '--ci', '--bundles', 'nsis,msi', '--', '--locked')
 
     $expected = @(
-        (Join-Path $codeDirectory "src-tauri/target/release/bundle/nsis/Launcher_${tagVersion}_x64-setup.exe"),
-        (Join-Path $codeDirectory "src-tauri/target/release/bundle/msi/Launcher_${tagVersion}_x64_en-US.msi")
+        (Join-Path $codeDirectory "src-tauri/target/release/bundle/nsis/RunDock_${tagVersion}_x64-setup.exe"),
+        (Join-Path $codeDirectory "src-tauri/target/release/bundle/msi/RunDock_${tagVersion}_x64_en-US.msi")
     )
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

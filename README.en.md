@@ -1,15 +1,17 @@
 <p align="center"><a href="./README.md">简体中文</a> · <strong>English</strong></p>
 
+<h1 align="center">RunDock</h1>
+
 <p align="center">
-  <a href="./docs/media/hero.en.png"><img src="./docs/media/hero.en.webp" alt="Launcher — Every project. Under control. Launch · Logs · Git releases" width="720" /></a>
+  <a href="./docs/media/hero-rundock.en.png"><img src="./docs/media/hero-rundock.en.webp" alt="RunDock — Every project. Under control. Launch · Logs · Git releases" width="720" /></a>
 </p>
 
 <p align="center"><strong>A Windows launcher that makes AI-built tools and dev projects easier to manage.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/oooing/projects-start-manager/releases"><img src="./docs/media/download.en.svg" alt="Download for Windows" width="236" height="46" /></a>
+  <a href="https://github.com/oooing/rundock/releases"><img src="./docs/media/download.en.svg" alt="Download for Windows" width="236" height="46" /></a>
 </p>
-<p align="center"><a href="./docs/guide.en.md">User guide</a> · <a href="https://github.com/oooing/projects-start-manager/actions/workflows/release.yml">Build status</a> · <a href="https://github.com/oooing/projects-start-manager/issues">Feedback</a></p>
+<p align="center"><a href="./docs/guide.en.md">User guide</a> · <a href="https://github.com/oooing/rundock/actions/workflows/release.yml">Build status</a> · <a href="https://github.com/oooing/rundock/issues">Feedback</a></p>
 
 <br />
 
@@ -22,7 +24,7 @@ AI makes building tools easier. But many still start with `start.bat` or `run.ba
 - **Multiple projects to maintain**: organize them into groups, start or restart with a click, and manage status, service URLs, and Git releases in one place.
 
 <p align="center">
-  <a href="./docs/media/dashboard.png"><img src="./docs/media/dashboard.webp" alt="Actual Launcher dashboard showing six demo projects, grouped cards, process status, ports, and launch controls" width="720" /></a>
+  <a href="./docs/media/dashboard.png"><img src="./docs/media/dashboard.webp" alt="Actual RunDock dashboard showing six demo projects, grouped cards, process status, ports, and launch controls" width="720" /></a>
 </p>
 <p align="center"><sub>Actual interface · Demo data · UI shown in Chinese · Click to enlarge</sub></p>
 
@@ -37,17 +39,19 @@ Mix configured targets or just commit code. **Tags are optional. Version groups 
 </p>
 <p align="center"><sub>Actual interface · Demo configuration; each project needs its own build and deployment setup.</sub></p>
 
-Launcher's Windows installers are built in the cloud with **GitHub Actions**. After pushing, follow the progress link to check the build and release.
+RunDock's Windows installers are built in the cloud with **GitHub Actions**. After pushing, follow the progress link to check the build and release.
 
 <br />
 
 ## Three steps to get going
 
-**① Install Launcher　→　② Drop in a script　→　③ Hit Start**
+**① Install RunDock　→　② Drop in a script　→　③ Hit Start**
 
 Works with `.bat` · `.cmd` · `.ps1`. Keep the startup scripts you already use.
 
 > Windows 10/11 x64 · Installers are unsigned and may trigger SmartScreen warnings. Verify the download source and checksums.
+
+> Upgrading from Launcher: MSI retains the upgrade identity. EXE users should uninstall the old Launcher while keeping application data, then install RunDock. Project data paths are unchanged.
 
 <details>
 <summary>Scope and data safety</summary>
@@ -62,5 +66,5 @@ Works with `.bat` · `.cmd` · `.ps1`. Keep the startup scripts you already use.
 ---
 
 <p align="center"><strong>More time for the project itself.</strong></p>
-<p align="center"><a href="https://github.com/oooing/projects-start-manager/releases">Get Launcher</a> · <a href="./docs/guide.en.md#local-development">Build from source</a></p>
+<p align="center"><a href="https://github.com/oooing/rundock/releases">Get RunDock</a> · <a href="./docs/guide.en.md#local-development">Build from source</a></p>
 <p align="center"><sub>Tauri 2 · Vue 3 · Go · SQLite</sub></p>

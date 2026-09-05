@@ -175,7 +175,7 @@ test('production workflow keeps dry-runs outside the publish job', () => {
   assert.doesNotMatch(workflow, /git fetch/)
 })
 
-test('Launcher cloud target uses the action accepted by the publisher', () => {
+test('RunDock cloud target uses the action accepted by the publisher', () => {
   const config = JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8'))
   assert.equal(config.automation.provider, 'github-actions')
   assert.equal(config.automation.trigger, 'tag')
@@ -198,6 +198,19 @@ test('release configuration and workflow follow the migrated main branch', () =>
   assert.doesNotMatch(workflow, /refs\/remotes\/origin\/v2|\$env:REF_NAME -ne 'v2'/)
 })
 
+test('RunDock branding preserves application and MSI upgrade identities', () => {
+  const config = JSON.parse(readFileSync(path.join(root, 'src-tauri/tauri.conf.json'), 'utf8'))
+  assert.equal(config.productName, 'RunDock')
+  assert.equal(config.identifier, 'com.launcher.platform')
+  assert.equal(config.bundle.windows.wix.upgradeCode, '3dab43c3-d2d7-5eba-adb3-07bfe05728bb')
+  assert.equal(config.app.windows[0].title, 'RunDock 启动坞')
+  const hooks = readFileSync(path.join(root, 'src-tauri', config.bundle.windows.nsis.installerHooks), 'utf8')
+  assert.match(hooks, /Uninstall\\Launcher/)
+  assert.match(hooks, /Abort/)
+  const release = JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8'))
+  assert.deepEqual(release.targets[0].artifacts, ['RunDock_X.Y.Z_x64-setup.exe', 'RunDock_X.Y.Z_x64_en-US.msi', 'SHA256SUMS.txt'])
+})
+
 function publishFixture(name, existing = null) {
   const dir = fixture(name)
   tag(dir, plan())
@@ -205,7 +218,7 @@ function publishFixture(name, existing = null) {
   writeFileSync(notes, '## 功能\n- 发布验收。\n')
   const assets = path.join(dir, 'assets')
   mkdirSync(assets)
-  for (const name of ['Launcher_2.0.0_x64-setup.exe', 'Launcher_2.0.0_x64_en-US.msi', 'SHA256SUMS.txt']) {
+  for (const name of ['RunDock_2.0.0_x64-setup.exe', 'RunDock_2.0.0_x64_en-US.msi', 'SHA256SUMS.txt']) {
     writeFileSync(path.join(assets, name), 'isolated test artifact')
   }
   const state = path.join(dir, 'github-mock.json')

@@ -109,7 +109,7 @@ if (-not $SourceOnly) {
         throw "找不到 Release 产物目录：$AssetDirectory"
     }
     $version = $TagName.Substring(1)
-    foreach ($name in @("Launcher_${version}_x64-setup.exe", "Launcher_${version}_x64_en-US.msi", 'SHA256SUMS.txt')) {
+    foreach ($name in @("RunDock_${version}_x64-setup.exe", "RunDock_${version}_x64_en-US.msi", 'SHA256SUMS.txt')) {
         $path = Join-Path $AssetDirectory $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "缺少 Release 产物：$name"
@@ -137,7 +137,7 @@ if ($viewExitCode -eq 0) {
     throw "无法查询 GitHub Release：$existingText"
 }
 
-$title = ".bat启动器管理 $TagName"
+$title = "RunDock 启动坞 $TagName"
 if ($null -eq $release) {
     Invoke-Gh @('release', 'create', $TagName, '--draft', '--verify-tag', '--title', $title, '--notes-file', $NotesFile)
     $release = (Invoke-Gh @('release', 'view', $TagName, '--json', 'isDraft,url,assets') -Capture | ConvertFrom-Json)

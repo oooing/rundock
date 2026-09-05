@@ -214,7 +214,7 @@ if ($DryRun) {
         $kind = ([string]$target.kind).ToLowerInvariant()
         $isWindowsTarget = $id -eq 'windows' -or $id -match '(^|[-_/])windows$'
         if (-not ($isWindowsTarget -and $kind -eq 'desktop')) {
-            Fail-Plan "Launcher 自动发布仅支持 Windows 目标；不支持：$($target.id)"
+            Fail-Plan "RunDock 自动发布仅支持 Windows 目标；不支持：$($target.id)"
         }
         if ($targetIds.ContainsKey($id)) {
             Fail-Plan "发布目标重复：$($target.id)"

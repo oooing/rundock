@@ -127,6 +127,16 @@ test('Launcher cloud target uses the action accepted by the publisher', () => {
   }
 })
 
+test('release configuration and workflow follow the migrated main branch', () => {
+  const config = JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8'))
+  const workflow = readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8')
+  assert.equal(config.automation.releaseBranch, 'master')
+  assert.match(workflow, /git show-ref --verify --quiet refs\/remotes\/origin\/master/)
+  assert.match(workflow, /git merge-base --is-ancestor \$tagCommit refs\/remotes\/origin\/master/)
+  assert.match(workflow, /\$env:REF_NAME -ne 'master'/)
+  assert.doesNotMatch(workflow, /refs\/remotes\/origin\/v2|\$env:REF_NAME -ne 'v2'/)
+})
+
 function publishFixture(name, existing = null) {
   const dir = fixture(name)
   tag(dir, plan())

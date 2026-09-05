@@ -92,7 +92,7 @@ GitHub 自动发布使用同一个 `release-build.ps1`：推送严格的 annotat
 
 - `npm run test:release`：使用临时 Git 仓库和模拟 GitHub，验证 Tag、中文说明、云端目标配置、草稿上传和重试保护；需要 Git、Node.js 和 PowerShell 7（`pwsh`）。不创建正式 Tag，不访问 GitHub 账号。
 - `release-build.ps1`：真实生成 EXE、MSI 和校验和，不创建 GitHub Release。后端测试强制重新执行，避免沿用旧结果。
-- GitHub Actions 手动运行：选择 `v2`，保持 `source_only=false`，仅保存 7 天测试安装包；公开发布仍只由正式 Tag 触发。
+- GitHub Actions 手动运行：选择主分支 `master`，保持 `source_only=false`，仅保存 7 天测试安装包；公开发布仍只由正式 Tag 触发。
 
 Launcher 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-push`；不要填写本地 `build/package` 命令。构建和打包步骤由 GitHub 工作流执行。
 

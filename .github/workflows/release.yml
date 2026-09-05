@@ -56,19 +56,19 @@ jobs:
             $tagName = $env:REF_NAME
             # checkout with fetch-depth: 0 already fetched all branches and tags.
             # Do not fetch again: credentials are deliberately not persisted.
-            git show-ref --verify --quiet refs/remotes/origin/v2
-            if ($LASTEXITCODE -ne 0) { throw 'The checkout does not contain origin/v2.' }
+            git show-ref --verify --quiet refs/remotes/origin/master
+            if ($LASTEXITCODE -ne 0) { throw 'The checkout does not contain origin/master.' }
             $tagCommit = (git rev-list -n 1 "refs/tags/$tagName").Trim()
             if (-not $tagCommit) { throw "Unable to resolve tag $tagName." }
             $checkedOutCommit = (git rev-parse HEAD).Trim()
             if ($LASTEXITCODE -ne 0 -or $checkedOutCommit -ne $tagCommit) {
               throw "Checked-out commit does not match tag $tagName."
             }
-            git merge-base --is-ancestor $tagCommit refs/remotes/origin/v2
-            if ($LASTEXITCODE -ne 0) { throw "Tag $tagName is not on the v2 branch." }
+            git merge-base --is-ancestor $tagCommit refs/remotes/origin/master
+            if ($LASTEXITCODE -ne 0) { throw "Tag $tagName is not on the master branch." }
             ./scripts/release-plan.ps1 -TagName $tagName -OutputDirectory release-plan -ValidateLauncherVersion
           } else {
-            if ($env:REF_NAME -ne 'v2') { throw 'A dry-run must be started from the v2 branch.' }
+            if ($env:REF_NAME -ne 'master') { throw 'A dry-run must be started from the master branch.' }
             $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
             $sourceOnly = $env:DRY_RUN_SOURCE_ONLY -eq 'true'
             ./scripts/release-plan.ps1 -TagName "v$version" -OutputDirectory release-plan -DryRun -SourceOnly:$sourceOnly -ValidateLauncherVersion

@@ -66,7 +66,7 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 	if err != nil || root == "" {
 		return nil, &Error{Code: "not_repository", Message: "项目目录不在 Git 仓库中"}
 	}
-	root, _ = filepath.Abs(root)
+	root = canonicalRepositoryPath(root)
 	pf := &Preflight{
 		RepoRoot: filepath.Clean(root), Profile: profile, RemoteName: profile.RemoteName,
 		CurrentVersions: map[string]string{}, LatestGroupTags: map[string]string{}, SuggestedVersions: map[string]string{},
@@ -1008,7 +1008,7 @@ func postTargetRetryStage(stage string) bool {
 }
 
 func (s *Service) reserve(repo string) bool {
-	key := strings.ToLower(filepath.Clean(repo))
+	key := gitPathKey(canonicalRepositoryPath(repo))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active[key] {
@@ -1019,7 +1019,7 @@ func (s *Service) reserve(repo string) bool {
 }
 
 func (s *Service) release(repo string) {
-	key := strings.ToLower(filepath.Clean(repo))
+	key := gitPathKey(canonicalRepositoryPath(repo))
 	s.mu.Lock()
 	delete(s.active, key)
 	s.mu.Unlock()

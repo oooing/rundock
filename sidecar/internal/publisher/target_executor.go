@@ -1,6 +1,7 @@
 package publisher
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -320,9 +321,19 @@ func (p *executionPlan) versionFiles() []releaseconfig.VersionFile {
 }
 
 func samePath(a, b string) bool {
-	a, _ = filepath.Abs(a)
-	b, _ = filepath.Abs(b)
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	return gitPathKey(canonicalRepositoryPath(a)) == gitPathKey(canonicalRepositoryPath(b))
+}
+
+// Windows Git and Go may spell the same directory using long or 8.3 names.
+// Resolve aliases before repository comparisons and lock lookup.
+func canonicalRepositoryPath(path string) string {
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(path)
 }
 
 func secureProjectPath(root, relativePath string, requireDir bool) (string, error) {
@@ -471,6 +482,9 @@ func updateConfiguredVersionFiles(repo string, files []releaseconfig.VersionFile
 	}
 	for _, write := range pending {
 		path := write.path
+		if bytes.Equal(originals[path], write.after) {
+			continue
+		}
 		info, _ := os.Stat(path)
 		mode := fs.FileMode(0o644)
 		if info != nil {
@@ -634,7 +648,7 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			}
 			_ = s.store.UpdateReleaseRun(run.ID, "running", "target_publish", run.CommitSHA, "", "", false)
 			_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "running", "publish", "", "", true, false)
-			s.log(run.ID, "event", target.Name+"：分支已推送，云端流水线已触发")
+			s.log(run.ID, "event", target.Name+"：代码已推送；云端执行结果尚未确认")
 			if err := s.store.MarkReleaseTargetStepDone(run.ID, target.ID, "publish"); err != nil {
 				return err
 			}

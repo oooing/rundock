@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useAppsStore } from '@/stores/apps'
 import { useGroupsStore } from '@/stores/groups'
@@ -12,6 +12,7 @@ import HelpModal from '@/components/HelpModal.vue'
 import CloseDialog from '@/components/CloseDialog.vue'
 import QuitConfirm from '@/components/QuitConfirm.vue'
 import ReleaseModal from '@/components/ReleaseModal.vue'
+import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { api } from '@/api/http'
 import {
   hideMainWindow,
@@ -33,7 +34,11 @@ const showHelp = ref(false)
 const candidate = ref<ImportCandidate | null>(null)
 const importing = ref(false)
 const logAppId = ref<string | null>(null)
-const releaseAppId = ref<string | null>(null)
+const releaseAppId = ref<string | null>(readReleaseSession()?.appId || null)
+watch(releaseAppId, (appId) => {
+  const saved = readReleaseSession()
+  rememberReleaseSession(appId ? (saved?.appId === appId ? saved : { appId }) : null)
+}, { flush: 'sync' })
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pathInput = ref('')

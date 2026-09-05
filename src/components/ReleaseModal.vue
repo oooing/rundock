@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/http'
+import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import type {
   AppView,
   ReleaseConfig,
@@ -808,6 +809,7 @@ async function load(resumeFailedRun = true) {
     const [historyResult, configResult] = await Promise.allSettled([
       api.listReleases(props.app.id), api.getReleaseConfig(props.app.id),
     ] as const)
+    if (disposed) return
     history.value = historyResult.status === 'fulfilled' ? historyResult.value : []
     if (configResult.status === 'fulfilled') {
       configEndpointAvailable.value = true
@@ -819,9 +821,14 @@ async function load(resumeFailedRun = true) {
     }
     loading.value = false
 
-    const resumable = history.value.find((run) => run.status === 'queued' || run.status === 'running')
+    const saved = readReleaseSession()
+    const savedRun = saved?.appId === props.app.id ? history.value.find((run) =>
+      run.id === saved.runId || (!saved.runId && saved.submittedAt &&
+        Date.parse(run.createdAt.includes('T') ? run.createdAt : run.createdAt.replace(' ', 'T') + 'Z') >= saved.submittedAt - 1000)
+    ) : undefined
+    const resumable = savedRun || history.value.find((run) => run.status === 'queued' || run.status === 'running')
       || (resumeFailedRun ? history.value.find(canResumeFailedRun) : undefined)
-    if (resumable) { activeRun.value = resumable; schedulePoll(0) }
+    if (resumable) showRun(resumable)
 
     applyPreflight(await localPreflight, true)
     profileReady.value = true
@@ -1015,7 +1022,8 @@ async function publish() {
   error.value = ''
   try {
     await api.saveReleaseProfile(props.app.id, profileBody())
-    activeRun.value = await api.createRelease(props.app.id, {
+    rememberReleaseSession({ appId: props.app.id, submittedAt: Date.now() })
+    const run = await api.createRelease(props.app.id, {
       targetVersion: createTag.value ? primaryTargetVersion.value : '',
       versions: createTag.value ? plannedVersions.value.map((version) => ({ versionGroupId: version.versionGroupId, targetVersion: version.targetVersion })) : [],
       createTag: createTag.value, versionMode: versionMode.value,
@@ -1025,10 +1033,26 @@ async function publish() {
       releaseNotesConfirmed: createTag.value,
       externalActionsConfirmed: hasExternalAction.value,
     })
-    logs.value = []
-    schedulePoll(0)
+    if (!disposed) showRun(run)
   } catch (reason) { error.value = messageOf(reason) }
   finally { publishing.value = false }
+}
+
+function showRun(run: ReleaseRun) {
+  if (pollTimer) clearTimeout(pollTimer)
+  activeRun.value = run
+  logs.value = []
+  runTargets.value = []
+  runArtifacts.value = []
+  runAutomation.value = null
+  error.value = ''
+  rememberReleaseSession({ appId: props.app.id, runId: run.id })
+  schedulePoll(0)
+}
+
+function historyStatus(run: ReleaseRun) {
+  if (run.status === 'succeeded') return run.pushRemote ? '已推送' : '本地完成'
+  return run.status === 'failed' ? '失败' : '进行中'
 }
 
 function schedulePoll(delay = 700) {
@@ -1042,7 +1066,7 @@ async function poll() {
   try {
     const lastId = logs.value.length ? logs.value[logs.value.length - 1].id : 0
     const view = await api.getReleaseRun(run.id, lastId)
-    if (disposed) return
+    if (disposed || activeRun.value?.id !== run.id) return
     activeRun.value = view.run
     runTargets.value = view.targets || []
     runArtifacts.value = view.artifacts || []
@@ -1073,6 +1097,8 @@ async function confirmSensitiveAction() {
   else if (action === 'regenerate-notes') await generateReleaseNotesDraft(true, true)
 }
 function startNew() {
+  if (pollTimer) clearTimeout(pollTimer)
+  rememberReleaseSession({ appId: props.app.id })
   confirmAction.value = null
   activeRun.value = null
   logs.value = []
@@ -1351,7 +1377,7 @@ onBeforeUnmount(() => {
             <div v-else-if="invalidChosenTargetIds.length" class="alert warn">请为高级目标选择操作，或改为“仅提交代码”。</div>
             <div v-else-if="!gitOnly && !selectedTargets.length" class="alert warn">请选择发布平台或“仅提交代码”。</div>
           </section>
-          <details v-if="history.length" class="history-panel"><summary>最近发布（{{ history.length }}）</summary><div v-for="run in history" :key="run.id" class="history-row"><code>{{ run.createTag === false ? '无 Tag' : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ run.status }}</span></div></details>
+          <details v-if="history.length" class="history-panel"><summary>最近发布（{{ history.length }}）</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="`查看 ${run.tagName || '代码提交'} 的发布记录`" @click="showRun(run)"><code>{{ run.createTag === false ? '无 Tag' : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} · 查看日志</span></button></details>
           </template>
           <div v-else class="state panel-detail-loading">正在读取版本和代码变更…</div>
         </template>
@@ -1419,6 +1445,8 @@ onBeforeUnmount(() => {
 .cloud-execution-notice strong { display: block; color: var(--text); font-size: 15px; }
 .cloud-execution-notice p { margin: 7px 0 0; color: var(--text-dim); font-size: 13px; line-height: 1.65; }
 .execution-details { margin: 12px 0; }
+.history-row { width: 100%; text-align: left; background: transparent; border-radius: 0; cursor: pointer; }
+.history-row:hover { background: rgba(79,140,255,.08); }
 .execution-details > summary { padding: 7px 0; cursor: pointer; color: var(--text-dim); font-size: 12px; }
 .submitting-message { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; max-width: 480px; padding: 24px; text-align: center; }
 .submitting-message p { flex-basis: 100%; margin: 0; font-size: 14px; line-height: 1.7; color: var(--text-dim); }

@@ -130,6 +130,15 @@ func TestGitPushTargetTriggersCloudBuildWithoutLocalCommand(t *testing.T) {
 	if err != nil || len(states) != 1 || states[0].Status != "handed_off" || states[0].Stage != "cloud_pending" || !states[0].PublishDone {
 		t.Fatalf("cloud target state = %#v, err=%v", states, err)
 	}
+	view, err := svc.GetRun(run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range view.Logs {
+		if strings.Contains(line.Text, "已触发") {
+			t.Fatalf("push alone cannot confirm a cloud run: %s", line.Text)
+		}
+	}
 }
 
 func TestGitPushReleasePushesTagAndHandsOffWithoutLocalBuild(t *testing.T) {

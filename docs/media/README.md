@@ -10,6 +10,19 @@ These assets support the Chinese-first and English README pages.
 | `release-panel.png` | Actual Launcher UI rendered with isolated demo release configuration |
 | `download.zh-CN.svg`, `download.en.svg` | Hand-authored accessible SVG link buttons |
 
+## Optimized display assets
+
+The README loads `.webp` previews and links to the unchanged `.png` originals for full-size viewing. This is an encoding and display-size optimization, not regenerated artwork.
+
+| Preview | Encoding | Size | README width |
+| --- | --- | --- | --- |
+| `hero.zh-CN.webp` | 1440 × 576, WebP quality 86 | 43,690 bytes | 720 px |
+| `hero.en.webp` | 1440 × 576, WebP quality 86 | 45,704 bytes | 720 px |
+| `dashboard.webp` | Original resolution, lossless WebP | 86,502 bytes | 720 px |
+| `release-panel.webp` | Original resolution, lossless WebP | 50,262 bytes | 440 px |
+
+Encoded with Sharp 0.35.4, WebP effort 6. Both screenshot previews were decoded and compared pixel-for-pixel with their originals. The Chinese page's images, including the SVG download button, total 180,972 bytes instead of 1,976,995 bytes (about 91% less). Widths are maximum display sizes; images shrink to fit narrower screens.
+
 The heroes are conceptual brand illustrations, not application screenshots. Screenshots use the real Vue components and styles. Only data is substituted: project names, paths, ports, Git status, release targets, and notes are fictional examples. API and WebSocket calls are intercepted in the capture browser; no real repository is submitted or published. The screenshot interface is Chinese in both README languages.
 
 For new captures, use a separate browser context with demo fixtures; never publish personal project paths, credentials, or logs. Preserve readable alternative text and captions in both README files.

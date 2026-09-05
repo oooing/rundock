@@ -1,7 +1,7 @@
 <p align="center"><strong>简体中文</strong> · <a href="./README.en.md">English</a></p>
 
 <p align="center">
-  <img src="./docs/media/hero.zh-CN.png" alt="Launcher — 项目再多，也井然有序。启停 · 日志 · Git 发布" width="1000" />
+  <a href="./docs/media/hero.zh-CN.png"><img src="./docs/media/hero.zh-CN.webp" alt="Launcher — 项目再多，也井然有序。启停 · 日志 · Git 发布" width="720" /></a>
 </p>
 
 <p align="center"><strong>Windows 项目管理工具，把脚本启停、运行日志和 Git 发布放在一起。</strong></p>
@@ -18,9 +18,9 @@
 拖入启动脚本，让每个项目都有自己的卡片。启停、日志、服务地址，不用来回找。
 
 <p align="center">
-  <img src="./docs/media/dashboard.png" alt="Launcher 真实界面：六个示例项目按组管理，卡片集中展示运行状态、端口及启停操作" width="1000" />
+  <a href="./docs/media/dashboard.png"><img src="./docs/media/dashboard.webp" alt="Launcher 真实界面：六个示例项目按组管理，卡片集中展示运行状态、端口及启停操作" width="720" /></a>
 </p>
-<p align="center"><sub>真实界面 · 示例数据</sub></p>
+<p align="center"><sub>真实界面 · 示例数据 · 点击查看大图</sub></p>
 
 | 一键启停 | 状态可见 | 发布有序 |
 | :--- | :--- | :--- |
@@ -33,7 +33,7 @@
 按需组合发布目标，也可以仅提交代码。**Tag 可选，版本可独立管理。**
 
 <p align="center">
-  <img src="./docs/media/release-panel.png" alt="发布面板真实界面：选择 PC 目标、确认版本 Tag、勾选提交文件" width="720" />
+  <a href="./docs/media/release-panel.png"><img src="./docs/media/release-panel.webp" alt="发布面板真实界面：选择 PC 目标、确认版本 Tag、勾选提交文件" width="440" /></a>
 </p>
 <p align="center"><sub>真实界面 · 示例配置；各项目的构建与部署流程需单独配置。</sub></p>
 

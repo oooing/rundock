@@ -1,7 +1,7 @@
 <p align="center"><a href="./README.md">简体中文</a> · <strong>English</strong></p>
 
 <p align="center">
-  <img src="./docs/media/hero.en.png" alt="Launcher — Every project. Under control. Launch · Logs · Git releases" width="1000" />
+  <a href="./docs/media/hero.en.png"><img src="./docs/media/hero.en.webp" alt="Launcher — Every project. Under control. Launch · Logs · Git releases" width="720" /></a>
 </p>
 
 <p align="center"><strong>A Windows project manager for script control, live logs, and Git releases.</strong></p>
@@ -18,9 +18,9 @@
 Drop in a startup script. Get a project card. Find controls, logs, and service URLs in one place.
 
 <p align="center">
-  <img src="./docs/media/dashboard.png" alt="Actual Launcher dashboard showing six demo projects, grouped cards, process status, ports, and launch controls" width="1000" />
+  <a href="./docs/media/dashboard.png"><img src="./docs/media/dashboard.webp" alt="Actual Launcher dashboard showing six demo projects, grouped cards, process status, ports, and launch controls" width="720" /></a>
 </p>
-<p align="center"><sub>Actual interface · Demo data · UI shown in Chinese</sub></p>
+<p align="center"><sub>Actual interface · Demo data · UI shown in Chinese · Click to enlarge</sub></p>
 
 | One-click control | Instant visibility | Organized releases |
 | :--- | :--- | :--- |
@@ -33,7 +33,7 @@ Drop in a startup script. Get a project card. Find controls, logs, and service U
 Mix configured targets or just commit code. **Tags are optional. Version groups can advance independently.**
 
 <p align="center">
-  <img src="./docs/media/release-panel.png" alt="Actual release panel with a selected PC target, version tag, and file selection" width="720" />
+  <a href="./docs/media/release-panel.png"><img src="./docs/media/release-panel.webp" alt="Actual release panel with a selected PC target, version tag, and file selection" width="440" /></a>
 </p>
 <p align="center"><sub>Actual interface · Demo configuration; each project needs its own build and deployment setup.</sub></p>
 

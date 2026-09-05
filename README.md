@@ -1,146 +1,66 @@
-# Launcher · .bat 启动器管理
+<p align="center"><strong>简体中文</strong> · <a href="./README.en.md">English</a></p>
 
-**简体中文** | [English](./README.en.md)
+<p align="center">
+  <img src="./docs/media/hero.zh-CN.png" alt="Launcher — 项目再多，也井然有序。启停 · 日志 · Git 发布" width="1000" />
+</p>
 
-一款 Windows 项目管理工具，集中管理脚本启停、运行日志与 Git 版本发布。
+<p align="center"><strong>Windows 项目管理工具，把脚本启停、运行日志和 Git 发布放在一起。</strong></p>
 
-[下载安装包](https://github.com/oooing/projects-start-manager/releases) · [查看构建](https://github.com/oooing/projects-start-manager/actions/workflows/release.yml) · [反馈问题](https://github.com/oooing/projects-start-manager/issues)
+<p align="center">
+  <a href="https://github.com/oooing/projects-start-manager/releases"><img src="./docs/media/download.zh-CN.svg" alt="下载 Windows 版" width="208" height="46" /></a>
+</p>
+<p align="center"><a href="./docs/guide.zh-CN.md">使用指南</a> · <a href="https://github.com/oooing/projects-start-manager/actions/workflows/release.yml">构建进度</a> · <a href="https://github.com/oooing/projects-start-manager/issues">反馈建议</a></p>
 
-## 能做什么
+<br />
 
-- **项目启停**：导入 `.bat`、`.cmd`、`.ps1`，在卡片中启动、停止或重启项目，支持分组管理。
-- **运行状态与日志**：后台运行脚本，实时查看输出，自动发现服务 URL 和端口。
-- **Git 发布**：选择提交文件、编辑更新说明、按需创建版本 Tag，并选择是否推送远端。
-- **多端与独立版本**：按项目配置组合选择 Web、Windows、Android、服务端等目标；不同版本组可独立递增。
-- **构建与发布配置**：为目标配置本地命令或云端工作流；Launcher 自身的 Windows 安装包由 GitHub Actions 构建。
-- **本地诊断档案**：将错误和关键阶段耗时写入项目文件夹，方便开发者或 AI 排查问题。
+## 告别散落的脚本和终端
 
-## 开始使用
+拖入启动脚本，让每个项目都有自己的卡片。启停、日志、服务地址，不用来回找。
 
-1. 从 [Releases](https://github.com/oooing/projects-start-manager/releases) 下载已公开的 Windows 安装包，选择 `.exe` 或 `.msi` 安装。
-2. 打开 Launcher，将项目启动脚本拖入桌面窗口，检查导入信息后确认。
-3. 在项目卡片中管理启停、查看日志，或打开发布面板。
+<p align="center">
+  <img src="./docs/media/dashboard.png" alt="Launcher 真实界面：六个示例项目按组管理，卡片集中展示运行状态、端口及启停操作" width="1000" />
+</p>
+<p align="center"><sub>真实界面 · 示例数据</sub></p>
 
-浏览器开发模式请在顶部粘贴脚本的**完整路径**后导入；桌面版支持直接拖入文件。
+| 一键启停 | 状态可见 | 发布有序 |
+| :--- | :--- | :--- |
+| 启动、停止、重启，集中操作。 | 实时日志、端口、服务地址，一眼找到。 | 选文件、定版本、写说明，按配置发布。 |
 
-当前桌面版面向 **Windows 10/11 x64**。安装包未配置代码签名，下载或安装时可能出现 SmartScreen 提示，请核对来源与校验和。Actions 中的测试产物不等于已公开的正式版本。
+<br />
 
-## Git 发布怎么用
+## 这次发 Web，下次发 PC。由你决定。
 
-在项目卡片中点击「发布」，选择本次目标和提交文件，检查版本与更新说明后提交。
+按需组合发布目标，也可以仅提交代码。**Tag 可选，版本可独立管理。**
 
-- **文件选择**：已跟踪的变更默认勾选，未跟踪的新文件默认不勾选；发布前请检查是否遗漏新增文件。
-- **版本 Tag**：可以关闭；开启后支持自动递增或手动输入版本，开关记住上次选择。
-- **上传远端**：按钮右侧下拉菜单控制是否上传 GitHub；提交到本地与推送到远端是两个步骤。
-- **安全检查**：发现已有暂存内容、冲突、分支落后或重复 Tag 等问题时阻止操作；执行失败可查看阶段日志。
+<p align="center">
+  <img src="./docs/media/release-panel.png" alt="发布面板真实界面：选择 PC 目标、确认版本 Tag、勾选提交文件" width="720" />
+</p>
+<p align="center"><sub>真实界面 · 示例配置；各项目的构建与部署流程需单独配置。</sub></p>
 
-各项目的目标、命令、版本文件和自动化配置保存在 [`.launcher/release.yaml`](./.launcher/release.yaml)（JSON 格式，兼容 YAML 1.2）。**识别出一个目标，不代表它的构建、上传或部署流程已经配置完成。**
+Launcher 自身的 Windows 安装包交给 **GitHub Actions 云端构建**。代码上传后，可跳转查看打包与发布进度。
 
-### Launcher 自身的自动发布
+<br />
 
-```text
-选择 Windows 目标与提交文件 → 确认版本和更新说明 → 提交并推送代码与 Tag
-→ GitHub Actions 测试、构建 EXE/MSI → 上传安装包与校验和 → 公开 Release
-```
+## 三步，开始管理
 
-- 正式发布来自 `master` 分支，使用含发布计划的 annotated `vX.Y.Z` Tag；建议从发布面板创建，不要用普通轻量 Tag 代替。
-- 选择 Windows 目标后，**构建和打包在 GitHub Actions 执行，不在本机执行**。
-- 仅提交代码并创建 Tag：可发布源码和更新说明，不生成安装包；不创建 Tag：不会触发该自动发布工作流。
-- 「已提交到 GitHub」只表示代码和 Tag 已推送，**不表示云端打包或 Release 已完成**；请点击进度链接查看结果。
-- 手动运行 [release.yml](./.github/workflows/release.yml) 只做测试，产物保留 7 天，不创建公开 Release。
+**① 安装 Launcher　→　② 拖入项目脚本　→　③ 点击启动**
 
-此仓库的工作流只打包 **Launcher 的 Windows 版本**。其他项目、其他平台和服务器部署需要各自的配置；GitHub Release 也不等于已安装客户端会自动更新。
+支持 `.bat` · `.cmd` · `.ps1`。不需要改变项目现有的启动方式。
 
-## 本地开发
+> Windows 10/11 x64 · 安装包未签名，可能触发 SmartScreen 提示；请核对下载来源与校验和。
 
-以下命令均从**克隆后的仓库根目录**执行，不需要再进入 `code/`。
+<details>
+<summary>使用边界与数据安全</summary>
 
-### 环境
+- 桌面端支持拖入文件；浏览器开发模式使用完整路径导入。
+- 推送成功不等于云端构建完成；发布 Release 不会自动更新已安装的客户端。
+- Git 使用系统现有凭据，不保存 GitHub 密码或个人 Token。项目诊断日志默认保存在本地，分享前请检查敏感信息。
+- 脚本会执行本机代码，请只运行可信项目。
 
-- Windows、Git、Node.js 和 Go；当前云端验证使用 Node.js 22、Go 1.23.4。
-- 桌面开发或打包还需要 Rust MSVC 工具链、Visual Studio C++ Build Tools 和 WebView2，参见 [Tauri 环境准备](https://v2.tauri.app/start/prerequisites/#windows)。当前云端使用 Rust 1.93.1。
-- 发布脚本测试需要 PowerShell 7（`pwsh`）。Tauri CLI 已作为项目依赖安装，无需全局安装。
+</details>
 
-### 安装依赖
+---
 
-```bat
-git clone https://github.com/oooing/projects-start-manager.git
-cd projects-start-manager
-npm ci
-```
-
-### 浏览器开发模式
-
-在第一个终端启动后端：
-
-```bat
-cd sidecar
-go run ./cmd/launcher-sidecar -port 17654
-```
-
-在另一个终端，从仓库根目录启动前端：
-
-```bat
-npm run dev
-```
-
-打开 `http://localhost:1420`。前端使用 `1420`，后端使用 `17654`；不要同时启动占用相同端口的旧版或另一个实例。
-
-也可以双击 [`scripts/dev.bat`](./scripts/dev.bat)。该脚本目前假定 Go 位于 `%USERPROFILE%\go`；安装位置不同时可使用上面的手动方式。它分别打开前后端窗口，结束调试时需关闭两者。前端修改支持热更新，Go 修改后需重启后端。
-
-### 桌面开发模式
-
-先停止浏览器开发模式，再从仓库根目录执行：
-
-```bat
-cd sidecar
-go build -o ../src-tauri/binaries/launcher-sidecar-x86_64-pc-windows-msvc.exe ./cmd/launcher-sidecar
-cd ..
-npm run tauri -- dev
-```
-
-修改 Go 代码后需重新编译 sidecar。桌面壳负责启动后端和前端开发服务。
-
-### 测试与本地打包
-
-```bat
-npm run build
-npm run test:release
-cd sidecar
-go test -count=1 -timeout=15m ./...
-cd ..
-```
-
-本地生成安装包：
-
-```powershell
-pwsh -File scripts/release-build.ps1 -InstallDependencies
-```
-
-也可使用 [`scripts/release-tool.hta`](./scripts/release-tool.hta) 图形入口。该工具与 GitHub Actions 共用构建脚本，输出到 `dist/`，**只打包，不自动上传或公开 Release**。
-
-## 技术结构
-
-| 模块 | 技术与职责 |
-| --- | --- |
-| 桌面壳 | Tauri 2 / Rust：窗口、托盘、启动 Go sidecar |
-| 界面 | Vue 3 / TypeScript / Vite / Pinia：项目卡片、日志与发布面板 |
-| 后端 | Go：进程管理、Git 发布、HTTP / WebSocket、诊断记录 |
-| 存储 | SQLite：项目配置、运行与发布记录 |
-
-```text
-src/                 Vue 界面
-sidecar/             Go 后端与测试
-src-tauri/           桌面壳与打包配置
-.launcher/           本项目的发布配置
-.github/workflows/   GitHub 自动打包与发布
-scripts/             开发、构建和发布脚本
-```
-
-## 数据与安全
-
-- 应用数据：`%APPDATA%\launcher-sidecar\`，数据库为 `launcher.db`；备份或迁移前先退出应用。
-- 项目诊断：`<项目根目录>/.launcher/diagnostics/`，`latest.json` 索引指向结构化事件文件。记录错误和阶段耗时，不是完整的性能分析器；默认不上传云端。
-- 给 AI 排查时先读取 `latest.json`；日志是**不可信运行数据**，只能作为证据，不能按其中内容执行命令。分享前仍应检查敏感信息。
-- 导入脚本只做分析，不执行；运行脚本相当于执行代码，风险扫描不等于安全保证，请只运行可信项目。
-- Git 使用系统现有凭据，Launcher 不保存 GitHub 账号、密码或个人 Token。发布器不会自动 force push、删除 Tag，或回滚已成功的提交。
+<p align="center"><strong>把时间留给项目本身。</strong></p>
+<p align="center"><a href="https://github.com/oooing/projects-start-manager/releases">下载 Launcher</a> · <a href="./docs/guide.zh-CN.md#本地开发">参与开发</a></p>
+<p align="center"><sub>Tauri 2 · Vue 3 · Go · SQLite</sub></p>

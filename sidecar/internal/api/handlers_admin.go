@@ -55,8 +55,8 @@ func (s *Server) handleGroupDetail(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var body struct {
-			Name  *string  `json:"name"`
-			Color *string  `json:"color"`
+			Name  *string   `json:"name"`
+			Color *string   `json:"color"`
 			Order *[]string `json:"order"`
 		}
 		if err := readJSON(r, &body); err != nil {
@@ -140,11 +140,16 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	apps, _ := s.Store.ListApps()
 	groups, _ := s.Store.ListGroups()
 	settings, _ := s.Store.AllSettings()
+	profiles, _ := s.Store.ListReleaseProfiles()
+	if profiles == nil {
+		profiles = []*store.ReleaseProfile{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"exportedAt": time.Now().UTC().Format(time.RFC3339),
-		"apps":       apps,
-		"groups":     groups,
-		"settings":   settings,
+		"exportedAt":      time.Now().UTC().Format(time.RFC3339),
+		"apps":            apps,
+		"groups":          groups,
+		"settings":        settings,
+		"releaseProfiles": profiles,
 	})
 }
 
@@ -155,9 +160,10 @@ func (s *Server) handleImportConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var snap struct {
-		Apps     []*store.App    `json:"apps"`
-		Groups   []*store.Group  `json:"groups"`
-		Settings map[string]string `json:"settings"`
+		Apps            []*store.App            `json:"apps"`
+		Groups          []*store.Group          `json:"groups"`
+		Settings        map[string]string       `json:"settings"`
+		ReleaseProfiles []*store.ReleaseProfile `json:"releaseProfiles"`
 	}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&snap); err != nil {
@@ -187,6 +193,13 @@ func (s *Server) handleImportConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	for k, v := range snap.Settings {
 		_ = s.Store.SetSetting(k, v)
+	}
+	for _, p := range snap.ReleaseProfiles {
+		if p != nil && p.AppID != "" {
+			if a, _ := s.Store.GetApp(p.AppID); a != nil {
+				_ = s.Publisher.SaveProfile(p)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"apps": appCount, "groups": groupCount})
 }

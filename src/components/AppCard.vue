@@ -6,7 +6,7 @@ import { CARD_COLOR_PALETTE, getReadableTextColor, normalizeHexColor } from '@/u
 
 const props = defineProps<{ app: AppView }>()
 const emit = defineEmits<{
-  (e: 'start' | 'stop' | 'restart' | 'log' | 'open-dir' | 'delete', id: string): void
+  (e: 'start' | 'stop' | 'restart' | 'log' | 'open-dir' | 'release' | 'delete', id: string): void
   (e: 'open-url', id: string, url?: string): void
   (e: 'rename', id: string, name: string): void
   (e: 'set-role', appId: string, serviceId: string, role: ServiceRole): void
@@ -276,6 +276,7 @@ const cardStyle = computed(() => {
         @click="emit('open-url', a.id)"
       >🌐</button>
       <button class="ghost icon" title="打开目录" @click="emit('open-dir', a.id)">📁</button>
+      <button class="ghost release-btn" title="Git 版本发布" @click="emit('release', a.id)">发布</button>
       <button class="ghost icon danger-ico" title="删除" @click="emit('delete', a.id)">🗑</button>
     </footer>
   </article>

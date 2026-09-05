@@ -61,6 +61,7 @@ export async function onTauriEvent<T = unknown>(
 export async function onFileDragDrop(
   handler: (event: FileDragDropEvent) => void,
 ): Promise<UnlistenFn | null> {
+  if (!isTauri) return null
   return getCurrentWindow()
     .onDragDropEvent((event) => handler(event.payload as FileDragDropEvent))
     .catch(() => null)

@@ -18,13 +18,13 @@ func configureHidden(cmd *exec.Cmd) {
 	// CREATE_NEW_PROCESS_GROUP = 0x00000200：使进程成为新进程组首，
 	//   这样后续可用 GenerateConsoleCtrlEvent 向它发 CTRL_BREAK_EVENT（优雅停止需要）。
 	const (
-		CREATE_NO_WINDOW           = 0x08000000
-		CREATE_NEW_PROCESS_GROUP   = 0x00000200
+		CREATE_NO_WINDOW         = 0x08000000
+		CREATE_NEW_PROCESS_GROUP = 0x00000200
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:        true,
-		CreationFlags:     CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
-		NoInheritHandles:  false,
+		HideWindow:       true,
+		CreationFlags:    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+		NoInheritHandles: false,
 	}
 }
 

@@ -144,6 +144,7 @@
       codeDir = fso.GetParentFolderName(fso.GetParentFolderName(htaPath()));
       paths = {
         pkg: fso.BuildPath(codeDir, "package.json"),
+        packageLock: fso.BuildPath(codeDir, "package-lock.json"),
         tauri: fso.BuildPath(fso.BuildPath(codeDir, "src-tauri"), "tauri.conf.json"),
         cargo: fso.BuildPath(fso.BuildPath(codeDir, "src-tauri"), "Cargo.toml"),
         releaseBat: fso.BuildPath(fso.BuildPath(codeDir, "scripts"), "release.bat"),
@@ -204,6 +205,17 @@
       return m ? m[1] : "";
     }
 
+    function getPackageLockVersions(path) {
+      var text = readUtf8(path);
+      var versions = [];
+      var pattern = /"version"\s*:\s*"(\d+\.\d+\.\d+)"/g;
+      var match = null;
+      while (versions.length < 2 && (match = pattern.exec(text)) !== null) {
+        versions.push(match[1]);
+      }
+      return versions;
+    }
+
     function isVersion(v) {
       return /^\d+\.\d+\.\d+$/.test(v);
     }
@@ -218,11 +230,15 @@
       clearLog();
       try {
         ensureFile(paths.pkg);
+        ensureFile(paths.packageLock);
         ensureFile(paths.tauri);
         ensureFile(paths.cargo);
         ensureFile(paths.releaseBat);
 
         var pkgV = getJsonVersion(paths.pkg);
+        var packageLockVersions = getPackageLockVersions(paths.packageLock);
+        var lockV = packageLockVersions.length > 0 ? packageLockVersions[0] : "";
+        var lockRootV = packageLockVersions.length > 1 ? packageLockVersions[1] : "";
         var tauriV = getJsonVersion(paths.tauri);
         var cargoV = getCargoVersion(paths.cargo);
         var current = tauriV || pkgV || cargoV;
@@ -234,8 +250,8 @@
         document.getElementById("nextVersion").innerText = nextVersion(current);
         document.getElementById("targetVersion").value = nextVersion(current);
 
-        if (pkgV !== current || cargoV !== current) {
-          log("版本不一致：package=" + pkgV + " tauri=" + tauriV + " cargo=" + cargoV, "warn");
+        if (pkgV !== current || lockV !== current || lockRootV !== current || tauriV !== current || cargoV !== current) {
+          log("版本不一致：package=" + pkgV + " package-lock=" + lockV + "/" + lockRootV + " tauri=" + tauriV + " cargo=" + cargoV, "warn");
           log("打包时会统一写成目标版本。", "warn");
         } else {
           log("当前版本：" + current, "ok");
@@ -266,8 +282,23 @@
       writeUtf8(path, next);
     }
 
+    function setPackageLockVersion(path, version) {
+      var text = readUtf8(path);
+      var replacements = 0;
+      var next = text.replace(/("version"\s*:\s*")\d+\.\d+\.\d+("\s*[\r\n,])/g, function (match, before, after) {
+        if (replacements >= 2) return match;
+        replacements += 1;
+        return before + version + after;
+      });
+      if (replacements !== 2) {
+        throw new Error("package-lock.json 中没有找到两个项目版本号");
+      }
+      writeUtf8(path, next);
+    }
+
     function syncVersion(version) {
       setVersionText(paths.pkg, "json", version);
+      setPackageLockVersion(paths.packageLock, version);
       setVersionText(paths.tauri, "json", version);
       setVersionText(paths.cargo, "toml", version);
     }
@@ -436,7 +467,7 @@
         <button onclick="openDist()">打开 dist</button>
       </div>
       <div class="hint">
-        打包前会同步 package.json、tauri.conf.json、Cargo.toml。打包仍调用 scripts\release.bat。
+        打包前会同步 package.json、package-lock.json、tauri.conf.json、Cargo.toml。打包仍调用 scripts\release.bat。
       </div>
     </div>
 

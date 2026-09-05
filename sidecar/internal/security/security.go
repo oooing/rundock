@@ -19,17 +19,17 @@ import (
 type RiskLevel string
 
 const (
-	RiskInfo    RiskLevel = "info"
-	RiskWarn    RiskLevel = "warn"
-	RiskDanger  RiskLevel = "danger"
+	RiskInfo   RiskLevel = "info"
+	RiskWarn   RiskLevel = "warn"
+	RiskDanger RiskLevel = "danger"
 )
 
 // Finding 一条风险发现。
 type Finding struct {
-	Level    RiskLevel `json:"level"`
-	Rule     string    `json:"rule"`      // 规则名（简短标识）
-	Message  string    `json:"message"`   // 面向用户的说明
-	Snippet  string    `json:"snippet"`   // 匹配到的片段（便于高亮）
+	Level   RiskLevel `json:"level"`
+	Rule    string    `json:"rule"`    // 规则名（简短标识）
+	Message string    `json:"message"` // 面向用户的说明
+	Snippet string    `json:"snippet"` // 匹配到的片段（便于高亮）
 }
 
 // riskRule 描述一条静态风险规则。

@@ -22,6 +22,7 @@ export const useConnectionStore = defineStore('connection', () => {
         wsClient.connect()
       }
     } catch (e: any) {
+      sidecarReady.value = false
       error.value = e?.message || String(e)
     } finally {
       checking.value = false

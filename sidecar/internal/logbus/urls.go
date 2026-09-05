@@ -2,9 +2,9 @@
 // 并解析出结构化事件（ready/port_listen/url_detected）。
 //
 // 报告建议的"日志三层"：
-//   1. 原始流：全量落 SQLite logs 表（本包负责）。
-//   2. 事件流：抽取 ready/port_listen/url_detected/health_unhealthy（本包负责）。
-//   3. 索引归档：搜索/导出（api 层基于 store 查询）。
+//  1. 原始流：全量落 SQLite logs 表（本包负责）。
+//  2. 事件流：抽取 ready/port_listen/url_detected/health_unhealthy（本包负责）。
+//  3. 索引归档：搜索/导出（api 层基于 store 查询）。
 package logbus
 
 import (
@@ -17,11 +17,11 @@ import (
 type EventKind string
 
 const (
-	EventURLListen  EventKind = "url_detected"      // 日志中出现的本地 URL
-	EventPortListen EventKind = "port_listen"       // 日志中出现的端口
-	EventReady      EventKind = "ready"             // 框架就绪特征
-	EventBuildDone  EventKind = "build_finished"    // 构建完成
-	EventErrWait    EventKind = "dependency_waiting"// 依赖等待（DB 等）
+	EventURLListen  EventKind = "url_detected"       // 日志中出现的本地 URL
+	EventPortListen EventKind = "port_listen"        // 日志中出现的端口
+	EventReady      EventKind = "ready"              // 框架就绪特征
+	EventBuildDone  EventKind = "build_finished"     // 构建完成
+	EventErrWait    EventKind = "dependency_waiting" // 依赖等待（DB 等）
 )
 
 // Event 一条结构化事件。
@@ -47,10 +47,10 @@ var urlPatterns = []*regexp.Regexp{
 }
 
 var (
-	reReady      = regexp.MustCompile(`(?i)\b(ready in|ready -|started server|listening on|now listening|compiled successfully|vite v\d|Local:\s*http)\b`)
-	rePort       = regexp.MustCompile(`(?i)\b(?:port|on)\s+(\d{2,5})\b`)
-	reBuildDone  = regexp.MustCompile(`(?i)\b(✓ built in|build complete|webpack compiled)\b`)
-	reDepWait    = regexp.MustCompile(`(?i)\b(ECONNREFUSED|connection refused|waiting for|cannot connect|database|redis).{0,40}(?:refused|timeout|retry)\b`)
+	reReady     = regexp.MustCompile(`(?i)\b(ready in|ready -|started server|listening on|now listening|compiled successfully|vite v\d|Local:\s*http)\b`)
+	rePort      = regexp.MustCompile(`(?i)\b(?:port|on)\s+(\d{2,5})\b`)
+	reBuildDone = regexp.MustCompile(`(?i)\b(✓ built in|build complete|webpack compiled)\b`)
+	reDepWait   = regexp.MustCompile(`(?i)\b(ECONNREFUSED|connection refused|waiting for|cannot connect|database|redis).{0,40}(?:refused|timeout|retry)\b`)
 )
 
 // ParseLine 解析一行日志，返回从中抽取的事件（可能为空）。

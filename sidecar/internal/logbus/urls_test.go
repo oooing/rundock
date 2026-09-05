@@ -10,7 +10,7 @@ func TestExtractURLs(t *testing.T) {
 		{"Local:   http://localhost:5173/", []string{"http://localhost:5173/"}},
 		{"ready - started server on http://127.0.0.1:3000", []string{"http://127.0.0.1:3000"}},
 		{"Vite v5.0.0 ready in 320 ms", []string{}}, // 无 URL，只有 ready 关键词
-		{"listening on port 8080", []string{}},       // 裸端口不算 URL
+		{"listening on port 8080", []string{}},      // 裸端口不算 URL
 		{"open http://localhost:3000 and https://127.0.0.1:8443/a", []string{"http://localhost:3000", "https://127.0.0.1:8443/a"}},
 	}
 	for i, c := range cases {

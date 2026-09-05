@@ -19,7 +19,7 @@
 **关闭**：直接关掉那个 cmd 窗口，或按 `Ctrl+C` —— 后端、前端、以及你通过平台启动的应用进程都会一起停。**不需要单独的停止脚本**。
 
 **生成的文件**：
-- `sidecar\launcher-sidecar-dev.exe` —— 后端二进制（仅供 dev.bat 使用）
+- `sidecar\.tmp\launcher-sidecar-v2-dev.exe` —— v2 临时后端，不覆盖 v1 的 `launcher-sidecar-dev.exe`
 - `sidecar-dev.log` —— 后端运行日志（排错时看这里）
 
 **改代码后怎么生效**：
@@ -27,6 +27,8 @@
 |---|---|
 | 前端 `.vue` / `.ts` | **不用重启**，浏览器刷新即可（Vite 热更新） |
 | Go 后端 `.go` | 关掉窗口 → 重新双击 `dev.bat`（会自动重新编译） |
+
+若端口 17654 仍被旧 sidecar 占用，脚本会明确报错并停止，避免出现“前端是 v2、后端仍是 v1”的混用状态。
 
 > 💡 建议：右键 `dev.bat` → 发送到 → 桌面快捷方式，以后从桌面双击。
 
@@ -59,26 +61,42 @@ cargo tauri dev
 
 ---
 
-## release.bat — 一键发版打包（生成安装包）
+## release-tool.hta / release.bat — 本地打包工具（生成安装包）
 
-**用途**：编译后端 + 打包桌面应用 + 把安装包拷到 `dist\` 目录。用于给别人分发。
+**用途**：编译后端 + 打包桌面应用 + 把安装包和 `SHA256SUMS.txt` 放到 `dist\` 目录。用于给别人分发。
 
-**怎么用**：双击 `release.bat`（约 3-5 分钟）
+**怎么用**：推荐双击 `release-tool.hta`，确认版本后开始打包（约 3-5 分钟）。`release.bat` 是它调用的底层构建脚本；单独运行时会直接使用当前版本号。
 
 **它会自动**：
-1. 编译 Go 后端到 Tauri binaries 目录
-2. `cargo tauri build`（前端构建 + Rust release 编译 + 生成 NSIS/MSI 安装包）
-3. 把安装包拷到 `dist\` 目录
+1. 本地打包工具先同步 `package.json`、`package-lock.json`、Tauri 和 Cargo 的版本号
+2. 编译当前代码的 Go 后端到 Tauri binaries 目录（包含 v2 发布管理能力）
+3. 调用 `release-build.ps1` 做版本校验、测试、sidecar 健康检查和 Tauri 构建
+4. 生成 NSIS/MSI 安装包及 SHA-256 校验文件
 
 **产物**（在 `code\dist\`）：
 ```
-Launcher_0.1.0_x64-setup.exe   ← NSIS 安装包（推荐，小）
-Launcher_0.1.0_x64_en-US.msi   ← MSI 安装包（企业部署）
+Launcher_2.0.0_x64-setup.exe   ← NSIS 安装包（推荐，小）
+Launcher_2.0.0_x64_en-US.msi   ← MSI 安装包（企业部署）
+SHA256SUMS.txt                  ← 安装包完整性校验值
 ```
 
-**发版前改版本号**：编辑 `src-tauri\tauri.conf.json` 的 `"version"` 字段（如 `0.1.0` → `0.2.0`），安装包文件名会自动更新。
+**发版前改版本号**：双击 `scripts\release-tool.hta`，填写目标版本并点击“写入版本并打包”。工具会自动同步所有版本文件；无需手工逐个修改。
 
 **发给别人**：把 `dist\Launcher_x.x.x_x64-setup.exe` 发给对方，双击安装即可。对方只需 Windows 10/11，不需要任何开发环境。
+
+GitHub 自动发布使用同一个 `release-build.ps1`：推送严格的 annotated `vX.Y.Z` Tag 后，Actions 会校验 Tag 中的隐藏发布计划。选择 Windows 时自动打包并创建 GitHub Release；明确选择“仅提交代码”时只发布源码。Actions 的手动运行入口永远是 dry-run，不会创建真实 Release。
+
+> 当前安装包未配置 Windows 代码签名，浏览器下载后可能出现 SmartScreen 提示。GitHub Release 也不等于客户端自动更新；应用内更新需要单独接入 Tauri updater。
+
+### 不公开发布的验收
+
+- `npm run test:release`：使用临时 Git 仓库和模拟 GitHub，验证 Tag、中文说明、云端目标配置、草稿上传和重试保护；需要 Git、Node.js 和 PowerShell 7（`pwsh`）。不创建正式 Tag，不访问 GitHub 账号。
+- `release-build.ps1`：真实生成 EXE、MSI 和校验和，不创建 GitHub Release。后端测试强制重新执行，避免沿用旧结果。
+- GitHub Actions 手动运行：选择 `v2`，保持 `source_only=false`，仅保存 7 天测试安装包；公开发布仍只由正式 Tag 触发。
+
+Launcher 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-push`；不要填写本地 `build/package` 命令。构建和打包步骤由 GitHub 工作流执行。
+
+若 MSI 报“无法访问 Windows Installer 服务”，先检查打包环境的服务权限。受限沙箱可能阻止 MSI 校验；不要通过跳过安装包校验来掩盖该问题。
 
 ---
 

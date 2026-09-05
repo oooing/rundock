@@ -6,10 +6,11 @@ import (
 
 // BatchAdapter 处理 .bat/.cmd 批处理脚本。
 // 启动方式：cmd.exe /d /s /c call <script>
-//   /d    禁用 AutoRun（cmd 启动时不执行注册表里的初始化命令，更可控）
-//   /s    保持引号规则一致
-//   /c    执行后退出
-//   call  避免批处理调用其它脚本时过早返回，确保退出码正确传播
+//
+//	/d    禁用 AutoRun（cmd 启动时不执行注册表里的初始化命令，更可控）
+//	/s    保持引号规则一致
+//	/c    执行后退出
+//	call  避免批处理调用其它脚本时过早返回，确保退出码正确传播
 type BatchAdapter struct{}
 
 func (BatchAdapter) Type() string { return "batch" }

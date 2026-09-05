@@ -11,6 +11,7 @@ import SettingsModal from '@/components/SettingsModal.vue'
 import HelpModal from '@/components/HelpModal.vue'
 import CloseDialog from '@/components/CloseDialog.vue'
 import QuitConfirm from '@/components/QuitConfirm.vue'
+import ReleaseModal from '@/components/ReleaseModal.vue'
 import { api } from '@/api/http'
 import {
   hideMainWindow,
@@ -32,6 +33,7 @@ const showHelp = ref(false)
 const candidate = ref<ImportCandidate | null>(null)
 const importing = ref(false)
 const logAppId = ref<string | null>(null)
+const releaseAppId = ref<string | null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pathInput = ref('')
@@ -56,6 +58,7 @@ const appsInGroup = computed(() => {
   if (selectedGroupId.value === null) return apps.apps
   return apps.apps.filter((a) => a.groupId === selectedGroupId.value)
 })
+const releaseApp = computed(() => apps.apps.find((a) => a.id === releaseAppId.value) || null)
 
 function onDrop(paths: string[]) {
   const scripts = paths.filter((path) => /\.(bat|cmd|ps1)$/i.test(path))
@@ -420,12 +423,14 @@ onUnmounted(() => {
           :apps="appsInGroup"
           :loading="apps.loading"
           :ready="conn.sidecarReady"
+          :connection-error="conn.error"
           @start="handleStart($event)"
           @stop="handleStop($event)"
           @restart="handleRestart($event)"
           @log="openLog($event)"
           @open-url="(id, url) => apps.openURL(id, url)"
           @open-dir="apps.openDir($event)"
+          @release="releaseAppId = $event"
           @delete="apps.remove($event)"
           @rename="(id, name) => apps.rename(id, name)"
           @set-role="(appId, serviceId, role) => apps.setServiceRole(appId, serviceId, role)"
@@ -447,6 +452,7 @@ onUnmounted(() => {
       @cancel="cancelPending"
     />
     <LogDrawer v-if="logAppId" :app-id="logAppId" @close="logAppId = null" />
+    <ReleaseModal v-if="releaseApp" :app="releaseApp" @close="releaseAppId = null" />
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
     <HelpModal v-if="showHelp" @close="showHelp = false" />
     <CloseDialog

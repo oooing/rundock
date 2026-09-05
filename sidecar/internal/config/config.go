@@ -12,12 +12,12 @@ import (
 
 // Config 汇总运行期配置。
 type Config struct {
-	DataDir   string // 数据根目录
-	DBPath    string // SQLite 文件路径
-	LogsDir   string // 归档日志目录
-	HTTPAddr  string // HTTP 监听地址，例如 127.0.0.1:0（0=随机端口）
-	HTTPPort  int    // 实际监听端口（启动后回填）
-	DevMode   bool   // 是否开发模式（打印更多日志）
+	DataDir  string // 数据根目录
+	DBPath   string // SQLite 文件路径
+	LogsDir  string // 归档日志目录
+	HTTPAddr string // HTTP 监听地址，例如 127.0.0.1:0（0=随机端口）
+	HTTPPort int    // 实际监听端口（启动后回填）
+	DevMode  bool   // 是否开发模式（打印更多日志）
 }
 
 // Default 返回默认配置。Windows 下用 %APPDATA%，否则用 ~/.launcher-sidecar。

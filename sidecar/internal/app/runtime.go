@@ -11,12 +11,12 @@ import (
 
 // Status 枚举。
 const (
-	StatusStarting  = "starting"
-	StatusRunning   = "running"
-	StatusDegraded  = "degraded"
-	StatusStopped   = "stopped"
-	StatusFailed    = "failed"
-	StatusStopping  = "stopping"
+	StatusStarting = "starting"
+	StatusRunning  = "running"
+	StatusDegraded = "degraded"
+	StatusStopped  = "stopped"
+	StatusFailed   = "failed"
+	StatusStopping = "stopping"
 )
 
 // Runtime 描述一个 App 当前的运行态。仅存在于内存，进程退出或重启时更新。

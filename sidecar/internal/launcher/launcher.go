@@ -13,6 +13,7 @@ import (
 
 	"github.com/launcher-sidecar/internal/adapter"
 	"github.com/launcher-sidecar/internal/app"
+	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/logbus"
 	"github.com/launcher-sidecar/internal/probe"
 	"github.com/launcher-sidecar/internal/proc"
@@ -25,6 +26,7 @@ type Launcher struct {
 	Manager      *app.Manager
 	Hub          *logbus.Hub
 	Registry     *adapter.Registry
+	Diagnostics  *diagnostics.Service
 	startProcess func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
 
 	// 停止用配置（从 settings 读）
@@ -148,6 +150,16 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		cancel()
 		return fmt.Errorf("create run: %w", err)
 	}
+	if l.Diagnostics != nil {
+		collector.OnLog = func(_ *logbus.Collector, stream, level, text string) {
+			l.Diagnostics.RecordProcessLine(appID, runID, stream, level, text)
+		}
+		l.Diagnostics.Record(diagnostics.Event{
+			AppID: appID, RunID: runID, Kind: "lifecycle", Severity: "info", Source: "launcher",
+			Operation: "app.start", Stage: "spawn", Status: "started", Message: "开始启动项目",
+			Context: map[string]any{"adapterType": a.AdapterType, "preparedByAdapter": preparedByAdapter},
+		})
+	}
 
 	// 启动诊断：配置摘要（用户排查 + AI 排错用）
 	envKeys := make([]string, 0, len(env))
@@ -206,6 +218,13 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		collector.OnStdout)
 	if err != nil {
 		collector.Error(fmt.Sprintf("[启动] 创建进程失败: %v", err))
+		if l.Diagnostics != nil {
+			l.Diagnostics.Record(diagnostics.Event{
+				AppID: appID, RunID: runID, Kind: "error", Severity: "error", Source: "launcher",
+				Operation: "app.start", Stage: "spawn", Status: "failed", ErrorCode: "spawn_failed",
+				DurationMS: time.Since(nowTime).Milliseconds(), Message: err.Error(),
+			})
+		}
 		code := -1
 		_ = l.Store.UpdateRunStatus(runID, app.StatusFailed, &code)
 		_ = l.Store.TouchAppRuntime(appID, nowStr, "", app.StatusFailed)
@@ -232,6 +251,14 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	l.mu.Unlock()
 
 	collector.Info(fmt.Sprintf("[启动] 进程已创建 pid=%d rootPid=%d status=starting", pid, pid))
+	if l.Diagnostics != nil {
+		l.Diagnostics.Record(diagnostics.Event{
+			AppID: appID, RunID: runID, Kind: "performance", Severity: "info", Source: "launcher",
+			Operation: "app.spawn", Stage: "spawn", Status: "succeeded",
+			DurationMS: time.Since(nowTime).Milliseconds(), Message: "项目进程已创建",
+			Context: map[string]any{"pid": pid},
+		})
+	}
 
 	// 后台监听进程退出
 	go l.watchExit(appID, rt, handle, cancel, collector)
@@ -471,8 +498,23 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 			continue
 		}
 		prev := svc.Health
+		probeStarted := time.Now()
 		hr := l.probeService(svc.URL)
+		probeDuration := time.Since(probeStarted)
 		ok := hr != nil && hr.Reachable
+		if l.Diagnostics != nil && (probeDuration >= 500*time.Millisecond || !ok) {
+			status := "reachable"
+			severity := "info"
+			if !ok {
+				status = "unreachable"
+				severity = "warn"
+			}
+			l.Diagnostics.Record(diagnostics.Event{
+				AppID: appID, RunID: rt.RunID, Kind: "performance", Severity: severity, Source: "health",
+				Operation: "health.probe", Status: status, DurationMS: probeDuration.Milliseconds(),
+				Message: "服务健康检查完成", Context: map[string]any{"port": svc.Port, "role": svc.Role},
+			})
+		}
 		if ok {
 			_ = l.Store.UpdateServiceHealth(svc.ID, "healthy", now)
 			healthy++
@@ -648,6 +690,24 @@ func (l *Launcher) watchExit(appID string, rt *app.Runtime, handle *proc.Handle,
 		}
 		l.Manager.Transition(rt, app.StatusFailed, &exitCode)
 	}
+	if l.Diagnostics != nil {
+		severity := "info"
+		errorCode := ""
+		if next == app.StatusFailed {
+			severity = "error"
+			errorCode = "process_exit_nonzero"
+		}
+		context := map[string]any{"exitCode": exitCode, "previousStatus": cur}
+		if waitErr != nil {
+			context["waitError"] = waitErr.Error()
+		}
+		l.Diagnostics.Record(diagnostics.Event{
+			AppID: appID, RunID: rt.RunID, Kind: "lifecycle", Severity: severity, Source: "process",
+			Operation: "app.run", Status: next, DurationMS: time.Since(rt.StartedAt).Milliseconds(),
+			ErrorCode: errorCode, Message: "项目进程已退出",
+			Context: context,
+		})
+	}
 	if col != nil && next == app.StatusStopped {
 		col.Info(fmt.Sprintf("[状态] %s → stopped", cur))
 	}
@@ -655,7 +715,22 @@ func (l *Launcher) watchExit(appID string, rt *app.Runtime, handle *proc.Handle,
 }
 
 // Stop 停止一个 app。分级：Ctrl-Break -> grace -> Terminate(taskkill /t /f) -> 端口确认。
-func (l *Launcher) Stop(appID string) error {
+func (l *Launcher) Stop(appID string) (err error) {
+	started := time.Now()
+	defer func() {
+		if l.Diagnostics == nil {
+			return
+		}
+		status, severity, errorCode, message := "succeeded", "info", "", "项目停止操作完成"
+		if err != nil {
+			status, severity, errorCode, message = "failed", "error", "stop_failed", err.Error()
+		}
+		l.Diagnostics.Record(diagnostics.Event{
+			AppID: appID, Kind: "performance", Severity: severity, Source: "launcher",
+			Operation: "app.stop", Status: status, DurationMS: time.Since(started).Milliseconds(),
+			ErrorCode: errorCode, Message: message,
+		})
+	}()
 	l.mu.Lock()
 	rs, ok := l.runs[appID]
 	l.mu.Unlock()
@@ -781,7 +856,22 @@ func (l *Launcher) StopAll() int {
 }
 
 // Restart = Stop + Start。
-func (l *Launcher) Restart(ctx context.Context, appID string) error {
+func (l *Launcher) Restart(ctx context.Context, appID string) (err error) {
+	started := time.Now()
+	defer func() {
+		if l.Diagnostics == nil {
+			return
+		}
+		status, severity, errorCode, message := "succeeded", "info", "", "项目重启操作完成"
+		if err != nil {
+			status, severity, errorCode, message = "failed", "error", "restart_failed", err.Error()
+		}
+		l.Diagnostics.Record(diagnostics.Event{
+			AppID: appID, Kind: "performance", Severity: severity, Source: "launcher",
+			Operation: "app.restart", Status: status, DurationMS: time.Since(started).Milliseconds(),
+			ErrorCode: errorCode, Message: message,
+		})
+	}()
 	if l.Manager.Registry.IsRunning(appID) {
 		if err := l.Stop(appID); err != nil {
 			return err

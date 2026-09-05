@@ -7,7 +7,7 @@
 //   - 哈希变化但仅 info/warn        → 自动同步派生字段（cwd/adapter/cmd/args/env/portHints/scriptHash）
 //   - 哈希变化且含 danger           → 阻止操作，不写库，要求用户确认
 //   - 用户已携带 confirmedScriptHash → 重新校验哈希是否仍匹配；
-//                                      期间脚本再次变化则再次返回需确认
+//     期间脚本再次变化则再次返回需确认
 //
 // 用户字段（name / groupId / tags / healthUrl / sortOrder / 手动服务角色）一律保留，
 // 仅覆盖脚本派生字段。ConfirmedHash 仅在用户成功确认 danger 后写入。
@@ -35,10 +35,10 @@ const (
 
 // PreflightResult 预检结果。
 type PreflightResult struct {
-	Outcome      PreflightOutcome
-	Candidate    *importer.Candidate // PreflightConfirm 时带最新候选（含 findings）供前端展示
-	ConfigUpdated bool               // PreflightSynced=true 时为 true（前端据此刷新）
-	App          *store.App          // 同步后的最新 App（便于上层拼装 appView）
+	Outcome       PreflightOutcome
+	Candidate     *importer.Candidate // PreflightConfirm 时带最新候选（含 findings）供前端展示
+	ConfigUpdated bool                // PreflightSynced=true 时为 true（前端据此刷新）
+	App           *store.App          // 同步后的最新 App（便于上层拼装 appView）
 }
 
 // Preflight 在 Start/Restart 前执行脚本哈希与风险校验。

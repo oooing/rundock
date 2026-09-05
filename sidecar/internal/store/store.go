@@ -92,6 +92,61 @@ func (s *Store) ensureSchema() error {
 			return err
 		}
 	}
+
+	// v2 发布编排：旧的 003_releases 表需要补充 Tag 偏好和目标快照。
+	profileCols, err := s.tableColumns("release_profiles")
+	if err != nil {
+		return err
+	}
+	profileWanted := map[string]string{
+		"create_tag":   "INTEGER NOT NULL DEFAULT 1",
+		"version_mode": "TEXT NOT NULL DEFAULT 'auto'",
+	}
+	for col, def := range profileWanted {
+		if !profileCols[strings.ToUpper(col)] {
+			if _, err := s.db.Exec("ALTER TABLE release_profiles ADD COLUMN " + col + " " + def); err != nil {
+				return err
+			}
+		}
+	}
+
+	runCols, err := s.tableColumns("release_runs")
+	if err != nil {
+		return err
+	}
+	runWanted := map[string]string{
+		"create_tag":            "INTEGER NOT NULL DEFAULT 1",
+		"selected_targets_json": "TEXT NOT NULL DEFAULT '[]'",
+		"execution_plan_json":   "TEXT NOT NULL DEFAULT '[]'",
+	}
+	for col, def := range runWanted {
+		if !runCols[strings.ToUpper(col)] {
+			if _, err := s.db.Exec("ALTER TABLE release_runs ADD COLUMN " + col + " " + def); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 004_release_targets.sql 在开发期增加过断点续跑字段；已经创建过旧表的
+	// v2 数据库也必须补齐这些列，CREATE TABLE IF NOT EXISTS 不会修改现有表。
+	targetRunCols, err := s.tableColumns("release_target_runs")
+	if err != nil {
+		return err
+	}
+	targetRunWanted := map[string]string{
+		"check_done":   "INTEGER NOT NULL DEFAULT 0",
+		"build_done":   "INTEGER NOT NULL DEFAULT 0",
+		"package_done": "INTEGER NOT NULL DEFAULT 0",
+		"publish_done": "INTEGER NOT NULL DEFAULT 0",
+		"deploy_done":  "INTEGER NOT NULL DEFAULT 0",
+	}
+	for col, def := range targetRunWanted {
+		if !targetRunCols[strings.ToUpper(col)] {
+			if _, err := s.db.Exec("ALTER TABLE release_target_runs ADD COLUMN " + col + " " + def); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

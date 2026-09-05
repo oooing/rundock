@@ -8,7 +8,6 @@ dist/
 !dist/*.msi
 src-tauri/target/
 src-tauri/gen/
-src-tauri/Cargo.lock
 
 # Go
 sidecar/launcher-sidecar
@@ -25,6 +24,8 @@ vendor/
 sidecar-dev.log
 .gocache/
 sidecar/.launcher-data/
+sidecar/.tmp/
+/.tmp/
 *.log
 nul
 

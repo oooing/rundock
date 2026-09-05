@@ -21,6 +21,10 @@ type Collector struct {
 	// OnURL 每发现一个本地 URL 回调一次（launcher 收集 candidateURLs 做多端口发现）。
 	OnURL func(*Collector, string)
 
+	// OnLog 在日志完成 SQLite 持久化和广播后收到一份副本。它用于把需要
+	// 长期保留的错误/性能事件异步写入项目诊断档案；回调不得阻塞日志管道。
+	OnLog func(*Collector, string, string, string)
+
 	mu sync.Mutex
 }
 
@@ -105,5 +109,8 @@ func (c *Collector) writeAndBroadcast(stream, level, text string) {
 			Level:    level,
 			Text:     text,
 		})
+	}
+	if c.OnLog != nil {
+		c.OnLog(c, stream, level, text)
 	}
 }

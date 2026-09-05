@@ -20,19 +20,19 @@ import (
 
 // Candidate 导入候选结果，前端确认后据此创建 App。
 type Candidate struct {
-	Name        string             `json:"name"`        // 候选名称
-	EntryScript string             `json:"entryScript"` // 归一化后的入口路径
-	Cwd         string             `json:"cwd"`         // 工作目录
-	ProjectRoot string             `json:"projectRoot"` // 项目根
-	AdapterType string             `json:"adapterType"` // 适配器类型
-	Cmd         string             `json:"cmd"`         // prepare 后的可执行程序
-	Args        []string           `json:"args"`        // 参数
-	Env         map[string]string  `json:"env"`         // 候选环境变量
-	PortHints   []int              `json:"portHints"`   // 候选端口提示
-	ScriptHash  string             `json:"scriptHash"`  // 脚本哈希
-	Findings    []security.Finding `json:"findings"`    // 风险扫描结果
-	NeedsConfirm bool              `json:"needsConfirm"`// 是否需用户确认（危险或首次）
-	Markers     []string           `json:"markers"`     // 命中的项目标志文件（用于说明推断依据）
+	Name         string             `json:"name"`         // 候选名称
+	EntryScript  string             `json:"entryScript"`  // 归一化后的入口路径
+	Cwd          string             `json:"cwd"`          // 工作目录
+	ProjectRoot  string             `json:"projectRoot"`  // 项目根
+	AdapterType  string             `json:"adapterType"`  // 适配器类型
+	Cmd          string             `json:"cmd"`          // prepare 后的可执行程序
+	Args         []string           `json:"args"`         // 参数
+	Env          map[string]string  `json:"env"`          // 候选环境变量
+	PortHints    []int              `json:"portHints"`    // 候选端口提示
+	ScriptHash   string             `json:"scriptHash"`   // 脚本哈希
+	Findings     []security.Finding `json:"findings"`     // 风险扫描结果
+	NeedsConfirm bool               `json:"needsConfirm"` // 是否需用户确认（危险或首次）
+	Markers      []string           `json:"markers"`      // 命中的项目标志文件（用于说明推断依据）
 }
 
 // Import 对一个脚本路径做只读分析，返回候选配置。
@@ -92,19 +92,19 @@ func Import(scriptPath string, registry *adapter.Registry) (*Candidate, error) {
 	}
 
 	return &Candidate{
-		Name:        name,
-		EntryScript: abs,
-		Cwd:         cwd,
-		ProjectRoot: root,
-		AdapterType: adapterType,
-		Cmd:         po.Cmd,
-		Args:        po.Args,
-		Env:         po.Env,
-		PortHints:   portHints,
-		ScriptHash:  hash,
-		Findings:    findings,
+		Name:         name,
+		EntryScript:  abs,
+		Cwd:          cwd,
+		ProjectRoot:  root,
+		AdapterType:  adapterType,
+		Cmd:          po.Cmd,
+		Args:         po.Args,
+		Env:          po.Env,
+		PortHints:    portHints,
+		ScriptHash:   hash,
+		Findings:     findings,
 		NeedsConfirm: needsConfirm,
-		Markers:     markers,
+		Markers:      markers,
 	}, nil
 }
 

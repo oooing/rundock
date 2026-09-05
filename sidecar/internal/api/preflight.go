@@ -12,9 +12,9 @@ import (
 type preflightOutcome int
 
 const (
-	outcomeAbort   preflightOutcome = -1 // 已写响应（错误或 409），调用方应直接 return
-	outcomePass    preflightOutcome = 0  // 哈希未变或已用 confirmedScriptHash 通过，无需特殊提示
-	outcomeSynced  preflightOutcome = 1  // 自动同步了派生字段，前端需刷新并提示
+	outcomeAbort  preflightOutcome = -1 // 已写响应（错误或 409），调用方应直接 return
+	outcomePass   preflightOutcome = 0  // 哈希未变或已用 confirmedScriptHash 通过，无需特殊提示
+	outcomeSynced preflightOutcome = 1  // 自动同步了派生字段，前端需刷新并提示
 )
 
 // scriptConfirmationCode 是返回 409 时的错误码（前端据此识别"需要确认"）。

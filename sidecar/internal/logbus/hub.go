@@ -13,26 +13,26 @@ import (
 type WSType string
 
 const (
-	WSLog     WSType = "app:log"
-	WSEvent   WSType = "app:event"
-	WSStatus  WSType = "app:status"
-	WSURL     WSType = "app:url"
+	WSLog      WSType = "app:log"
+	WSEvent    WSType = "app:event"
+	WSStatus   WSType = "app:status"
+	WSURL      WSType = "app:url"
 	WSServices WSType = "app:services" // 多服务状态变更
-	WSHello   WSType = "hello"
+	WSHello    WSType = "hello"
 )
 
 // WSMessage 推给前端的 WebSocket 消息统一信封。
 type WSMessage struct {
-	Type     WSType             `json:"type"`
-	Time     string             `json:"time"`
-	App      string             `json:"appId,omitempty"`
-	Run      string             `json:"runId,omitempty"`
-	Log      *store.LogEntry    `json:"log,omitempty"`
-	Event    *Event             `json:"event,omitempty"`
-	Status   string             `json:"status,omitempty"`
-	Old      string             `json:"old,omitempty"`
-	URL      string             `json:"url,omitempty"`
-	Ports    []int              `json:"ports,omitempty"`
+	Type     WSType              `json:"type"`
+	Time     string              `json:"time"`
+	App      string              `json:"appId,omitempty"`
+	Run      string              `json:"runId,omitempty"`
+	Log      *store.LogEntry     `json:"log,omitempty"`
+	Event    *Event              `json:"event,omitempty"`
+	Status   string              `json:"status,omitempty"`
+	Old      string              `json:"old,omitempty"`
+	URL      string              `json:"url,omitempty"`
+	Ports    []int               `json:"ports,omitempty"`
 	Services []*store.AppService `json:"services,omitempty"` // 多服务列表
 }
 
@@ -64,9 +64,9 @@ func (c *Client) Close() {
 
 // Hub 维护所有 WebSocket 客户端，向它们广播消息。
 type Hub struct {
-	mu       sync.RWMutex
-	clients  map[int64]*Client
-	nextID   int64
+	mu      sync.RWMutex
+	clients map[int64]*Client
+	nextID  int64
 }
 
 func NewHub() *Hub {

@@ -76,11 +76,12 @@ fn sidecar_health_ok(port: &str) -> bool {
     if stream.write_all(req.as_bytes()).is_err() {
         return false;
     }
-    let mut buf = [0u8; 128];
-    match stream.read(&mut buf) {
-        Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n]).contains(" 200 "),
-        _ => false,
+    let mut response = Vec::with_capacity(512);
+    if stream.take(4096).read_to_end(&mut response).is_err() {
+        return false;
     }
+    let response = String::from_utf8_lossy(&response);
+    response.contains(" 200 ") && response.contains("release-v2")
 }
 
 fn sidecar_exe_path() -> Option<PathBuf> {

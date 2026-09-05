@@ -18,20 +18,20 @@ import (
 // ----- 请求/响应体 -----
 
 type createAppBody struct {
-	Name        string             `json:"name"`
-	EntryScript string             `json:"entryScript"`
-	Cwd         string             `json:"cwd"`
-	AdapterType string             `json:"adapterType"`
-	Cmd         string             `json:"cmd"`
-	Args        []string           `json:"args"`
-	Env         map[string]string  `json:"env"`
-	Tags        []string           `json:"tags"`
-	GroupID     *string            `json:"groupId"`
-	PortHints   []int              `json:"portHints"`
-	HealthURL   string             `json:"healthUrl"`
-	ScriptHash  string             `json:"scriptHash"`
-	SortOrder   int                `json:"sortOrder"`
-	CardColor   string             `json:"cardColor"`
+	Name        string            `json:"name"`
+	EntryScript string            `json:"entryScript"`
+	Cwd         string            `json:"cwd"`
+	AdapterType string            `json:"adapterType"`
+	Cmd         string            `json:"cmd"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	Tags        []string          `json:"tags"`
+	GroupID     *string           `json:"groupId"`
+	PortHints   []int             `json:"portHints"`
+	HealthURL   string            `json:"healthUrl"`
+	ScriptHash  string            `json:"scriptHash"`
+	SortOrder   int               `json:"sortOrder"`
+	CardColor   string            `json:"cardColor"`
 }
 
 type updateAppBody struct {
@@ -88,24 +88,24 @@ func applyUpdate(a *store.App, b *updateAppBody) {
 // appView 把 App 与其运行态拼成前端需要的视图。
 func appView(a *store.App, s *Server) map[string]any {
 	row := map[string]any{
-		"id":          a.ID,
-		"name":        a.Name,
-		"entryScript": a.EntryScript,
-		"cwd":         a.Cwd,
-		"adapterType": a.AdapterType,
-		"cmd":         a.Cmd,
-		"args":        a.Args,
-		"env":         a.Env,
-		"tags":        a.Tags,
-		"portHints":   a.PortHints,
-		"healthUrl":   a.HealthURL,
-		"scriptHash":  a.ScriptHash,
-		"confirmed":   a.Confirmed,
-		"createdAt":   a.CreatedAt,
+		"id":            a.ID,
+		"name":          a.Name,
+		"entryScript":   a.EntryScript,
+		"cwd":           a.Cwd,
+		"adapterType":   a.AdapterType,
+		"cmd":           a.Cmd,
+		"args":          a.Args,
+		"env":           a.Env,
+		"tags":          a.Tags,
+		"portHints":     a.PortHints,
+		"healthUrl":     a.HealthURL,
+		"scriptHash":    a.ScriptHash,
+		"confirmed":     a.Confirmed,
+		"createdAt":     a.CreatedAt,
 		"lastStartedAt": a.LastStartedAt,
-		"lastUrl":     a.LastURL,
-		"sortOrder":   a.SortOrder,
-		"cardColor":   a.CardColor,
+		"lastUrl":       a.LastURL,
+		"sortOrder":     a.SortOrder,
+		"cardColor":     a.CardColor,
 	}
 	if a.GroupID != nil {
 		row["groupId"] = *a.GroupID

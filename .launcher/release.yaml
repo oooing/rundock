@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "versionGroups": [
+    {
+      "id": "product",
+      "name": "Launcher 版本",
+      "currentVersion": "2.0.0",
+      "versionFiles": [
+        {
+          "path": "package.json",
+          "format": "json",
+          "jsonPointer": "/version"
+        },
+        {
+          "path": "package-lock.json",
+          "format": "npm-lock"
+        },
+        {
+          "path": "src-tauri/tauri.conf.json",
+          "format": "json",
+          "jsonPointer": "/version"
+        },
+        {
+          "path": "src-tauri/Cargo.toml",
+          "format": "cargo"
+        },
+        {
+          "path": "src-tauri/Cargo.lock",
+          "format": "cargo-lock"
+        }
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "id": "windows",
+      "name": "Windows 安装包",
+      "kind": "desktop",
+      "versionGroup": "product",
+      "workingDir": ".",
+      "runner": {
+        "type": "git-push",
+        "os": [
+          "windows"
+        ]
+      },
+      "enabled": true,
+      "detected": false,
+      "confidence": 1,
+      "steps": {
+        "publish": "tag-push"
+      },
+      "artifacts": [
+        "Launcher_X.Y.Z_x64-setup.exe",
+        "Launcher_X.Y.Z_x64_en-US.msi",
+        "SHA256SUMS.txt"
+      ]
+    }
+  ],
+  "automation": {
+    "provider": "github-actions",
+    "workflow": "release.yml",
+    "trigger": "tag",
+    "releaseBranch": "v2",
+    "publishesRelease": true
+  }
+}

@@ -7,6 +7,7 @@ const props = defineProps<{
   apps: AppView[]
   loading: boolean
   ready: boolean
+  connectionError?: string
 }>()
 
 const emit = defineEmits<{
@@ -16,6 +17,7 @@ const emit = defineEmits<{
   (e: 'log', id: string): void
   (e: 'open-url', id: string, url?: string): void
   (e: 'open-dir', id: string): void
+  (e: 'release', id: string): void
   (e: 'delete', id: string): void
   (e: 'import', path: string): void
   (e: 'rename', id: string, name: string): void
@@ -132,8 +134,8 @@ onBeforeUnmount(resetCardDrag)
     <!-- 未就绪 -->
     <div v-else-if="!ready" class="empty">
       <div class="empty-ico spin">⟳</div>
-      <h2>正在启动后台服务…</h2>
-      <p>sidecar 进程正在初始化，请稍候。</p>
+      <h2>{{ connectionError ? 'v2 后端未就绪' : '正在启动后台服务…' }}</h2>
+      <p>{{ connectionError || 'sidecar 进程正在初始化，请稍候。' }}</p>
     </div>
 
     <!-- 卡片网格 -->
@@ -153,6 +155,7 @@ onBeforeUnmount(resetCardDrag)
           @log="emit('log', $event)"
           @open-url="(id, url) => emit('open-url', id, url)"
           @open-dir="emit('open-dir', $event)"
+          @release="emit('release', $event)"
           @delete="emit('delete', $event)"
           @rename="(id, name) => emit('rename', id, name)"
           @set-role="(appId, serviceId, role) => emit('set-role', appId, serviceId, role)"

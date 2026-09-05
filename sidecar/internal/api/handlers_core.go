@@ -10,7 +10,11 @@ import (
 
 // GET /api/health -> 健康检查（前端探活 + 判断 sidecar 已就绪）。
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "ok",
+		"apiVersion":   "2",
+		"capabilities": "release-v2",
+	})
 }
 
 // POST /api/import { scriptPath } -> Candidate（候选配置 + 风险），只读不执行。
@@ -152,6 +156,18 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleOpenDir(w, r, id)
 	case "ports":
 		s.handlePorts(w, r, id)
+	case "release/preflight":
+		s.handleReleasePreflight(w, r, id)
+	case "release/notes-draft":
+		s.handleReleaseNotesDraft(w, r, id)
+	case "release-profile":
+		s.handleReleaseProfile(w, r, id)
+	case "release-config":
+		s.handleReleaseConfig(w, r, id, false)
+	case "release-config/scan":
+		s.handleReleaseConfig(w, r, id, true)
+	case "releases":
+		s.handleAppReleases(w, r, id)
 	default:
 		// services/{sid}/role 与 services/{sid}/reidentify:多段子路径
 		if sid, sub := pathTail("services/", rest); sid != "" {
@@ -205,6 +221,9 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request, id string
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if s.Diagnostics != nil {
+			s.Diagnostics.Invalidate(id)
+		}
 		writeJSON(w, http.StatusOK, appView(a, s))
 
 	case http.MethodDelete:
@@ -215,6 +234,9 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request, id string
 		if err := s.Store.DeleteApp(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if s.Diagnostics != nil {
+			s.Diagnostics.Invalidate(id)
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 

@@ -9,7 +9,8 @@ setlocal
 
 set "CODE_DIR=%~dp0.."
 set "SIDECAR_DIR=%CODE_DIR%\sidecar"
-set "SIDECAR_EXE=%SIDECAR_DIR%\launcher-sidecar-dev.exe"
+set "SIDECAR_TMP=%SIDECAR_DIR%\.tmp"
+set "SIDECAR_EXE=%SIDECAR_TMP%\launcher-sidecar-v2-dev.exe"
 set "LOG_FILE=%CODE_DIR%\sidecar-dev.log"
 set PORT=17654
 
@@ -25,6 +26,7 @@ echo GOROOT=%GOROOT%
 echo.
 
 echo [1/4] 编译后端 ^(增量^) ...
+if not exist "%SIDECAR_TMP%" mkdir "%SIDECAR_TMP%"
 cd /d "%SIDECAR_DIR%"
 go build -o "%SIDECAR_EXE%" ./cmd/launcher-sidecar
 if errorlevel 1 (
@@ -35,22 +37,38 @@ if errorlevel 1 (
 echo       完成。
 echo.
 
+REM 不能把旧 sidecar 的 health=ok 误判为 v2 已就绪，否则发布 API 会落到旧路由。
+curl -s "http://127.0.0.1:%PORT%/api/health" 2>nul | findstr /C:"release-v2" >nul
+if %errorlevel%==0 (
+    echo [错误] 端口 %PORT% 已有 v2 sidecar 运行。请先关闭旧的 Launcher-Backend 窗口后重试。
+    pause
+    exit /b 1
+)
+curl -s "http://127.0.0.1:%PORT%/api/health" >nul 2>nul
+if %errorlevel%==0 (
+    echo [错误] 端口 %PORT% 被旧版 sidecar 占用。请先关闭旧的 Launcher-Backend 窗口后重试。
+    pause
+    exit /b 1
+)
+
 echo [2/4] 启动后端 ^(独立窗口, 日志: sidecar-dev.log^) ...
 cd /d "%CODE_DIR%"
-start "Launcher-Backend" "%SIDECAR_EXE%" -port %PORT%
+start "Launcher-Backend-v2" "%SIDECAR_EXE%" -port %PORT%
 
 REM 等待后端就绪
 echo       等待后端就绪 ...
 set TRIES=0
 :WAIT
 timeout /t 1 /nobreak >nul
-curl -s "http://127.0.0.1:%PORT%/api/health" >nul 2>nul
+curl -s "http://127.0.0.1:%PORT%/api/health" 2>nul | findstr /C:"release-v2" >nul
 if %errorlevel%==0 goto READY
 set /a TRIES+=1
 if %TRIES% lss 25 goto WAIT
-echo [警告] 后端未就绪，请检查 Launcher-Backend 窗口
+echo [错误] v2 后端未就绪，请检查 Launcher-Backend-v2 窗口
+pause
+exit /b 1
 :READY
-echo       后端就绪。
+echo       v2 后端就绪。
 echo.
 
 echo [3/4] 8秒后打开浏览器 ...

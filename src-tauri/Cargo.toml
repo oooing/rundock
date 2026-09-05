@@ -1,6 +1,6 @@
 [package]
 name = "launcher-platform"
-version = "2.0.0"
+version = "2.0.1"
 description = "Windows AI 启动平台 — 拖入 start.bat 即可托管"
 authors = ["Launcher"]
 edition = "2021"

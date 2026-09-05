@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -46,23 +46,84 @@ function tag(dir, metadata, notes = '## 功能\n- 支持项目发布。') {
   const message = `Release v2.0.0\n\n${notes}\n\n<!-- launcher-release-plan:${encoded} -->`
   checked('git', ['-c', 'tag.gpgSign=false', 'tag', '-a', 'v2.0.0', '--cleanup=verbatim', '-m', message], dir)
 }
-function parse(dir, options = []) {
-  return exec(pwsh, ['-NoProfile', '-File', path.join(root, 'scripts/release-plan.ps1'),
-    '-TagName', 'v2.0.0', '-OutputDirectory', path.join(dir, 'plan'), ...options], dir)
+function parse(dir, options = [], { tagName = 'v2.0.0', scriptRoot = root } = {}) {
+  return exec(pwsh, ['-NoProfile', '-File', path.join(scriptRoot, 'scripts/release-plan.ps1'),
+    '-TagName', tagName, '-OutputDirectory', path.join(dir, 'plan'), ...options], dir)
 }
 function readPlan(dir) {
   return JSON.parse(readFileSync(path.join(dir, 'plan/release-plan.json'), 'utf8'))
 }
 
 test('Windows and source-only dry-runs cannot publish and need no real tag', () => {
+  // This smoke test validates the real checkout, so its tag must track the app version.
+  const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
   for (const sourceOnly of [false, true]) {
     const dir = fixture(`dry-${sourceOnly}`)
-    const result = parse(dir, ['-DryRun', '-ValidateLauncherVersion', ...(sourceOnly ? ['-SourceOnly'] : [])])
+    const result = parse(dir, ['-DryRun', '-ValidateLauncherVersion', ...(sourceOnly ? ['-SourceOnly'] : [])],
+      { tagName: `v${version}` })
     assert.equal(result.status, 0, result.output)
+    assert.equal(readPlan(dir).tagName, `v${version}`)
+    assert.equal(readPlan(dir).targetVersion, version)
     assert.equal(readPlan(dir).publishesRelease, false)
     assert.equal(readPlan(dir).pushRemote, false)
     assert.equal(readPlan(dir).buildWindows, !sourceOnly)
     assert.equal(checked('git', ['tag', '--list'], dir), '')
+  }
+})
+
+function versionFixture(name, version, overrides = {}) {
+  const dir = fixture(name)
+  const versions = {
+    'package.json': version,
+    'package-lock.json': version,
+    'package-lock.json#packages-root': version,
+    'src-tauri/tauri.conf.json': version,
+    'src-tauri/Cargo.toml': version,
+    ...overrides,
+  }
+  mkdirSync(path.join(dir, 'scripts'))
+  mkdirSync(path.join(dir, 'src-tauri'))
+  // The production script resolves version files relative to itself. Copy it into
+  // the fixture so regression cases never rewrite the user's working checkout.
+  copyFileSync(path.join(root, 'scripts/release-plan.ps1'), path.join(dir, 'scripts/release-plan.ps1'))
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: versions['package.json'] }))
+  writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({
+    version: versions['package-lock.json'],
+    packages: { '': { version: versions['package-lock.json#packages-root'] } },
+  }))
+  writeFileSync(path.join(dir, 'src-tauri/tauri.conf.json'), JSON.stringify({ version: versions['src-tauri/tauri.conf.json'] }))
+  writeFileSync(path.join(dir, 'src-tauri/Cargo.toml'), `[package]\nname = "release-test"\nversion = "${versions['src-tauri/Cargo.toml']}"\n`)
+  copyFileSync(path.join(root, 'src-tauri/Cargo.lock'), path.join(dir, 'src-tauri/Cargo.lock'))
+  return dir
+}
+
+test('version validation accepts matching initial, patch, minor and major versions', async t => {
+  for (const version of ['2.0.0', '2.0.1', '2.7.13', '3.0.0']) {
+    await t.test(version, () => {
+      const dir = versionFixture(`version-${version}`, version)
+      const result = parse(dir, ['-DryRun', '-ValidateLauncherVersion'],
+        { tagName: `v${version}`, scriptRoot: dir })
+      assert.equal(result.status, 0, result.output)
+      assert.equal(readPlan(dir).targetVersion, version)
+      assert.equal(readPlan(dir).publishesRelease, false)
+      assert.equal(checked('git', ['tag', '--list'], dir), '')
+    })
+  }
+})
+
+test('version validation still rejects each mismatched version field', async t => {
+  const fields = ['package.json', 'package-lock.json', 'package-lock.json#packages-root',
+    'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml']
+  for (const [index, field] of fields.entries()) {
+    await t.test(field, () => {
+      const dir = versionFixture(`version-mismatch-${index}`, '2.0.1', { [field]: '2.0.0' })
+      const result = parse(dir, ['-DryRun', '-ValidateLauncherVersion'],
+        { tagName: 'v2.0.1', scriptRoot: dir })
+      assert.notEqual(result.status, 0, result.output)
+      assert.match(result.output, /release_plan_invalid/)
+      assert.ok(result.output.includes(`${field}=2.0.0`), result.output)
+      assert.equal(existsSync(path.join(dir, 'plan/release-plan.json')), false)
+    })
   }
 })
 

@@ -1,7 +1,7 @@
 {
   "name": "launcher-platform",
   "private": true,
-  "version": "2.0.1",
+  "version": "2.0.2",
   "type": "module",
   "description": "Windows AI 启动平台 — 拖入 start.bat 即可托管、自动识别 URL、无窗口管理",
   "scripts": {

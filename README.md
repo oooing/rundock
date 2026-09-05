@@ -4,7 +4,7 @@
   <a href="./docs/media/hero.zh-CN.png"><img src="./docs/media/hero.zh-CN.webp" alt="Launcher — 项目再多，也井然有序。启停 · 日志 · Git 发布" width="720" /></a>
 </p>
 
-<p align="center"><strong>Windows 项目管理工具，把脚本启停、运行日志和 Git 发布放在一起。</strong></p>
+<p align="center"><strong>Windows 项目启动器，让 AI 小工具和开发项目像应用一样好管理。</strong></p>
 
 <p align="center">
   <a href="https://github.com/oooing/projects-start-manager/releases"><img src="./docs/media/download.zh-CN.svg" alt="下载 Windows 版" width="208" height="46" /></a>
@@ -15,16 +15,16 @@
 
 ## 告别散落的脚本和终端
 
-拖入启动脚本，让每个项目都有自己的卡片。启停、日志、服务地址，不用来回找。
+AI 让写工具越来越容易，但很多工具仍靠 `start.bat`、`run.bat` 启动，没有安装包和快捷入口。
+
+- **AI 写的小工具、临时脚本**：不用制作安装包，拖入启动脚本，就有固定的项目卡片，一点即开。
+- **同时运行多个工具**：脚本后台运行，不让难以区分的黑窗口堆满桌面；每个项目的日志单独查看。
+- **自己维护多个项目**：按组管理，一键启停与重启，运行状态、服务地址和 Git 发布集中管理。
 
 <p align="center">
   <a href="./docs/media/dashboard.png"><img src="./docs/media/dashboard.webp" alt="Launcher 真实界面：六个示例项目按组管理，卡片集中展示运行状态、端口及启停操作" width="720" /></a>
 </p>
 <p align="center"><sub>真实界面 · 示例数据 · 点击查看大图</sub></p>
-
-| 一键启停 | 状态可见 | 发布有序 |
-| :--- | :--- | :--- |
-| 启动、停止、重启，集中操作。 | 实时日志、端口、服务地址，一眼找到。 | 选文件、定版本、写说明，按配置发布。 |
 
 <br />
 

@@ -4,7 +4,7 @@
   <a href="./docs/media/hero.en.png"><img src="./docs/media/hero.en.webp" alt="Launcher — Every project. Under control. Launch · Logs · Git releases" width="720" /></a>
 </p>
 
-<p align="center"><strong>A Windows project manager for script control, live logs, and Git releases.</strong></p>
+<p align="center"><strong>A Windows launcher that makes AI-built tools and dev projects easier to manage.</strong></p>
 
 <p align="center">
   <a href="https://github.com/oooing/projects-start-manager/releases"><img src="./docs/media/download.en.svg" alt="Download for Windows" width="236" height="46" /></a>
@@ -15,16 +15,16 @@
 
 ## Less terminal juggling. More control.
 
-Drop in a startup script. Get a project card. Find controls, logs, and service URLs in one place.
+AI makes building tools easier. But many still start with `start.bat` or `run.bat`—no installer, no convenient shortcut.
+
+- **AI-built tools and one-off scripts**: no installer to build. Drop in a startup script and get a project card you can launch with a click.
+- **Several tools running at once**: scripts run in the background without a desktop full of look-alike console windows. Read each project's logs separately.
+- **Multiple projects to maintain**: organize them into groups, start or restart with a click, and manage status, service URLs, and Git releases in one place.
 
 <p align="center">
   <a href="./docs/media/dashboard.png"><img src="./docs/media/dashboard.webp" alt="Actual Launcher dashboard showing six demo projects, grouped cards, process status, ports, and launch controls" width="720" /></a>
 </p>
 <p align="center"><sub>Actual interface · Demo data · UI shown in Chinese · Click to enlarge</sub></p>
-
-| One-click control | Instant visibility | Organized releases |
-| :--- | :--- | :--- |
-| Start, stop, and restart from one place. | Live logs, ports, and service URLs at a glance. | Select files, set versions, and review notes. |
 
 <br />
 

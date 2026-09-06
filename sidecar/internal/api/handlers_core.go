@@ -144,6 +144,10 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 	switch rest {
 	case "start":
 		s.handleStart(w, r, id)
+	case "startup-issue":
+		s.handleStartupIssue(w, r, id)
+	case "recover-ports":
+		s.handleRecoverPorts(w, r, id)
 	case "stop":
 		s.handleStop(w, r, id)
 	case "restart":
@@ -205,6 +209,24 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request, id string
 		if err != nil || a == nil {
 			writeError(w, http.StatusNotFound, "app not found")
 			return
+		}
+		if body.GroupID != nil && *body.GroupID != "" {
+			groups, err := s.Store.ListGroups()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			found := false
+			for _, group := range groups {
+				if group.ID == *body.GroupID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				writeError(w, http.StatusBadRequest, "group not found")
+				return
+			}
 		}
 		applyUpdate(a, &body)
 		// 若脚本路径或内容变了，重新计算哈希并要求重新确认

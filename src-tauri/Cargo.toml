@@ -1,6 +1,6 @@
 [package]
 name = "launcher-platform"
-version = "2.0.3"
+version = "2.0.4"
 description = "RunDock 启动坞 — AI 小工具与开发项目的 Windows 启动器"
 authors = ["Launcher"]
 edition = "2021"

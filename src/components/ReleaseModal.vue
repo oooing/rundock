@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/http'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
@@ -35,12 +37,12 @@ type ProductPlatform = {
   configured: boolean
 }
 
-const phaseOptions: Array<{ key: ExecutionPhase; label: string; hint: string; risky: boolean }> = [
-  { key: 'build', label: '构建', hint: '生成可运行代码', risky: false },
-  { key: 'package', label: '打包', hint: '生成安装包或压缩包', risky: false },
-  { key: 'publish', label: '上传', hint: '上传到发布平台', risky: true },
-  { key: 'deploy', label: '部署上线', hint: '让线上用户看到新版', risky: true },
-]
+const phaseOptions = computed<Array<{ key: ExecutionPhase; label: string; hint: string; risky: boolean }>>(() => ([
+  { key: 'build', label: tr("构建"), hint: tr("生成可运行代码"), risky: false },
+  { key: 'package', label: tr("打包"), hint: tr("生成安装包或压缩包"), risky: false },
+  { key: 'publish', label: tr("上传"), hint: tr("上传到发布平台"), risky: true },
+  { key: 'deploy', label: tr("部署上线"), hint: tr("让线上用户看到新版"), risky: true },
+]))
 
 const loading = ref(true)
 const checkingRemote = ref(false)
@@ -166,7 +168,7 @@ const plannedVersions = computed<PlannedVersion[]>(() => {
   if (gitOnly.value || !selectedVersionGroups.value.length) {
     const suggestedVersion = pf.suggestedVersion || '0.1.0'
     const target = versionMode.value === 'auto' ? suggestedVersion : (versionInputs.value.repository || suggestedVersion)
-    return [{ versionGroupId: 'repository', versionGroupName: '项目版本', currentVersion: pf.latestTag || '未创建 Tag', suggestedVersion, targetVersion: target, tagName: `v${target}` }]
+    return [{ versionGroupId: 'repository', versionGroupName: tr("项目版本"), currentVersion: pf.latestTag || tr("未创建 Tag"), suggestedVersion, targetVersion: target, tagName: `v${target}` }]
   }
   const namespaced = (releaseConfig.value?.versionGroups.length || 0) > 1
   return selectedVersionGroups.value.map((group) => {
@@ -182,7 +184,7 @@ const plannedVersions = computed<PlannedVersion[]>(() => {
     return {
       versionGroupId: group.id,
       versionGroupName: versionGroupDisplayName(group),
-      currentVersion: latestGroupVersion || values.find((value) => /^(?:v)?\d+\.\d+\.\d+$/.test(value))?.replace(/^v/, '') || '未识别',
+      currentVersion: latestGroupVersion || values.find((value) => /^(?:v)?\d+\.\d+\.\d+$/.test(value))?.replace(/^v/, '') || tr("未识别"),
       suggestedVersion,
       targetVersion: target,
       tagName: namespaced ? `${prefix}/v${target}` : `v${target}`,
@@ -245,7 +247,7 @@ const externalRetryRisk = computed(() => !!activeRun.value && (
 ))
 const hasOnlineAction = computed(() => selectedTargets.value.some((target) => target.publish || target.deploy))
 const hasExternalAction = computed(() => hasOnlineAction.value || willTriggerAutomation.value)
-const remoteDestination = computed(() => /github\.com/i.test(preflight.value?.remoteUrl || '') ? 'GitHub' : '远程仓库')
+const remoteDestination = computed(() => /github\.com/i.test(preflight.value?.remoteUrl || '') ? 'GitHub' : tr("远程仓库"))
 const automationPageUrl = computed(() => runAutomation.value?.url
   || activeRun.value?.automationUrl
   || githubActionsUrl(preflight.value?.remoteUrl || '', configuredAutomation.value?.workflow || ''))
@@ -253,55 +255,55 @@ const automationHandedOff = computed(() => !!activeRun.value?.pushRemote
   && !!activeRun.value?.createTag
   && !!(runAutomation.value || activeRun.value.automationUrl || configuredAutomation.value))
 const activeRunStatusLabel = computed(() => {
-  if (activeRun.value?.status === 'failed') return '失败'
-  if (activeRun.value?.status !== 'succeeded') return '进行中'
-  return automationHandedOff.value ? '已提交 GitHub' : '成功'
+  if (activeRun.value?.status === 'failed') return tr("失败")
+  if (activeRun.value?.status !== 'succeeded') return tr("进行中")
+  return automationHandedOff.value ? tr("已提交 GitHub") : tr("成功")
 })
 const activeStageLabel = computed(() => {
   if (!activeRun.value) return ''
-  if (activeRun.value.stage === 'completed' && automationHandedOff.value) return '本地发布完成，等待 GitHub 自动处理'
-  return stageLabel[activeRun.value.stage] || activeRun.value.stage
+  if (activeRun.value.stage === 'completed' && automationHandedOff.value) return tr("本地发布完成，等待 GitHub 自动处理")
+  return stageLabel.value[activeRun.value.stage] || activeRun.value.stage
 })
 const cloudExecutionNotice = computed(() => {
   if (activeRun.value ? !automationHandedOff.value : !willTriggerAutomation.value) return null
   const selections = activeRun.value?.selectedTargets || selectedTargets.value
   if (!selections.length) return {
-    title: 'GitHub Actions 发布源码版本',
-    text: '代码和 Tag 上传后，由 GitHub Actions 创建源码版本，不生成安装包。',
+    title: tr("GitHub Actions 发布源码版本"),
+    text: tr("代码和 Tag 上传后，由 GitHub Actions 创建源码版本，不生成安装包。"),
   }
   const allCloud = selections.every((selection) => configuredTargets.value
     .find((target) => target.id === selection.targetId)?.runner.type.trim().toLowerCase() === 'git-push')
   return {
-    title: 'GitHub Actions 云端构建与发布',
+    title: tr("GitHub Actions 云端构建与发布"),
     text: allCloud
-      ? '本机不构建、不打包。构建、打包和发布由 GitHub Actions 按项目配置执行。'
-      : '云端目标由 GitHub Actions 构建、打包并按项目配置发布；本地目标仍按配置执行。',
+      ? tr("本机不构建、不打包。构建、打包和发布由 GitHub Actions 按项目配置执行。")
+      : tr("云端目标由 GitHub Actions 构建、打包并按项目配置发布；本地目标仍按配置执行。"),
   }
 })
 const completionTitle = computed(() => activeRun.value?.pushRemote
-  ? `已提交到 ${automationHandedOff.value ? 'GitHub' : remoteDestination.value}`
-  : '本地操作已完成')
+  ? tr("已提交到 {0}", [automationHandedOff.value ? 'GitHub' : remoteDestination.value])
+  : tr("本地操作已完成"))
 const completionDescription = computed(() => {
-  if (!activeRun.value?.pushRemote) return '提交已保存在本机，尚未上传到远程仓库。'
-  return activeRun.value.createTag ? '代码和版本 Tag 已上传。' : '代码已上传。'
+  if (!activeRun.value?.pushRemote) return tr("提交已保存在本机，尚未上传到远程仓库。")
+  return activeRun.value.createTag ? tr("代码和版本 Tag 已上传。") : tr("代码已上传。")
 })
 const confirmDialogTitle = computed(() => {
-  if (confirmAction.value === 'regenerate-notes') return '重新生成更新说明？'
-  return '确认重试远端操作？'
+  if (confirmAction.value === 'regenerate-notes') return tr("重新生成更新说明？")
+  return tr("确认重试远端操作？")
 })
 const confirmDialogMessage = computed(() => {
-  if (confirmAction.value === 'regenerate-notes') return '重新生成会覆盖你手动修改的内容。'
-  return '请先确认远端没有成功；继续可能造成重复上传或重复上线。'
+  if (confirmAction.value === 'regenerate-notes') return tr("重新生成会覆盖你手动修改的内容。")
+  return tr("请先确认远端没有成功；继续可能造成重复上传或重复上线。")
 })
-const confirmDialogButton = computed(() => confirmAction.value === 'regenerate-notes' ? '覆盖并生成' : '继续重试')
+const confirmDialogButton = computed(() => confirmAction.value === 'regenerate-notes' ? tr("覆盖并生成") : tr("继续重试"))
 const configConfidence = computed(() => Math.round((releaseConfig.value?.confidence || 0) * 100))
-const standardPlatforms: Array<{ id: Exclude<ProductPlatformId, `custom:${string}`>; name: string; icon: string; description: string }> = [
-  { id: 'web', name: 'Web 前端', icon: '🌐', description: '网页界面' },
-  { id: 'pc', name: 'PC', icon: '🖥️', description: 'Windows 桌面端' },
-  { id: 'android', name: 'Android', icon: '🤖', description: 'Android 应用' },
-  { id: 'mac', name: 'Mac', icon: '🍎', description: 'macOS 桌面端' },
-  { id: 'server', name: '后端服务', icon: '🗄️', description: 'API / 后台任务' },
-]
+const standardPlatforms = computed<Array<{ id: Exclude<ProductPlatformId, `custom:${string}`>; name: string; icon: string; description: string }>>(() => ([
+  { id: 'web', name: tr("Web 前端"), icon: '🌐', description: tr("网页界面") },
+  { id: 'pc', name: 'PC', icon: '🖥️', description: tr("Windows 桌面端") },
+  { id: 'android', name: 'Android', icon: '🤖', description: tr("Android 应用") },
+  { id: 'mac', name: 'Mac', icon: '🍎', description: tr("macOS 桌面端") },
+  { id: 'server', name: tr("后端服务"), icon: '🗄️', description: tr("API / 后台任务") },
+]))
 
 function platformIdForTarget(target: ReleaseTarget): ProductPlatformId | null {
   const kind = target.kind.trim().toLowerCase()
@@ -331,16 +333,16 @@ function versionGroupDisplayName(group: ReleaseVersionGroup) {
     .filter((target) => target.versionGroup === group.id)
     .map(platformIdForTarget)
     .filter((id): id is ProductPlatformId => !!id))
-  const platformNames = standardPlatforms.filter((platform) => platformIds.has(platform.id)).map((platform) => platform.name)
+  const platformNames = standardPlatforms.value.filter((platform) => platformIds.has(platform.id)).map((platform) => platform.name)
   for (const id of platformIds) if (id.startsWith('custom:')) platformNames.push(id.replace(/^custom:/, ''))
-  if (platformNames.length > 1) return `${platformNames.join(' / ')}共用版本`
-  if (platformNames.length === 1) return `${platformNames[0]}版本`
-  return group.name || '项目版本'
+  if (platformNames.length > 1) return tr("{0}共用版本", [platformNames.join(' / ')])
+  if (platformNames.length === 1) return tr("{0}版本", [platformNames[0]])
+  return group.name || tr("项目版本")
 }
 
 const productPlatforms = computed<ProductPlatform[]>(() => {
   const grouped = new Map<ProductPlatformId, ReleaseTarget[]>()
-  for (const platform of standardPlatforms) grouped.set(platform.id, [])
+  for (const platform of standardPlatforms.value) grouped.set(platform.id, [])
   for (const target of configuredTargets.value) {
     const platformId = platformIdForTarget(target)
     if (!platformId) continue
@@ -348,7 +350,7 @@ const productPlatforms = computed<ProductPlatform[]>(() => {
     targets.push(target)
     grouped.set(platformId, targets)
   }
-  const cards: ProductPlatform[] = standardPlatforms.map((platform) => ({
+  const cards: ProductPlatform[] = standardPlatforms.value.map((platform) => ({
     ...platform,
     targets: grouped.get(platform.id) || [],
     configured: !!grouped.get(platform.id)?.length,
@@ -357,13 +359,13 @@ const productPlatforms = computed<ProductPlatform[]>(() => {
     if (!id.startsWith('custom:')) continue
     const target = targets[0]
     const isDesktop = target?.kind.trim().toLowerCase() === 'desktop'
-    cards.push({ id, name: isDesktop ? '桌面端' : target?.name || '自定义目标', icon: isDesktop ? '💻' : '🧩', description: '自定义发布目标', targets, configured: true })
+    cards.push({ id, name: isDesktop ? tr("桌面端") : target?.name || tr("自定义目标"), icon: isDesktop ? '💻' : '🧩', description: tr("自定义发布目标"), targets, configured: true })
   }
   return cards
 })
 
 function configuredActions(target: ReleaseTarget) {
-  return phaseOptions.filter((phase) => !!target.steps[phase.key])
+  return phaseOptions.value.filter((phase) => !!target.steps[phase.key])
 }
 
 function platformRunnableTargets(platform: ProductPlatform) {
@@ -400,8 +402,8 @@ function platformSelectionCount(platform: ProductPlatform) {
 
 function platformUnavailableReason(platform: ProductPlatform) {
   if (!platform.configured) {
-    if (platform.id === 'mac') return currentOS() === 'darwin' ? '未配置 Mac 构建' : '未配置，且需在 macOS 电脑运行'
-    return '未识别到此平台'
+    if (platform.id === 'mac') return currentOS() === 'darwin' ? tr("未配置 Mac 构建") : tr("未配置，且需在 macOS 电脑运行")
+    return tr("未识别到此平台")
   }
   const runnable = platformRunnableTargets(platform)
   if (runnable.length) return ''
@@ -410,16 +412,16 @@ function platformUnavailableReason(platform: ProductPlatform) {
       const systems = target.runner.os.map((value) => value.trim().toLowerCase())
       return target.runner.type.trim().toLowerCase() === 'local' && systems.includes('darwin') && !systems.includes('any')
     })
-    if (needsMac && currentOS() !== 'darwin') return '需在 macOS 电脑运行'
+    if (needsMac && currentOS() !== 'darwin') return tr("需在 macOS 电脑运行")
   }
   const environmentReason = platform.targets.map(targetUnavailableReason).find(Boolean)
   if (environmentReason) return environmentReason
-  return '尚未配置可执行的构建或发布动作'
+  return tr("尚未配置可执行的构建或发布动作")
 }
 
 function platformActionLabels(platform: ProductPlatform, selectedOnly = false) {
   const targetIds = new Set(platform.targets.map((target) => target.id))
-  return phaseOptions
+  return phaseOptions.value
     .filter((phase) => selectedOnly
       ? selectedTargets.value.some((target) => targetIds.has(target.targetId) && target[phase.key])
       : platformRunnableTargets(platform).some((target) => !!target.steps[phase.key]))
@@ -433,15 +435,15 @@ function platformCardDetail(platform: ProductPlatform) {
 
   if (platformPartiallySelected(platform)) {
     const count = platformSelectionCount(platform)
-    return `${platform.description} · 已选 ${count.selected}/${count.runnable}，点击全选`
+    return tr("{0} · 已选 {1}/{2}，点击全选", [platform.description, count.selected, count.runnable])
   }
 
   const actionLabels = platformActionLabels(platform, platformHasSelection(platform))
-    .filter((label) => label !== '构建')
-  if (platform.targets.some(isTagPushTarget)) parts.push('Tag 上传后由 GitHub 自动构建')
-  else if (platform.targets.some((target) => target.runner.type.trim().toLowerCase() === 'git-push')) parts.push('推送后云端构建')
+    .filter((label) => label !== tr("构建"))
+  if (platform.targets.some(isTagPushTarget)) parts.push(tr("Tag 上传后由 GitHub 自动构建"))
+  else if (platform.targets.some((target) => target.runner.type.trim().toLowerCase() === 'git-push')) parts.push(tr("推送后云端构建"))
   else if (actionLabels.length) parts.push(actionLabels.join('、'))
-  if (platformPartiallyAvailable(platform)) parts.push('部分步骤不可用')
+  if (platformPartiallyAvailable(platform)) parts.push(tr("部分步骤不可用"))
   return parts.join(' · ')
 }
 
@@ -452,7 +454,7 @@ function togglePlatform(platform: ProductPlatform, checked: boolean) {
     if (!choice) continue
     choice.selected = checked
     if (checked) {
-      for (const phase of phaseOptions) choice[phase.key] = !!target.steps[phase.key]
+      for (const phase of phaseOptions.value) choice[phase.key] = !!target.steps[phase.key]
     }
   }
 }
@@ -463,52 +465,52 @@ function toggleGitOnly(checked: boolean) {
   for (const choice of Object.values(targetChoices.value)) choice.selected = false
 }
 
-const stageLabel: Record<string, string> = {
-  preparing: '准备发布', versioning: '更新版本', checking: '发布前检查', committing: '创建提交',
-  building_targets: '检查、构建和打包', publishing_targets: '上传和部署',
-  target_check: '检查目标', target_build: '构建目标', target_package: '打包目标',
-  target_publish: '上传目标', target_deploy: '部署目标', tagging: '创建 Tag',
-  pushing_branch: '推送分支', pushing_tag: '推送 Tag', completed: '发布完成',
-}
-const targetStageLabel: Record<string, string> = {
-  waiting: '等待执行', checking: '检查', check: '检查', build: '构建', package: '打包',
-  ready_to_publish: '等待上传或部署', waiting_publish: '等待上传或部署', publish: '上传',
-  deploy: '部署', artifacts: '核对产物', triggered: '已触发云端流程', remote_pending: '等待云端处理',
-  cloud_pending: '已交给 GitHub', completed: '已完成',
-}
+const stageLabel = computed<Record<string, string>>(() => ({
+  preparing: tr("准备发布"), versioning: tr("更新版本"), checking: tr("发布前检查"), committing: tr("创建提交"),
+  building_targets: tr("检查、构建和打包"), publishing_targets: tr("上传和部署"),
+  target_check: tr("检查目标"), target_build: tr("构建目标"), target_package: tr("打包目标"),
+  target_publish: tr("上传目标"), target_deploy: tr("部署目标"), tagging: tr("创建 Tag"),
+  pushing_branch: tr("推送分支"), pushing_tag: tr("推送 Tag"), completed: tr("发布完成"),
+}))
+const targetStageLabel = computed<Record<string, string>>(() => ({
+  waiting: tr("等待执行"), checking: tr("检查"), check: tr("检查"), build: tr("构建"), package: tr("打包"),
+  ready_to_publish: tr("等待上传或部署"), waiting_publish: tr("等待上传或部署"), publish: tr("上传"),
+  deploy: tr("部署"), artifacts: tr("核对产物"), triggered: tr("已触发云端流程"), remote_pending: tr("等待云端处理"),
+  cloud_pending: tr("已交给 GitHub"), completed: tr("已完成"),
+}))
 
 const summaryLines = computed(() => {
   const lines: string[] = []
   if (createTag.value) {
-    for (const version of plannedVersions.value) lines.push(`${version.versionGroupName}：${version.targetVersion || '待填写'}（${version.tagName || '待生成 Tag'}）`)
+    for (const version of plannedVersions.value) lines.push(tr("{0}：{1}（{2}）", [version.versionGroupName, version.targetVersion || tr("待填写"), version.tagName || tr("待生成 Tag")]))
   }
-  else lines.push('不创建版本 Tag')
+  else lines.push(tr("不创建版本 Tag"))
   const fileCount = selectedPaths.value.length
-  if (!fileCount && !createTag.value) lines.push(pushRemote.value ? '上传当前分支' : '不创建新提交')
-  else if (!fileCount) lines.push(pushRemote.value ? '创建并上传 Tag' : '创建本地 Tag')
+  if (!fileCount && !createTag.value) lines.push(pushRemote.value ? tr("上传当前分支") : tr("不创建新提交"))
+  else if (!fileCount) lines.push(pushRemote.value ? tr("创建并上传 Tag") : tr("创建本地 Tag"))
   if (pushRemote.value) {
-    lines.push(`提交后上传到${remoteDestination.value}`)
-    if (preflight.value?.aheadCount) lines.push(`同时上传本机已有的 ${preflight.value.aheadCount} 次提交`)
+    lines.push(tr("提交后上传到{0}", [remoteDestination.value]))
+    if (preflight.value?.aheadCount) lines.push(tr("同时上传本机已有的 {0} 次提交", [preflight.value.aheadCount]))
   } else {
-    lines.push('只保存在本机，不上传远程仓库')
+    lines.push(tr("只保存在本机，不上传远程仓库"))
   }
   if (gitOnly.value) {
-    lines.push('不构建平台')
+    lines.push(tr("不构建平台"))
   } else {
     for (const platform of productPlatforms.value.filter(platformHasSelection)) {
-      const partial = platformPartiallySelected(platform) ? '（部分目标）' : ''
+      const partial = platformPartiallySelected(platform) ? tr("（部分目标）") : ''
       const cloudBuild = platform.targets.some((target) => isTagPushTarget(target) && targetChoices.value[target.id]?.selected)
-      const actions = platformActionLabels(platform, true).filter((label) => !cloudBuild || label !== '上传')
-      if (cloudBuild) actions.unshift('交给 GitHub 自动构建')
-      lines.push(`${platform.name}${partial}：${actions.join('、') || '尚未选择执行动作'}`)
+      const actions = platformActionLabels(platform, true).filter((label) => !cloudBuild || label !== tr("上传"))
+      if (cloudBuild) actions.unshift(tr("交给 GitHub 自动构建"))
+      lines.push(tr("{0}{1}：{2}", [platform.name, partial, actions.join('、') || tr("尚未选择执行动作")]))
     }
     const advancedTargets = chosenTargets.value.filter(({ target }) => platformIdForTarget(target) === null)
-    if (advancedTargets.length) lines.push(`高级目标：${advancedTargets.map(({ target }) => target.name).join('、')}`)
+    if (advancedTargets.length) lines.push(tr("高级目标：{0}", [advancedTargets.map(({ target }) => target.name).join('、')]))
   }
   if (willTriggerAutomation.value) {
     lines.push(willBuildTargetsInAutomation.value
-      ? 'Tag 上传后交给 GitHub 自动构建；完成后可在 GitHub 查看结果'
-      : 'Tag 上传后创建源码 Release，不生成安装包')
+      ? tr("Tag 上传后交给 GitHub 自动构建；完成后可在 GitHub 查看结果")
+      : tr("Tag 上传后创建源码 Release，不生成安装包"))
   }
   return lines
 })
@@ -575,7 +577,7 @@ function normalizeConfig(raw: ReleaseConfig): ReleaseConfig {
     confidence: Number.isFinite(raw.confidence) ? raw.confidence : 0,
     versionGroups: (raw.versionGroups || []).map((group) => ({
       id: group.id || 'product',
-      name: group.name || group.id || '统一版本',
+      name: group.name || group.id || tr("统一版本"),
       ...(group.tagPrefix ? { tagPrefix: group.tagPrefix } : {}),
       ...(group.currentVersion ? { currentVersion: group.currentVersion } : {}),
       versionFiles: (group.versionFiles || []).map((file) => ({
@@ -586,7 +588,7 @@ function normalizeConfig(raw: ReleaseConfig): ReleaseConfig {
     })),
     targets: (raw.targets || []).map((target) => ({
       id: target.id || `target-${Date.now()}`,
-      name: target.name || target.id || '未命名目标',
+      name: target.name || target.id || tr("未命名目标"),
       kind: target.kind || 'custom',
       versionGroup: target.versionGroup || raw.versionGroups?.[0]?.id || 'product',
       workingDir: target.workingDir || '.',
@@ -625,20 +627,20 @@ function osLabel(os: string) {
 }
 
 function targetUnavailableReason(target: ReleaseTarget) {
-  if (!target.enabled) return '此目标已在配置中停用'
+  if (!target.enabled) return tr("此目标已在配置中停用")
   const runnerType = target.runner.type.trim().toLowerCase()
   if (runnerType === 'git-push') return ''
-  if (runnerType !== 'local') return '当前版本不支持此执行方式'
+  if (runnerType !== 'local') return tr("当前版本不支持此执行方式")
   if (!target.runner.os.length) return ''
   const supported = target.runner.os.map((value) => value.trim().toLowerCase())
   if (supported.includes('any') || supported.includes(currentOS())) return ''
-  return `需要 ${target.runner.os.join(' / ')} 环境，当前电脑不能执行`
+  return tr("需要 {0} 环境，当前电脑不能执行", [target.runner.os.join(' / ')])
 }
 
-function targetPhaseHint(target: ReleaseTarget, phase: (typeof phaseOptions)[number]) {
-  if (isTagPushTarget(target) && phase.key === 'publish') return 'Tag 上传后由 GitHub 自动构建'
-  if (target.runner.type.trim().toLowerCase() === 'git-push' && phase.key === 'publish') return '推送后触发云端构建'
-  return target.steps[phase.key] ? phase.hint : '未配置'
+function targetPhaseHint(target: ReleaseTarget, phase: (typeof phaseOptions.value)[number]) {
+  if (isTagPushTarget(target) && phase.key === 'publish') return tr("Tag 上传后由 GitHub 自动构建")
+  if (target.runner.type.trim().toLowerCase() === 'git-push' && phase.key === 'publish') return tr("推送后触发云端构建")
+  return target.steps[phase.key] ? phase.hint : tr("未配置")
 }
 
 function targetAvailable(target: ReleaseTarget) {
@@ -667,10 +669,10 @@ function resetSelection(pf: ReleasePreflight) {
 }
 
 function fileStatusLabel(file: ReleaseFileChange) {
-  if (isAddedFile(file)) return '新增'
-  if (file.status.includes('D')) return '删除'
-  if (file.status.includes('R')) return '重命名'
-  return '修改'
+  if (isAddedFile(file)) return tr("新增")
+  if (file.status.includes('D')) return tr("删除")
+  if (file.status.includes('R')) return tr("重命名")
+  return tr("修改")
 }
 
 function isAddedFile(file: ReleaseFileChange) {
@@ -817,7 +819,7 @@ async function load(resumeFailedRun = true) {
     } else {
       configEndpointAvailable.value = false
       gitOnly.value = true
-      configNotice.value = '当前后端暂未启用自动发布配置，仍可继续使用基础 Git 提交与 Tag 功能。'
+      configNotice.value = tr("当前后端暂未启用自动发布配置，仍可继续使用基础 Git 提交与 Tag 功能。")
     }
     loading.value = false
 
@@ -896,7 +898,7 @@ function setTargetSelected(targetId: string, checked: boolean) {
   choice.selected = checked
   if (checked) {
     gitOnly.value = false
-    for (const phase of phaseOptions) choice[phase.key] = !!target.steps[phase.key]
+    for (const phase of phaseOptions.value) choice[phase.key] = !!target.steps[phase.key]
   }
 }
 function setTargetPhase(targetId: string, phase: ExecutionPhase, checked: boolean) {
@@ -905,7 +907,7 @@ function setTargetPhase(targetId: string, phase: ExecutionPhase, checked: boolea
 }
 function versionGroupName(target: ReleaseTarget) {
   const group = releaseConfig.value?.versionGroups.find((item) => item.id === target.versionGroup)
-  return group ? versionGroupDisplayName(group) : target.versionGroup || '统一版本'
+  return group ? versionGroupDisplayName(group) : target.versionGroup || tr("统一版本")
 }
 
 async function scanReleaseConfig() {
@@ -918,10 +920,10 @@ async function scanReleaseConfig() {
     advancedOpen.value = true
     configBeforeEdit.value = previous
     configEndpointAvailable.value = true
-    configNotice.value = '自动识别已完成。请检查建议；点击“保存并使用”后才会写入项目。'
+    configNotice.value = tr("自动识别已完成。请检查建议；点击“保存并使用”后才会写入项目。")
   } catch (reason) {
     if (!releaseConfig.value) configEndpointAvailable.value = false
-    configNotice.value = `自动识别暂不可用：${messageOf(reason)}。基础 Git 发布仍可使用。`
+    configNotice.value = tr("自动识别暂不可用：{0}。基础 Git 发布仍可使用。", [messageOf(reason)])
   } finally { configScanning.value = false }
 }
 
@@ -941,18 +943,18 @@ function cancelConfigEdit() {
   configValidationError.value = ''
 }
 function validateConfig(config: ReleaseConfig) {
-  if (!config.versionGroups.length) return '至少需要一个版本组。'
+  if (!config.versionGroups.length) return tr("至少需要一个版本组。")
   const groupIds = config.versionGroups.map((group) => group.id.trim())
-  if (groupIds.some((id) => !id)) return '版本组标识不能为空。'
-  if (new Set(groupIds).size !== groupIds.length) return '版本组标识不能重复。'
+  if (groupIds.some((id) => !id)) return tr("版本组标识不能为空。")
+  if (new Set(groupIds).size !== groupIds.length) return tr("版本组标识不能重复。")
   const tagPrefixes = config.versionGroups.map((group) => (group.tagPrefix || group.id).trim().toLowerCase())
-  if (tagPrefixes.some((prefix) => !/^[a-z0-9][a-z0-9._-]*$/i.test(prefix))) return 'Tag 前缀只能包含字母、数字、点、下划线和短横线。'
-  if (new Set(tagPrefixes).size !== tagPrefixes.length) return '每个版本组的 Tag 前缀必须不同。'
+  if (tagPrefixes.some((prefix) => !/^[a-z0-9][a-z0-9._-]*$/i.test(prefix))) return tr("Tag 前缀只能包含字母、数字、点、下划线和短横线。")
+  if (new Set(tagPrefixes).size !== tagPrefixes.length) return tr("每个版本组的 Tag 前缀必须不同。")
   const targetIds = config.targets.map((target) => target.id.trim())
-  if (targetIds.some((id) => !id)) return '发布目标标识不能为空。'
-  if (new Set(targetIds).size !== targetIds.length) return '发布目标标识不能重复。'
+  if (targetIds.some((id) => !id)) return tr("发布目标标识不能为空。")
+  if (new Set(targetIds).size !== targetIds.length) return tr("发布目标标识不能重复。")
   const invalidTarget = config.targets.find((target) => !target.name.trim() || !groupIds.includes(target.versionGroup))
-  if (invalidTarget) return `目标“${invalidTarget.name || invalidTarget.id}”缺少名称或有效版本组。`
+  if (invalidTarget) return tr("目标“{0}”缺少名称或有效版本组。", [invalidTarget.name || invalidTarget.id])
   return ''
 }
 async function saveReleaseConfig() {
@@ -968,13 +970,13 @@ async function saveReleaseConfig() {
     savedSuccessfully = true
     applyReleaseConfig(saved)
     configBeforeEdit.value = null
-    configNotice.value = `发布说明书已保存到 ${saved.configPath || '.launcher/release.yaml'}。`
+    configNotice.value = tr("发布说明书已保存到 {0}。", [saved.configPath || '.launcher/release.yaml'])
     preflightStale.value = true
     applyPreflight(await api.releasePreflight(props.app.id))
   } catch (reason) {
     const message = messageOf(reason)
     configValidationError.value = message
-    if (savedSuccessfully) error.value = `配置已保存，但重新检查 Git 失败：${message}`
+    if (savedSuccessfully) error.value = tr("配置已保存，但重新检查 Git 失败：{0}", [message])
   }
   finally { configSaving.value = false }
 }
@@ -991,7 +993,7 @@ function newId(prefix: string, existing: string[]) {
 function addVersionGroup() {
   if (!configDraft.value) return
   const id = newId('version', configDraft.value.versionGroups.map((group) => group.id))
-  configDraft.value.versionGroups.push({ id, name: '新版本组', tagPrefix: id, versionFiles: [] })
+  configDraft.value.versionGroups.push({ id, name: tr("新版本组"), tagPrefix: id, versionFiles: [] })
 }
 function removeVersionGroup(index: number) {
   const config = configDraft.value
@@ -1006,7 +1008,7 @@ function addTarget() {
   if (!config) return
   const id = newId('target', config.targets.map((target) => target.id))
   const emptySteps: ReleaseTargetSteps = { check: '', build: '', package: '', publish: '', deploy: '' }
-  config.targets.push({ id, name: '新发布目标', kind: 'custom', versionGroup: config.versionGroups[0]?.id || 'product', workingDir: '.', runner: { type: 'local', os: [currentOS()] }, enabled: true, detected: false, confidence: 1, steps: emptySteps, artifacts: [] })
+  config.targets.push({ id, name: tr("新发布目标"), kind: 'custom', versionGroup: config.versionGroups[0]?.id || 'product', workingDir: '.', runner: { type: 'local', os: [currentOS()] }, enabled: true, detected: false, confidence: 1, steps: emptySteps, artifacts: [] })
 }
 function setRunnerOS(target: ReleaseTarget, os: string, checked: boolean) {
   const values = new Set(target.runner.os)
@@ -1051,8 +1053,8 @@ function showRun(run: ReleaseRun) {
 }
 
 function historyStatus(run: ReleaseRun) {
-  if (run.status === 'succeeded') return run.pushRemote ? '已推送' : '本地完成'
-  return run.status === 'failed' ? '失败' : '进行中'
+  if (run.status === 'succeeded') return run.pushRemote ? tr("已推送") : tr("本地完成")
+  return run.status === 'failed' ? tr("失败") : tr("进行中")
 }
 
 function schedulePoll(delay = 700) {
@@ -1154,15 +1156,15 @@ onBeforeUnmount(() => {
   <div class="overlay" @click.self="publishing || emit('close')">
     <div class="modal">
       <header class="m-head">
-        <h2>发布 {{ app.name }}</h2>
+        <h2>{{ tr("发布") }} {{ app.name }}</h2>
         <button class="ghost icon" :disabled="publishing" @click="emit('close')">✕</button>
       </header>
 
       <div ref="bodyRef" class="m-body" :inert="publishing">
-        <div v-if="loading" class="state">正在读取发布配置…</div>
+        <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
         <div v-if="error" class="alert error">{{ error }}</div>
-        <div v-if="preflightStale" class="alert warn">配置或 Git 已变化，请重新检查。<button :disabled="savingProfile" @click="saveAndRecheck">重新检查</button></div>
-        <div v-if="isActive" class="alert warn">项目正在运行；发布不会自动停止或重启。</div>
+        <div v-if="preflightStale" class="alert warn">{{ tr("配置或 Git 已变化，请重新检查。") }}<button :disabled="savingProfile" @click="saveAndRecheck">{{ tr("重新检查") }}</button></div>
+        <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
 
         <template v-if="activeRun">
           <section class="progress-block">
@@ -1171,35 +1173,35 @@ onBeforeUnmount(() => {
               <h3>{{ completionTitle }}</h3>
               <p>{{ completionDescription }}</p>
               <template v-if="automationHandedOff">
-                <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || '后续由 GitHub Actions 执行' }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span class="cloud-result-pending">云端结果尚未确认，请到 GitHub 查看最终发布结果。</span></div>
-                <a v-if="automationPageUrl" class="actions-link" :href="automationPageUrl" target="_blank" rel="noreferrer">查看 GitHub Actions 进度 <span aria-hidden="true">↗</span></a>
+                <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span class="cloud-result-pending">{{ tr("云端结果尚未确认，请到 GitHub 查看最终发布结果。") }}</span></div>
+                <a v-if="automationPageUrl" class="actions-link" :href="automationPageUrl" target="_blank" rel="noreferrer">{{ tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></a>
               </template>
             </section>
             <div v-else-if="cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
-            <div class="progress-title"><strong>{{ activeRun.createTag === false ? '代码更新' : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</strong><span v-if="activeRun.status !== 'succeeded'" class="status" :class="activeRun.status">{{ activeRunStatusLabel }}</span></div>
+            <div class="progress-title"><strong>{{ activeRun.createTag === false ? tr("代码更新") : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</strong><span v-if="activeRun.status !== 'succeeded'" class="status" :class="activeRun.status">{{ activeRunStatusLabel }}</span></div>
             <div v-if="activeRun.status !== 'succeeded'" class="current-stage">{{ activeStageLabel }}</div>
-            <div v-if="runTargets.length" class="run-targets"><div v-for="target in runTargets" :key="target.targetId" class="run-target"><strong>{{ configuredTargets.find((item) => item.id === target.targetId)?.name || target.targetId }}</strong><span>{{ targetStageLabel[target.stage] || stageLabel[target.stage] || '等待执行' }}</span><em :class="target.status">{{ target.status === 'succeeded' ? '完成' : target.status === 'failed' ? '失败' : target.status === 'running' ? '执行中' : ['triggered', 'remote_pending', 'handed_off'].includes(target.status) ? '已交接' : '等待' }}</em></div></div>
-            <details class="execution-details" :open="activeRun.status !== 'succeeded'"><summary>执行日志</summary><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">等待发布日志…</div></div></details>
-            <details v-if="runArtifacts.length" class="artifacts"><summary>已生成产物（{{ runArtifacts.length }}）</summary><div v-for="artifact in runArtifacts" :key="`${artifact.targetId}-${artifact.path}`" class="artifact-row"><code>{{ artifact.path }}</code><span>{{ Math.max(1, Math.round(artifact.sizeBytes / 1024)) }} KB</span><code>{{ artifact.sha256.slice(0, 12) }}</code></div></details>
-            <div v-if="activeRun.errorMessage" class="alert error">{{ activeRun.errorMessage }}</div>
-            <div v-if="activeRun.status === 'failed' && externalRetryRisk" class="alert warn">上传或部署的远端结果可能已经生效。重试前请先检查目标平台，避免重复上传或重复上线。</div>
-            <div v-if="activeRun.commitSha" class="kv"><span>提交</span><code>{{ activeRun.commitSha }}</code></div>
-            <div class="button-row"><button v-if="retryable" class="primary" @click="retry()">{{ externalRetryRisk ? '确认远端未成功后重试' : '从失败阶段重试' }}</button><button v-if="activeRun.status === 'succeeded' || activeRun.status === 'failed'" @click="startNew">返回发布检查</button></div>
+            <div v-if="runTargets.length" class="run-targets"><div v-for="target in runTargets" :key="target.targetId" class="run-target"><strong>{{ configuredTargets.find((item) => item.id === target.targetId)?.name || target.targetId }}</strong><span>{{ targetStageLabel[target.stage] || stageLabel[target.stage] || tr("等待执行") }}</span><em :class="target.status">{{ target.status === 'succeeded' ? tr("完成") : target.status === 'failed' ? tr("失败") : target.status === 'running' ? tr("执行中") : ['triggered', 'remote_pending', 'handed_off'].includes(target.status) ? tr("已交接") : tr("等待") }}</em></div></div>
+            <details class="execution-details" :open="activeRun.status !== 'succeeded'"><summary>{{ tr("执行日志") }}</summary><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">{{ tr("等待发布日志…") }}</div></div></details>
+            <details v-if="runArtifacts.length" class="artifacts"><summary>{{ tr('已生成产物（{0}）', [runArtifacts.length]) }}</summary><div v-for="artifact in runArtifacts" :key="`${artifact.targetId}-${artifact.path}`" class="artifact-row"><code>{{ artifact.path }}</code><span>{{ Math.max(1, Math.round(artifact.sizeBytes / 1024)) }} KB</span><code>{{ artifact.sha256.slice(0, 12) }}</code></div></details>
+            <div v-if="activeRun.errorMessage" class="alert error">{{ tr(activeRun.errorMessage) }}</div>
+            <div v-if="activeRun.status === 'failed' && externalRetryRisk" class="alert warn">{{ tr("上传或部署的远端结果可能已经生效。重试前请先检查目标平台，避免重复上传或重复上线。") }}</div>
+            <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
+            <div class="button-row"><button v-if="retryable" class="primary" @click="retry()">{{ externalRetryRisk ? tr("确认远端未成功后重试") : tr("从失败阶段重试") }}</button><button v-if="activeRun.status === 'succeeded' || activeRun.status === 'failed'" @click="startNew">{{ tr("返回发布检查") }}</button></div>
           </section>
         </template>
 
         <template v-else-if="(preflight || releaseConfig) && !loading">
           <section v-if="preflight" class="repo-glance" :class="{ problem: preflight.remoteChecked && !preflight.canRelease, checking: !preflight.remoteChecked }">
             <span class="ready-dot"></span>
-            <strong>{{ preflight.branch || '未绑定分支' }}</strong>
-            <span>{{ preflight.latestTag ? `最新 Tag：${preflight.latestTag}` : '暂无 Tag' }}</span>
-            <span class="repo-glance-status" :title="!preflight.remoteChecked ? '面板可以先操作；发布按钮会在远程分支检查完成后启用' : preflight.canRelease ? '分支已同步；未发现冲突、进行中的 Git 操作或暂存文件' : '请按下方提示处理仓库问题'">{{ !preflight.remoteChecked ? '正在检查远程分支…' : preflight.canRelease ? '仓库状态正常' : '仓库需要处理' }}</span>
+            <strong>{{ preflight.branch || tr("未绑定分支") }}</strong>
+            <span>{{ preflight.latestTag ? tr("最新 Tag：{0}", [preflight.latestTag]) : tr("暂无 Tag") }}</span>
+            <span class="repo-glance-status" :title="!preflight.remoteChecked ? tr('面板可以先操作；发布按钮会在远程分支检查完成后启用') : preflight.canRelease ? tr('分支已同步；未发现冲突、进行中的 Git 操作或暂存文件') : tr('请按下方提示处理仓库问题')">{{ !preflight.remoteChecked ? tr("正在检查远程分支…") : preflight.canRelease ? tr("仓库状态正常") : tr("仓库需要处理") }}</span>
           </section>
-          <section v-else class="repo-glance checking"><span class="ready-dot"></span><strong>正在读取本地仓库…</strong><span class="repo-glance-status">构建端可以先选择</span></section>
-          <section v-if="preflight?.blockingIssues.length" class="issues"><div v-for="issue in preflight.blockingIssues" :key="issue.code" class="alert error">{{ issue.message }}</div></section>
+          <section v-else class="repo-glance checking"><span class="ready-dot"></span><strong>{{ tr("正在读取本地仓库…") }}</strong><span class="repo-glance-status">{{ tr("构建端可以先选择") }}</span></section>
+          <section v-if="preflight?.blockingIssues.length" class="issues"><div v-for="issue in preflight.blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
 
           <section class="platform-section">
-            <div class="section-head basic-section-head"><h3>选择构建端</h3></div>
+            <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
             <div class="platform-grid">
               <button
                 v-for="platform in productPlatforms"
@@ -1216,11 +1218,11 @@ onBeforeUnmount(() => {
                   <small>{{ platformCardDetail(platform) }}</small>
                 </span>
                 <span v-if="platformSelected(platform) || platformPartiallySelected(platform)" class="chosen-mark">✓</span>
-                <span v-if="platformActionLabels(platform, platformHasSelection(platform)).some((label) => label === '上传' || label === '部署上线')" class="risk-badge">含上线操作</span>
+                <span v-if="platformActionLabels(platform, platformHasSelection(platform)).some((label) => label === tr('上传') || label === tr('部署上线'))" class="risk-badge">{{ tr("含上线操作") }}</span>
               </button>
               <button type="button" class="platform-card git-card" :class="{ selected: gitOnly }" @click="toggleGitOnly(!gitOnly)">
                 <span class="platform-icon">⑂</span>
-                <span class="platform-copy"><strong>仅提交代码</strong><small>{{ createTag ? '同时创建 Tag' : '不创建 Tag' }}</small></span>
+                <span class="platform-copy"><strong>{{ tr("仅提交代码") }}</strong><small>{{ createTag ? tr("同时创建 Tag") : tr("不创建 Tag") }}</small></span>
                 <span v-if="gitOnly" class="chosen-mark">✓</span>
               </button>
             </div>
@@ -1228,98 +1230,98 @@ onBeforeUnmount(() => {
 
           <template v-if="preflight">
           <section class="block version-quick">
-            <div class="tag-switch-row"><div><h3>创建版本 Tag</h3><p>每个版本组独立递增；同批 Tag 指向同一个提交。</p></div><label class="switch"><input v-model="createTag" type="checkbox" @change="onCreateTagChange" /><span></span></label></div>
+            <div class="tag-switch-row"><div><h3>{{ tr("创建版本 Tag") }}</h3><p>{{ tr("每个版本组独立递增；同批 Tag 指向同一个提交。") }}</p></div><label class="switch"><input v-model="createTag" type="checkbox" @change="onCreateTagChange" /><span></span></label></div>
             <template v-if="createTag">
-              <div class="mode-picker"><label :class="{ active: versionMode === 'auto' }"><input v-model="versionMode" type="radio" value="auto" @change="onVersionModeChange" />自动递增</label><label :class="{ active: versionMode === 'manual' }"><input v-model="versionMode" type="radio" value="manual" @change="onVersionModeChange" />手动设置</label></div>
+              <div class="mode-picker"><label :class="{ active: versionMode === 'auto' }"><input v-model="versionMode" type="radio" value="auto" @change="onVersionModeChange" />{{ tr("自动递增") }}</label><label :class="{ active: versionMode === 'manual' }"><input v-model="versionMode" type="radio" value="manual" @change="onVersionModeChange" />{{ tr("手动设置") }}</label></div>
               <div class="version-list">
                 <div v-for="version in plannedVersions" :key="version.versionGroupId" class="version-row">
-                  <span class="version-name"><strong>{{ version.versionGroupName }}</strong><small>当前 {{ version.currentVersion }}</small></span>
-                  <input v-if="versionMode === 'manual'" :value="version.targetVersion" :class="{ invalid: version.targetVersion && !versionPattern.test(version.targetVersion) }" placeholder="例如 1.4.0" @input="onVersionInput(version.versionGroupId, ($event.target as HTMLInputElement).value)" />
+                  <span class="version-name"><strong>{{ version.versionGroupName }}</strong><small>{{ tr("当前") }} {{ version.currentVersion }}</small></span>
+                  <input v-if="versionMode === 'manual'" :value="version.targetVersion" :class="{ invalid: version.targetVersion && !versionPattern.test(version.targetVersion) }" :placeholder="tr('例如 1.4.0')" @input="onVersionInput(version.versionGroupId, ($event.target as HTMLInputElement).value)" />
                   <span v-else class="version-next">→ <strong>{{ version.targetVersion }}</strong></span>
                   <code>{{ version.tagName }}</code>
                 </div>
               </div>
-              <div v-if="!versionValid" class="field-error">版本必须是 X.Y.Z，例如 1.4.0。</div>
+              <div v-if="!versionValid" class="field-error">{{ tr("版本必须是 X.Y.Z，例如 1.4.0。") }}</div>
             </template>
-            <div v-else class="no-tag-note">不更新版本号，也不创建 Tag。</div>
+            <div v-else class="no-tag-note">{{ tr("不更新版本号，也不创建 Tag。") }}</div>
           </section>
 
           <details class="advanced-settings" :open="advancedOpen" @toggle="onAdvancedToggle">
-            <summary><span>高级设置</span><small>Git、命令和发布配置</small></summary>
+            <summary><span>{{ tr("高级设置") }}</span><small>{{ tr("Git、命令和发布配置") }}</small></summary>
             <div class="advanced-body">
           <section class="repo-card">
-            <div class="kv"><span>代码仓库</span><code>{{ preflight.repoRoot }}</code></div><div class="kv"><span>当前分支</span><code>{{ preflight.branch || '未绑定分支' }}</code></div>
-            <div class="kv"><span>远程地址</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>最新版本</span><code>{{ preflight.latestTag || '还没有版本 Tag' }}</code></div>
+            <div class="kv"><span>{{ tr("代码仓库") }}</span><code>{{ preflight.repoRoot }}</code></div><div class="kv"><span>{{ tr("当前分支") }}</span><code>{{ preflight.branch || tr("未绑定分支") }}</code></div>
+            <div class="kv"><span>{{ tr("远程地址") }}</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>{{ tr("最新版本") }}</span><code>{{ preflight.latestTag || tr("还没有版本 Tag") }}</code></div>
           </section>
 
           <section class="block config-section">
             <div class="section-head">
-              <div><h3>发布目标</h3><div class="section-help">自动识别项目；日常发布只需勾选本次要处理的平台。</div></div>
-              <div v-if="configEndpointAvailable" class="toolbar"><button @click="scanReleaseConfig" :disabled="configScanning || configSaving || configEditorOpen">{{ configScanning ? '识别中…' : '重新自动识别' }}</button><button @click="openConfigEditor" :disabled="configSaving || configEditorOpen">{{ configEditorOpen ? '正在配置' : '修改配置' }}</button></div>
+              <div><h3>{{ tr("发布目标") }}</h3><div class="section-help">{{ tr("自动识别项目；日常发布只需勾选本次要处理的平台。") }}</div></div>
+              <div v-if="configEndpointAvailable" class="toolbar"><button @click="scanReleaseConfig" :disabled="configScanning || configSaving || configEditorOpen">{{ configScanning ? tr("识别中…") : tr("重新自动识别") }}</button><button @click="openConfigEditor" :disabled="configSaving || configEditorOpen">{{ configEditorOpen ? tr("正在配置") : tr("修改配置") }}</button></div>
             </div>
             <div v-if="configNotice" class="alert info">{{ configNotice }}</div>
-            <div v-if="releaseConfig" class="config-meta"><span>{{ releaseConfig.source === 'file' ? '已保存配置' : '自动识别建议' }}</span><span>识别可信度 {{ configConfidence }}%</span><code>{{ releaseConfig.configPath || '.launcher/release.yaml' }}</code></div>
+            <div v-if="releaseConfig" class="config-meta"><span>{{ releaseConfig.source === 'file' ? tr("已保存配置") : tr("自动识别建议") }}</span><span>{{ tr("识别可信度") }} {{ configConfidence }}%</span><code>{{ releaseConfig.configPath || '.launcher/release.yaml' }}</code></div>
             <div v-for="warning in releaseConfig?.warnings || []" :key="warning" class="alert warn">{{ warning }}</div>
 
             <template v-if="configEditorOpen && configDraft">
-              <div class="wizard-banner"><strong>发布配置向导</strong><span>系统已尽量自动填写。只有不正确的地方才需要修改，高级命令可展开查看。</span></div>
-              <div class="editor-subhead"><strong>版本组</strong><button @click="addVersionGroup">＋ 添加版本组</button></div>
+              <div class="wizard-banner"><strong>{{ tr("发布配置向导") }}</strong><span>{{ tr("系统已尽量自动填写。只有不正确的地方才需要修改，高级命令可展开查看。") }}</span></div>
+              <div class="editor-subhead"><strong>{{ tr("版本组") }}</strong><button @click="addVersionGroup">{{ tr("＋ 添加版本组") }}</button></div>
               <div v-for="(group, groupIndex) in configDraft.versionGroups" :key="`${group.id}-${groupIndex}`" class="edit-card">
-                <div class="form-grid three"><label>显示名称<input v-model="group.name" placeholder="例如 客户端版本" /></label><label>Tag 前缀<input v-model="group.tagPrefix" placeholder="例如 desktop" /></label><div class="field-action"><button class="danger" :disabled="configDraft.versionGroups.length <= 1" @click="removeVersionGroup(groupIndex)">删除版本组</button></div></div>
-                <details class="advanced"><summary>高级：需要同步修改的版本文件（{{ group.versionFiles.length }}）</summary>
-                  <div v-for="(file, fileIndex) in group.versionFiles" :key="fileIndex" class="version-file-row"><input v-model="file.path" placeholder="文件路径，例如 package.json" /><input v-model="file.format" list="version-formats" placeholder="格式" /><input v-model="file.jsonPointer" placeholder="字段，例如 /version" /><button class="ghost danger-text" @click="group.versionFiles.splice(fileIndex, 1)">删除</button></div>
-                  <button @click="addVersionFile(group)">＋ 添加版本文件</button>
+                <div class="form-grid three"><label>{{ tr("显示名称") }}<input v-model="group.name" :placeholder="tr('例如 客户端版本')" /></label><label>{{ tr("Tag 前缀") }}<input v-model="group.tagPrefix" :placeholder="tr('例如 desktop')" /></label><div class="field-action"><button class="danger" :disabled="configDraft.versionGroups.length <= 1" @click="removeVersionGroup(groupIndex)">{{ tr("删除版本组") }}</button></div></div>
+                <details class="advanced"><summary>{{ tr('高级：需要同步修改的版本文件（{0}）', [group.versionFiles.length]) }}</summary>
+                  <div v-for="(file, fileIndex) in group.versionFiles" :key="fileIndex" class="version-file-row"><input v-model="file.path" :placeholder="tr('文件路径，例如 package.json')" /><input v-model="file.format" list="version-formats" :placeholder="tr('格式')" /><input v-model="file.jsonPointer" :placeholder="tr('字段，例如 /version')" /><button class="ghost danger-text" @click="group.versionFiles.splice(fileIndex, 1)">{{ tr("删除") }}</button></div>
+                  <button @click="addVersionFile(group)">{{ tr("＋ 添加版本文件") }}</button>
                 </details>
               </div>
-              <div class="editor-subhead"><strong>平台与交付目标</strong><button @click="addTarget">＋ 添加目标</button></div>
-              <div v-if="!configDraft.targets.length" class="empty-config">没有识别到可发布目标。可手动添加，或者仍只使用 Git 提交与 Tag。</div>
+              <div class="editor-subhead"><strong>{{ tr("平台与交付目标") }}</strong><button @click="addTarget">{{ tr("＋ 添加目标") }}</button></div>
+              <div v-if="!configDraft.targets.length" class="empty-config">{{ tr("没有识别到可发布目标。可手动添加，或者仍只使用 Git 提交与 Tag。") }}</div>
               <div v-for="(target, targetIndex) in configDraft.targets" :key="`${target.id}-${targetIndex}`" class="edit-card target-edit-card">
-                <div class="target-edit-title"><label class="plain-check"><input v-model="target.enabled" type="checkbox" />启用这个目标</label><button class="ghost danger-text" @click="configDraft.targets.splice(targetIndex, 1)">删除</button></div>
-                <div class="form-grid"><label>目标名称<input v-model="target.name" placeholder="例如 Web 正式站" /></label><label>目标标识<input v-model="target.id" placeholder="例如 web-production" /></label><label>类型<input v-model="target.kind" list="target-kinds" placeholder="web / windows / android" /></label><label>使用版本组<select v-model="target.versionGroup"><option v-for="group in configDraft.versionGroups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label><label>项目子目录<input v-model="target.workingDir" placeholder="." /></label><label>执行方式<input v-model="target.runner.type" list="runner-types" placeholder="local" /></label></div>
-                <div class="os-row"><span>可执行系统</span><label v-for="os in ['windows', 'linux', 'darwin']" :key="os" class="plain-check"><input type="checkbox" :checked="target.runner.os.includes(os)" @change="setRunnerOS(target, os, ($event.target as HTMLInputElement).checked)" />{{ osLabel(os) }}</label></div>
-                <details class="advanced"><summary>高级：检查、构建、打包和上线命令</summary><label class="full-label">发布前检查<input v-model="target.steps.check" placeholder="例如 npm test" /></label><div class="form-grid"><label>构建命令<input v-model="target.steps.build" placeholder="例如 npm run build" /></label><label>打包命令<input v-model="target.steps.package" placeholder="例如 npm run tauri build" /></label><label>上传命令<input v-model="target.steps.publish" placeholder="可留空，发布时不会上传" /></label><label>部署命令<input v-model="target.steps.deploy" placeholder="可留空，发布时不会上线" /></label></div><label class="full-label">产物位置（每行一个）<textarea :value="target.artifacts.join('\n')" rows="3" placeholder="例如 dist/**/*" @input="setArtifacts(target, ($event.target as HTMLTextAreaElement).value)"></textarea></label></details>
+                <div class="target-edit-title"><label class="plain-check"><input v-model="target.enabled" type="checkbox" />{{ tr("启用这个目标") }}</label><button class="ghost danger-text" @click="configDraft.targets.splice(targetIndex, 1)">{{ tr("删除") }}</button></div>
+                <div class="form-grid"><label>{{ tr("目标名称") }}<input v-model="target.name" :placeholder="tr('例如 Web 正式站')" /></label><label>{{ tr("目标标识") }}<input v-model="target.id" :placeholder="tr('例如 web-production')" /></label><label>{{ tr("类型") }}<input v-model="target.kind" list="target-kinds" placeholder="web / windows / android" /></label><label>{{ tr("使用版本组") }}<select v-model="target.versionGroup"><option v-for="group in configDraft.versionGroups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label><label>{{ tr("项目子目录") }}<input v-model="target.workingDir" placeholder="." /></label><label>{{ tr("执行方式") }}<input v-model="target.runner.type" list="runner-types" placeholder="local" /></label></div>
+                <div class="os-row"><span>{{ tr("可执行系统") }}</span><label v-for="os in ['windows', 'linux', 'darwin']" :key="os" class="plain-check"><input type="checkbox" :checked="target.runner.os.includes(os)" @change="setRunnerOS(target, os, ($event.target as HTMLInputElement).checked)" />{{ osLabel(os) }}</label></div>
+                <details class="advanced"><summary>{{ tr("高级：检查、构建、打包和上线命令") }}</summary><label class="full-label">{{ tr("发布前检查") }}<input v-model="target.steps.check" :placeholder="tr('例如 npm test')" /></label><div class="form-grid"><label>{{ tr("构建命令") }}<input v-model="target.steps.build" :placeholder="tr('例如 npm run build')" /></label><label>{{ tr("打包命令") }}<input v-model="target.steps.package" :placeholder="tr('例如 npm run tauri build')" /></label><label>{{ tr("上传命令") }}<input v-model="target.steps.publish" :placeholder="tr('可留空，发布时不会上传')" /></label><label>{{ tr("部署命令") }}<input v-model="target.steps.deploy" :placeholder="tr('可留空，发布时不会上线')" /></label></div><label class="full-label">{{ tr("产物位置（每行一个）") }}<textarea :value="target.artifacts.join('\n')" rows="3" :placeholder="tr('例如 dist/**/*')" @input="setArtifacts(target, ($event.target as HTMLTextAreaElement).value)"></textarea></label></details>
               </div>
               <div v-if="configValidationError" class="alert error">{{ configValidationError }}</div>
-              <div class="editor-actions"><button @click="cancelConfigEdit">取消修改</button><button class="primary" :disabled="configSaving" @click="saveReleaseConfig">{{ configSaving ? '保存并重新检查中…' : '保存并使用' }}</button></div>
+              <div class="editor-actions"><button @click="cancelConfigEdit">{{ tr("取消修改") }}</button><button class="primary" :disabled="configSaving" @click="saveReleaseConfig">{{ configSaving ? tr("保存并重新检查中…") : tr("保存并使用") }}</button></div>
             </template>
 
             <template v-else-if="releaseConfig?.targets.length">
-              <div v-if="configNeedsSaving" class="setup-callout"><span>当前使用自动识别结果；需要调整时再保存配置。</span><button class="primary" @click="openConfigEditor">修改并保存</button></div>
-              <label class="git-only-choice"><input type="checkbox" :checked="gitOnly" @change="toggleGitOnly(($event.target as HTMLInputElement).checked)" />本次仅提交代码 / 创建 Tag，不执行任何平台构建</label>
+              <div v-if="configNeedsSaving" class="setup-callout"><span>{{ tr("当前使用自动识别结果；需要调整时再保存配置。") }}</span><button class="primary" @click="openConfigEditor">{{ tr("修改并保存") }}</button></div>
+              <label class="git-only-choice"><input type="checkbox" :checked="gitOnly" @change="toggleGitOnly(($event.target as HTMLInputElement).checked)" />{{ tr("本次仅提交代码 / 创建 Tag，不执行任何平台构建") }}</label>
               <div class="target-list">
                 <article v-for="target in releaseConfig.targets" :key="target.id" class="target-card" :class="{ disabled: !targetAvailable(target) || gitOnly, selected: !gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected, invalid: invalidChosenTargetIds.includes(target.id) }">
-                  <header class="target-head"><label class="target-select"><input type="checkbox" :checked="!gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected" :disabled="gitOnly || !targetAvailable(target)" @change="setTargetSelected(target.id, ($event.target as HTMLInputElement).checked)" /><span><strong>{{ target.name }}</strong><small>{{ target.kind }} · {{ versionGroupName(target) }}</small></span></label><span v-if="target.detected" class="detected-badge">自动识别</span></header>
+                  <header class="target-head"><label class="target-select"><input type="checkbox" :checked="!gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected" :disabled="gitOnly || !targetAvailable(target)" @change="setTargetSelected(target.id, ($event.target as HTMLInputElement).checked)" /><span><strong>{{ target.name }}</strong><small>{{ target.kind }} · {{ versionGroupName(target) }}</small></span></label><span v-if="target.detected" class="detected-badge">{{ tr("自动识别") }}</span></header>
                   <div v-if="targetUnavailableReason(target)" class="unavailable">{{ targetUnavailableReason(target) }}</div>
                   <div v-else class="phase-grid"><label v-for="phase in phaseOptions" :key="phase.key" class="phase-choice" :class="{ unavailable: !target.steps[phase.key], risky: phase.risky && targetChoices[target.id]?.[phase.key] }"><input type="checkbox" :checked="targetChoices[target.id]?.[phase.key]" :disabled="gitOnly || !targetChoices[target.id]?.selected || !target.steps[phase.key]" @change="setTargetPhase(target.id, phase.key, ($event.target as HTMLInputElement).checked)" /><span>{{ phase.label }}<small>{{ targetPhaseHint(target, phase) }}</small></span></label></div>
-                  <div v-if="!gitOnly && invalidChosenTargetIds.includes(target.id)" class="target-error">请至少选择一个有命令的动作；也可以修改配置或选择“仅 Git”。</div>
-                  <div v-if="target.steps.check" class="target-check">发布前会先自动检查</div>
+                  <div v-if="!gitOnly && invalidChosenTargetIds.includes(target.id)" class="target-error">{{ tr("请至少选择一个有命令的动作；也可以修改配置或选择“仅 Git”。") }}</div>
+                  <div v-if="target.steps.check" class="target-check">{{ tr("发布前会先自动检查") }}</div>
                 </article>
               </div>
             </template>
-            <div v-else-if="configEndpointAvailable" class="empty-config"><p>还没有配置 PC、Web、Android 或服务端等发布目标。</p><button class="primary" :disabled="configScanning" @click="scanReleaseConfig">{{ configScanning ? '正在分析项目…' : '一键自动识别项目' }}</button></div>
+            <div v-else-if="configEndpointAvailable" class="empty-config"><p>{{ tr("还没有配置 PC、Web、Android 或服务端等发布目标。") }}</p><button class="primary" :disabled="configScanning" @click="scanReleaseConfig">{{ configScanning ? tr("正在分析项目…") : tr("一键自动识别项目") }}</button></div>
           </section>
 
-          <section class="block"><h3>Git 与检查设置</h3><div class="form-grid"><label>远程仓库<select v-model="remoteName"><option v-for="remote in preflight.remotes" :key="remote" :value="remote">{{ remote }}</option></select></label><label>版本文件识别<select v-model="versionStrategy"><option value="auto">自动识别</option><option value="tauri">Tauri</option><option value="node">Node</option><option value="manual">不自动修改</option></select></label></div><details class="advanced compact"><summary>高级：通用发布前检查命令</summary><label class="full-label">命令（可选）<input v-model="preReleaseCommand" placeholder="例如 npm test" /></label></details><button @click="saveAndRecheck" :disabled="savingProfile">{{ savingProfile ? '检查中…' : '保存并重新检查 Git' }}</button></section>
+          <section class="block"><h3>{{ tr("Git 与检查设置") }}</h3><div class="form-grid"><label>{{ tr("远程仓库") }}<select v-model="remoteName"><option v-for="remote in preflight.remotes" :key="remote" :value="remote">{{ remote }}</option></select></label><label>{{ tr("版本文件识别") }}<select v-model="versionStrategy"><option value="auto">{{ tr("自动识别") }}</option><option value="tauri">Tauri</option><option value="node">Node</option><option value="manual">{{ tr("不自动修改") }}</option></select></label></div><details class="advanced compact"><summary>{{ tr("高级：通用发布前检查命令") }}</summary><label class="full-label">{{ tr("命令（可选）") }}<input v-model="preReleaseCommand" :placeholder="tr('例如 npm test')" /></label></details><button @click="saveAndRecheck" :disabled="savingProfile">{{ savingProfile ? tr("检查中…") : tr("保存并重新检查 Git") }}</button></section>
 
           <section class="block">
-            <h3>版本与提交详情</h3>
-            <template v-if="createTag"><div class="strategy-line">将更新 {{ selectedVersionFiles.join('、') || '不修改版本文件' }}</div><div v-if="Object.keys(visibleCurrentVersions).length" class="current-versions"><code v-for="(version, file) in visibleCurrentVersions" :key="file">{{ file }}: {{ version || '未识别' }}</code></div><div v-for="version in plannedVersions" :key="version.versionGroupId" class="kv"><span>{{ version.versionGroupName }}</span><code>{{ version.tagName }}</code></div></template>
-            <div v-else class="no-tag-note">本次不会修改版本文件，也不会创建或推送 Tag。</div>
-            <label class="full-label">提交说明<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
+            <h3>{{ tr("版本与提交详情") }}</h3>
+            <template v-if="createTag"><div class="strategy-line">{{ tr("将更新") }} {{ selectedVersionFiles.join('、') || tr("不修改版本文件") }}</div><div v-if="Object.keys(visibleCurrentVersions).length" class="current-versions"><code v-for="(version, file) in visibleCurrentVersions" :key="file">{{ file }}: {{ version || tr("未识别") }}</code></div><div v-for="version in plannedVersions" :key="version.versionGroupId" class="kv"><span>{{ version.versionGroupName }}</span><code>{{ version.tagName }}</code></div></template>
+            <div v-else class="no-tag-note">{{ tr("本次不会修改版本文件，也不会创建或推送 Tag。") }}</div>
+            <label class="full-label">{{ tr("提交说明") }}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
           </section>
             </div>
           </details>
 
           <section class="file-picker">
             <div class="section-head file-picker-head">
-              <h3>选择提交文件</h3>
+              <h3>{{ tr("选择提交文件") }}</h3>
               <div v-if="preflight.changes.length" class="file-actions">
-                <span>已选 {{ selectedPaths.length }} / {{ preflight.changes.length }}</span>
-                <button type="button" @click="selectAllFiles(!allFilesSelected)">{{ allFilesSelected ? '取消全选' : '全选' }}</button>
+                <span>{{ tr("已选") }} {{ selectedPaths.length }} / {{ preflight.changes.length }}</span>
+                <button type="button" @click="selectAllFiles(!allFilesSelected)">{{ allFilesSelected ? tr("取消全选") : tr("全选") }}</button>
               </div>
             </div>
-            <div v-if="unselectedNewFiles.length" class="alert warn file-warning">还有 {{ unselectedNewFiles.length }} 个新增文件未勾选，发布后远端不会包含这些文件。</div>
-            <div v-if="!preflight.changes.length" class="muted">当前没有代码变更。创建 Tag 时，版本文件仍会自动更新并提交。</div>
+            <div v-if="unselectedNewFiles.length" class="alert warn file-warning">{{ tr('还有 {0} 个新增文件未勾选，发布后远端不会包含这些文件。', [unselectedNewFiles.length]) }}</div>
+            <div v-if="!preflight.changes.length" class="muted">{{ tr("当前没有代码变更。创建 Tag 时，版本文件仍会自动更新并提交。") }}</div>
             <div v-else class="file-list">
               <label v-for="file in orderedChanges" :key="file.path" class="file-row" :class="{ unselected: !selected[file.path] }">
                 <input v-model="selected[file.path]" type="checkbox" :disabled="file.staged" />
@@ -1327,14 +1329,14 @@ onBeforeUnmount(() => {
                 <code :title="file.path">{{ file.path }}</code>
               </label>
             </div>
-            <div class="file-footnote">版本设置自动修改的版本文件会一并提交，不受这里的勾选影响。</div>
+            <div class="file-footnote">{{ tr("版本设置自动修改的版本文件会一并提交，不受这里的勾选影响。") }}</div>
             <details v-if="preflight.aheadCount" class="unpushed-files">
-              <summary>已提交到本机，等待上传 {{ remoteDestination }}（{{ preflight.aheadCount }} 次提交，{{ preflight.unpushedChanges.length }} 个文件）</summary>
-              <div class="unpushed-note">这些文件已经提交，所以不会出现在上面的待提交列表中。</div>
+              <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>
+              <div class="unpushed-note">{{ tr("这些文件已经提交，所以不会出现在上面的待提交列表中。") }}</div>
               <div class="file-list committed-list">
                 <div v-for="file in preflight.unpushedChanges" :key="file.path" class="file-row committed-row">
                   <span class="committed-mark">✓</span>
-                  <span class="file-status" :class="{ added: file.status.startsWith('A') }">{{ file.status.startsWith('A') ? '新增' : file.status.startsWith('D') ? '删除' : file.status.startsWith('R') ? '改名' : '修改' }}</span>
+                  <span class="file-status" :class="{ added: file.status.startsWith('A') }">{{ file.status.startsWith('A') ? tr("新增") : file.status.startsWith('D') ? tr("删除") : file.status.startsWith('R') ? tr("改名") : tr("修改") }}</span>
                   <code :title="file.path">{{ file.path }}</code>
                 </div>
               </div>
@@ -1343,70 +1345,70 @@ onBeforeUnmount(() => {
 
           <section v-if="createTag" class="release-notes">
             <div class="release-notes-head">
-              <h3>更新说明（将显示在 GitHub）</h3>
-              <button type="button" :disabled="releaseNotesLoading" @click="generateReleaseNotesDraft(true)">{{ releaseNotesLoading ? '生成中…' : '重新生成' }}</button>
+              <h3>{{ tr("更新说明（将显示在 GitHub）") }}</h3>
+              <button type="button" :disabled="releaseNotesLoading" @click="generateReleaseNotesDraft(true)">{{ releaseNotesLoading ? tr("生成中…") : tr("重新生成") }}</button>
             </div>
             <textarea
               v-model="releaseNotes"
               rows="7"
               maxlength="12000"
-              :placeholder="releaseNotesLoading ? '正在自动生成，也可以直接填写…' : '请简要填写本次功能、问题修复和性能变化'"
-              aria-label="更新说明"
+              :placeholder="releaseNotesLoading ? tr('正在自动生成，也可以直接填写…') : tr('请简要填写本次功能、问题修复和性能变化')"
+              :aria-label="tr('更新说明')"
               @input="onReleaseNotesInput"
             ></textarea>
             <div class="release-notes-meta">
-              <span v-if="releaseNotesLoading">正在根据提交记录生成初稿…</span>
-              <span v-else-if="releaseNotesDirty">已人工修改</span>
-              <span v-else-if="releaseNotes">已预留功能、修复和性能分类，可直接发布或修改</span>
-              <span v-if="releaseNotesBaseTag" :title="`基于 ${releaseNotesBaseTag} 之后的变更生成`">基于 {{ releaseNotesBaseTag }}</span>
+              <span v-if="releaseNotesLoading">{{ tr("正在根据提交记录生成初稿…") }}</span>
+              <span v-else-if="releaseNotesDirty">{{ tr("已人工修改") }}</span>
+              <span v-else-if="releaseNotes">{{ tr("已预留功能、修复和性能分类，可直接发布或修改") }}</span>
+              <span v-if="releaseNotesBaseTag" :title="tr('基于 {0} 之后的变更生成', [releaseNotesBaseTag])">{{ tr("基于") }} {{ releaseNotesBaseTag }}</span>
             </div>
-            <div v-if="releaseNotesStale" class="alert warn release-notes-alert">文件、构建端或版本已变化。现有内容不会被覆盖，可直接修改或重新生成。</div>
-            <div v-if="releaseNotesError" class="alert error release-notes-alert">生成失败：{{ releaseNotesError }} <button type="button" @click="generateReleaseNotesDraft(true)">重试</button></div>
-            <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">创建 Tag 前请填写更新说明。</div>
+            <div v-if="releaseNotesStale" class="alert warn release-notes-alert">{{ tr("文件、构建端或版本已变化。现有内容不会被覆盖，可直接修改或重新生成。") }}</div>
+            <div v-if="releaseNotesError" class="alert error release-notes-alert">{{ tr("生成失败：") }}{{ releaseNotesError }} <button type="button" @click="generateReleaseNotesDraft(true)">{{ tr("重试") }}</button></div>
+            <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">{{ tr("创建 Tag 前请填写更新说明。") }}</div>
           </section>
 
           <section class="summary-card">
-            <h3>本次操作</h3>
+            <h3>{{ tr("本次操作") }}</h3>
             <div v-if="cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
-            <p class="file-count">已选文件：{{ selectedPaths.length }} 个</p>
+            <p class="file-count">{{ tr('已选文件：{0} 个', [selectedPaths.length]) }}</p>
             <ul><li v-for="line in summaryLines" :key="line">{{ line }}</li></ul>
-            <div v-if="hasOnlineAction" class="alert warn">包含上传或上线，请确认目标环境。</div>
-            <div v-if="automationBranchMismatch" class="alert warn">自动发布只接受 {{ configuredAutomation?.releaseBranch }} 分支，当前为 {{ preflight.branch }}。</div>
-            <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">所选云端构建由 Tag 触发，请开启“创建版本 Tag”。</div>
-            <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">云端构建必须上传到 GitHub。</div>
-            <div v-else-if="invalidChosenTargetIds.length" class="alert warn">请为高级目标选择操作，或改为“仅提交代码”。</div>
-            <div v-else-if="!gitOnly && !selectedTargets.length" class="alert warn">请选择发布平台或“仅提交代码”。</div>
+            <div v-if="hasOnlineAction" class="alert warn">{{ tr("包含上传或上线，请确认目标环境。") }}</div>
+            <div v-if="automationBranchMismatch" class="alert warn">{{ tr('自动发布只接受 {0} 分支，当前为 {1}。', [configuredAutomation?.releaseBranch, preflight.branch]) }}</div>
+            <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">{{ tr("所选云端构建由 Tag 触发，请开启“创建版本 Tag”。") }}</div>
+            <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">{{ tr("云端构建必须上传到 GitHub。") }}</div>
+            <div v-else-if="invalidChosenTargetIds.length" class="alert warn">{{ tr("请为高级目标选择操作，或改为“仅提交代码”。") }}</div>
+            <div v-else-if="!gitOnly && !selectedTargets.length" class="alert warn">{{ tr("请选择发布平台或“仅提交代码”。") }}</div>
           </section>
-          <details v-if="history.length" class="history-panel"><summary>最近发布（{{ history.length }}）</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="`查看 ${run.tagName || '代码提交'} 的发布记录`" @click="showRun(run)"><code>{{ run.createTag === false ? '无 Tag' : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} · 查看日志</span></button></details>
+          <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
           </template>
-          <div v-else class="state panel-detail-loading">正在读取版本和代码变更…</div>
+          <div v-else class="state panel-detail-loading">{{ tr("正在读取版本和代码变更…") }}</div>
         </template>
       </div>
 
       <footer v-if="preflight && !activeRun" class="m-foot" :inert="publishing">
-        <button :disabled="publishing" @click="emit('close')">取消</button>
+        <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
         <div ref="publishControlRef" class="publish-control">
           <div class="publish-button-group" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-            <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ checkingRemote ? '正在检查 Git…' : publishing ? '正在创建…' : createTag ? (plannedVersions.length > 1 ? `确认发布 ${plannedVersions.length} 个版本` : `确认发布 ${plannedTagNames[0] || ''}`) : '确认提交并执行' }}</button>
-            <button type="button" class="publish-menu-trigger" :class="{ open: pushMenuOpen }" aria-label="发布选项" :aria-expanded="pushMenuOpen" aria-haspopup="menu" @click="pushMenuOpen = !pushMenuOpen">▾</button>
+            <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ checkingRemote ? tr("正在检查 Git…") : publishing ? tr("正在创建…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : tr("确认提交并执行") }}</button>
+            <button type="button" class="publish-menu-trigger" :class="{ open: pushMenuOpen }" :aria-label="tr('发布选项')" :aria-expanded="pushMenuOpen" aria-haspopup="menu" @click="pushMenuOpen = !pushMenuOpen">▾</button>
           </div>
           <div v-if="pushMenuOpen" class="publish-menu" role="menu">
             <label class="publish-menu-option">
               <input v-model="pushRemote" type="checkbox" @change="pushMenuOpen = false" />
               <span class="publish-menu-check" aria-hidden="true">{{ pushRemote ? '✓' : '' }}</span>
-              <span>上传 {{ remoteDestination }}</span>
+              <span>{{ tr("上传") }} {{ remoteDestination }}</span>
             </label>
           </div>
         </div>
       </footer>
       <datalist id="target-kinds"><option value="desktop" /><option value="web" /><option value="android" /><option value="server" /><option value="custom" /></datalist><datalist id="runner-types"><option value="local" /><option value="git-push" /></datalist><datalist id="version-formats"><option value="json" /><option value="npm-lock" /><option value="cargo" /><option value="cargo-lock" /><option value="toml" /><option value="gradle" /></datalist>
-      <div v-if="publishing" class="submitting-lock" role="status"><div class="submitting-message"><span class="submitting-spinner"></span><strong>正在创建发布任务…</strong><p v-if="cloudExecutionNotice">{{ cloudExecutionNotice.text }}</p></div></div>
+      <div v-if="publishing" class="submitting-lock" role="status"><div class="submitting-message"><span class="submitting-spinner"></span><strong>{{ tr("正在创建发布任务…") }}</strong><p v-if="cloudExecutionNotice">{{ cloudExecutionNotice.text }}</p></div></div>
     </div>
     <div v-if="confirmAction" class="action-confirm-overlay" role="dialog" aria-modal="true" :aria-label="confirmDialogTitle" @click.self="confirmAction = null">
       <section class="action-confirm">
         <h3>{{ confirmDialogTitle }}</h3>
         <p>{{ confirmDialogMessage }}</p>
-        <div class="action-confirm-buttons"><button @click="confirmAction = null">返回检查</button><button class="primary" @click="confirmSensitiveAction">{{ confirmDialogButton }}</button></div>
+        <div class="action-confirm-buttons"><button @click="confirmAction = null">{{ tr("返回检查") }}</button><button class="primary" @click="confirmSensitiveAction">{{ confirmDialogButton }}</button></div>
       </section>
     </div>
   </div>

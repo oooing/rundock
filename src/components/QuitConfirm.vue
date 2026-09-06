@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 // 通用退出确认弹窗（从托盘「退出」菜单触发）。
 // 提示退出会停止所有正在运行的项目服务，需用户二次确认。
 
@@ -12,17 +14,17 @@ const emit = defineEmits<{
   <div class="overlay" @click.self="emit('cancel')">
     <div class="modal">
       <header class="m-head">
-        <h2>确认退出</h2>
+        <h2>{{ tr("确认退出") }}</h2>
       </header>
 
       <div class="m-body">
-        <p class="msg">退出将停止所有正在运行的项目服务并关闭程序。</p>
-        <p class="sub">确定要退出吗？</p>
+        <p class="msg">{{ tr("退出将停止所有正在运行的项目服务并关闭程序。") }}</p>
+        <p class="sub">{{ tr("确定要退出吗？") }}</p>
       </div>
 
       <footer class="m-foot">
-        <button @click="emit('cancel')">取消</button>
-        <button class="danger" @click="emit('confirm')">退出</button>
+        <button @click="emit('cancel')">{{ tr("取消") }}</button>
+        <button class="danger" @click="emit('confirm')">{{ tr("退出") }}</button>
       </footer>
     </div>
   </div>

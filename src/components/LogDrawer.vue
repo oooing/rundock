@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/http'
 import { useAppsStore } from '@/stores/apps'
@@ -97,28 +99,28 @@ onMounted(async () => {
     <div class="drawer">
       <header class="d-head">
         <div class="d-title">
-          <h3>日志 — {{ app?.name || appId }}</h3>
+          <h3>{{ tr("日志 —") }} {{ app?.name || appId }}</h3>
           <span class="badge" :class="app?.status" v-if="app">
             <span class="dot"></span>{{ app.status }}
           </span>
         </div>
         <div class="d-tools">
           <label class="auto">
-            <input type="checkbox" v-model="autoScroll" /> 自动滚动
+            <input type="checkbox" v-model="autoScroll" /> {{ tr("自动滚动") }}
           </label>
           <input
             v-model="keyword"
-            placeholder="搜索 / 过滤"
+            :placeholder="tr('搜索 / 过滤')"
             @keyup.enter="loadHistory"
             class="search"
           />
-          <button class="ghost icon" @click="clearAndReload" title="重新加载">↻</button>
-          <button class="ghost icon" @click="emit('close')" title="关闭">✕</button>
+          <button class="ghost icon" @click="clearAndReload" :title="tr('重新加载')">↻</button>
+          <button class="ghost icon" @click="emit('close')" :title="tr('关闭')">✕</button>
         </div>
       </header>
 
       <div class="d-body" ref="bodyRef">
-        <div v-if="filtered.length === 0 && !loading" class="no-logs">暂无日志</div>
+        <div v-if="filtered.length === 0 && !loading" class="no-logs">{{ tr("暂无日志") }}</div>
         <div
           v-for="l in filtered"
           :key="l.id"

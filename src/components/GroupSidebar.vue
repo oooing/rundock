@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { computed, onMounted, ref } from 'vue'
 import { useGroupsStore } from '@/stores/groups'
 import { useAppsStore } from '@/stores/apps'
 import { getAppVersion } from '@/tauri/window'
 import pkg from '../../package.json'
 
-const props = defineProps<{ selected: string | null }>()
+const props = defineProps<{ selected: string | null; dropGroupId?: string | null }>()
 const emit = defineEmits<{
   (e: 'select', id: string | null): void
   (e: 'settings'): void
@@ -26,9 +28,10 @@ onMounted(() => {
 })
 
 async function newGroup() {
-  const name = prompt('分组名称')
-  if (!name) return
-  await groups.create(name)
+  const name = prompt(tr("分组名称"))
+  if (!name?.trim()) return
+  try { await groups.create(name.trim()) }
+  catch (error) { alert(tr('创建分组失败：') + (error instanceof Error ? error.message : String(error))) }
 }
 </script>
 
@@ -36,7 +39,7 @@ async function newGroup() {
   <aside class="sidebar">
     <div class="brand">
       <span class="logo">⚡</span>
-      <span class="name">RunDock 启动坞</span>
+      <span class="name">{{ tr("RunDock 启动坞") }}</span>
     </div>
 
     <nav class="nav">
@@ -46,20 +49,26 @@ async function newGroup() {
         @click="emit('select', null)"
       >
         <span class="ico">▦</span>
-        <span class="label">全部应用</span>
+        <span class="label">{{ tr("全部应用") }}</span>
         <span class="count">{{ countAll }}</span>
       </button>
 
       <div class="section-title">
-        <span>分组</span>
-        <button class="ghost icon" title="新建分组" @click="newGroup">＋</button>
+        <span>{{ tr("分组") }}</span>
+        <button class="ghost icon" :title="tr('新建分组')" @click="newGroup">＋</button>
       </div>
+
+      <button class="nav-item" data-drop-group-id="" :class="{ active: props.selected === '', 'drop-target': props.dropGroupId === '' }" @click="emit('select', '')">
+        <span class="ico">▢</span><span class="label">{{ tr('未分组') }}</span>
+        <span class="count">{{ apps.apps.filter(a => !a.groupId).length }}</span>
+      </button>
 
       <button
         v-for="g in groups.groups"
         :key="g.id"
         class="nav-item"
-        :class="{ active: props.selected === g.id }"
+        :data-drop-group-id="g.id"
+        :class="{ active: props.selected === g.id, 'drop-target': props.dropGroupId === g.id }"
         @click="emit('select', g.id)"
       >
         <span class="ico swatch" :style="{ background: g.color || 'var(--text-faint)' }"></span>
@@ -70,14 +79,15 @@ async function newGroup() {
 
     <div class="footer">
       <div class="footer-row">
-        <button class="ghost" @click="emit('settings')">⚙ 设置</button>
-        <span class="version" title="当前版本">v{{ appVersion }}</span>
+        <button class="ghost" @click="emit('settings')">{{ tr("⚙ 设置") }}</button>
+        <span class="version" :title="tr('当前版本')">v{{ appVersion }}</span>
       </div>
     </div>
   </aside>
 </template>
 
 <style scoped>
+.nav-item.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: rgba(79,140,255,.2); }
 .sidebar {
   width: 220px;
   flex-shrink: 0;

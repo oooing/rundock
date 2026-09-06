@@ -1,5 +1,6 @@
 // Apps store：App 列表 + 启停重启操作 + 接收 WS 实时更新。
 import { defineStore } from 'pinia'
+import { tr } from '@/i18n'
 import { ref } from 'vue'
 import { api } from '@/api/http'
 import { wsClient } from '@/api/ws'
@@ -48,7 +49,7 @@ export const useAppsStore = defineStore('apps', () => {
     return api.import(scriptPath)
   }
 
-  async function createFromCandidate(c: ImportCandidate): Promise<AppView> {
+  async function createFromCandidate(c: ImportCandidate, groupId?: string): Promise<AppView> {
     const body: CreateAppBody = {
       name: c.name,
       entryScript: c.entryScript,
@@ -58,6 +59,7 @@ export const useAppsStore = defineStore('apps', () => {
       args: c.args,
       env: c.env,
       tags: [],
+      groupId: groupId || null,
       portHints: c.portHints,
       healthUrl: '',
       scriptHash: c.scriptHash,
@@ -162,6 +164,12 @@ export const useAppsStore = defineStore('apps', () => {
     patchFull(updated)
   }
 
+  async function moveToGroup(id: string, groupId: string) {
+    const updated = await api.updateApp(id, { groupId })
+    // A concurrent start/restart or live status update must not be overwritten.
+    patch(id, { groupId: updated.groupId || null })
+  }
+
   /** 设置卡片背景色（文字色由前端实时计算，不持久化）。 */
   async function setCardColor(id: string, cardColor: string) {
     const updated = await api.updateApp(id, { cardColor })
@@ -178,7 +186,7 @@ export const useAppsStore = defineStore('apps', () => {
     const moving = new Set(orderedVisibleIds)
     const byId = new Map(previous.map((a) => [a.id, a]))
     if (moving.size !== orderedVisibleIds.length || orderedVisibleIds.some((id) => !byId.has(id))) {
-      throw new Error('卡片顺序数据无效，请刷新后重试')
+      throw new Error(tr('卡片顺序数据无效，请刷新后重试'))
     }
 
     let visibleIndex = 0
@@ -277,7 +285,7 @@ export const useAppsStore = defineStore('apps', () => {
 
   return {
     apps, loading, error, liveLogs,
-    load, importRaw, createFromCandidate, start, stop, restart, resumeAfterConfirm, remove, rename, openURL, openDir, update, setCardColor, reorderCards,
+    load, importRaw, createFromCandidate, start, stop, restart, resumeAfterConfirm, remove, rename, openURL, openDir, update, moveToGroup, setCardColor, reorderCards,
     setServiceRole, reidentifyService,
     patch, bindWS, clearLiveLogs,
   }

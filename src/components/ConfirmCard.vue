@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { computed } from 'vue'
 import type { ImportCandidate } from '@/types'
 
@@ -29,23 +31,23 @@ const hasWarn = computed(
 const envEntries = computed(() => Object.entries(c.value.env || {}))
 const markers = computed(() => c.value.markers || [])
 
-const levelText = (l: string) => ({ danger: '危险', warn: '警告', info: '提示' }[l] || l)
+const levelText = (l: string) => ({ danger: tr("危险"), warn: tr("警告"), info: tr("提示") }[l] || l)
 
 const title = computed(() =>
   isScriptChange.value
-    ? `脚本已变更 — 确认${props.action || '启动'}`
-    : '确认导入此应用',
+    ? tr("脚本已变更 — 确认{0}", [props.action || tr("启动")])
+    : tr("确认导入此应用"),
 )
 const hint = computed(() =>
   isScriptChange.value
-    ? '入口脚本的内容在上次确认后发生了变化。运行脚本等于执行任意代码，请核对新的风险项，确认后再继续。'
-    : '运行脚本等于执行任意代码。请核对以下信息，确认无误后再导入。这是平台的安全基线。',
+    ? tr("入口脚本的内容在上次确认后发生了变化。运行脚本等于执行任意代码，请核对新的风险项，确认后再继续。")
+    : tr("运行脚本等于执行任意代码。请核对以下信息，确认无误后再导入。这是平台的安全基线。"),
 )
 const confirmText = computed(() => {
   if (!isScriptChange.value) {
-    return hasDanger.value ? '我已知晓风险，确认导入' : '确认导入'
+    return hasDanger.value ? tr("我已知晓风险，确认导入") : tr("确认导入")
   }
-  return hasDanger.value ? `我已知晓风险，确认${props.action || '启动'}` : `确认${props.action || '启动'}`
+  return hasDanger.value ? tr("我已知晓风险，确认{0}", [props.action || tr("启动")]) : tr("确认{0}", [props.action || tr("启动")])
 })
 </script>
 
@@ -63,23 +65,23 @@ const confirmText = computed(() => {
         </p>
 
         <section class="block" v-if="!isScriptChange">
-          <h4>应用名称</h4>
+          <h4>{{ tr("应用名称") }}</h4>
           <input v-model="c.name" class="name-input" />
         </section>
 
         <section class="block">
-          <h4>检测信息</h4>
-          <div class="kv"><span>入口脚本</span><code>{{ c.entryScript }}</code></div>
-          <div class="kv"><span>工作目录</span><code>{{ c.cwd }}</code></div>
-          <div class="kv"><span>适配器</span><code>{{ c.adapterType }}</code></div>
-          <div class="kv"><span>启动命令</span><code>{{ c.cmd }} {{ c.args.join(' ') }}</code></div>
+          <h4>{{ tr("检测信息") }}</h4>
+          <div class="kv"><span>{{ tr("入口脚本") }}</span><code>{{ c.entryScript }}</code></div>
+          <div class="kv"><span>{{ tr("工作目录") }}</span><code>{{ c.cwd }}</code></div>
+          <div class="kv"><span>{{ tr("适配器") }}</span><code>{{ c.adapterType }}</code></div>
+          <div class="kv"><span>{{ tr("启动命令") }}</span><code>{{ c.cmd }} {{ c.args.join(' ') }}</code></div>
           <div class="kv" v-if="markers.length">
-            <span>项目标志</span><code>{{ markers.join(', ') }}</code></div>
-          <div class="kv"><span>端口提示</span><code>{{ c.portHints.join(', ') || '无' }}</code></div>
+            <span>{{ tr("项目标志") }}</span><code>{{ markers.join(', ') }}</code></div>
+          <div class="kv"><span>{{ tr("端口提示") }}</span><code>{{ c.portHints.join(', ') || tr("无") }}</code></div>
         </section>
 
         <section class="block" v-if="envEntries.length">
-          <h4>将注入的环境变量</h4>
+          <h4>{{ tr("将注入的环境变量") }}</h4>
           <div class="env-list">
             <div v-for="[k, v] in envEntries" :key="k" class="env-row">
               <code class="env-k">{{ k }}</code><code class="env-v">{{ v }}</code>
@@ -88,7 +90,7 @@ const confirmText = computed(() => {
         </section>
 
         <section class="block risk" v-if="c.findings && c.findings.length">
-          <h4 :class="{ danger: hasDanger, warn: hasWarn && !hasDanger }">风险扫描结果</h4>
+          <h4 :class="{ danger: hasDanger, warn: hasWarn && !hasDanger }">{{ tr("风险扫描结果") }}</h4>
           <div
             v-for="(f, i) in c.findings"
             :key="i"
@@ -105,7 +107,7 @@ const confirmText = computed(() => {
       </div>
 
       <footer class="m-foot">
-        <button @click="emit('cancel')">取消</button>
+        <button @click="emit('cancel')">{{ tr("取消") }}</button>
         <button
           class="primary"
           :class="{ danger: hasDanger }"

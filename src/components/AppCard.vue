@@ -1,10 +1,14 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { computed, ref, watch } from 'vue'
-import type { AppView, ServiceRole } from '@/types'
+import type { AppView, Group, ServiceRole, StartupIssue } from '@/types'
+import { api } from '@/api/http'
+import { useAppsStore } from '@/stores/apps'
 import backendIcon from '@/assets/backend-server.svg'
 import { CARD_COLOR_PALETTE, getReadableTextColor, normalizeHexColor } from '@/utils/cardColors'
 
-const props = defineProps<{ app: AppView }>()
+const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean }>()
 const emit = defineEmits<{
   (e: 'start' | 'stop' | 'restart' | 'log' | 'open-dir' | 'release' | 'delete', id: string): void
   (e: 'open-url', id: string, url?: string): void
@@ -13,24 +17,65 @@ const emit = defineEmits<{
   (e: 'reidentify', appId: string, serviceId: string): void
   (e: 'set-color', id: string, color: string): void
   (e: 'drag-start', event: PointerEvent, id: string): void
+  (e: 'move-group', id: string, groupId: string): void
 }>()
 
 const a = computed(() => props.app)
+const startupIssue = ref<StartupIssue | null>(null)
+const checkingIssue = ref(false)
+const recovering = ref(false)
+const recoveryError = ref('')
+let issueRequest = 0
+async function checkStartupIssue() {
+  const request = ++issueRequest
+  if (a.value.status !== 'failed') { startupIssue.value = null; checkingIssue.value = false; recoveryError.value = ''; return }
+  checkingIssue.value = true
+  try {
+    const result = await api.startupIssue(a.value.id)
+    if (request === issueRequest) startupIssue.value = result
+  } catch {
+    if (request === issueRequest) startupIssue.value = null
+  } finally { if (request === issueRequest) checkingIssue.value = false }
+}
+watch(() => [a.value.id, a.value.status, a.value.runId], checkStartupIssue, { immediate: true })
+async function recoverPorts() {
+  if (recovering.value) return
+  recovering.value = true
+  recoveryError.value = ''
+  try {
+    // Refresh the process identity; never submit stale PID information from a card.
+    await checkStartupIssue()
+    const issue = startupIssue.value
+    if (!issue?.canRecover) throw new Error(issue?.reason || tr('无法安全释放端口，请查看日志'))
+    await api.recoverPorts(a.value.id, issue.fingerprint)
+    await useAppsStore().load()
+  } catch (error: any) {
+    recoveryError.value = error?.message || String(error)
+    await checkStartupIssue()
+  } finally { recovering.value = false }
+}
+
+function chooseGroup(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const groupId = select.value
+  select.value = a.value.groupId || ''
+  emit('move-group', a.value.id, groupId)
+}
 
 // 服务角色 → 图标/颜色/标签
-const ROLE_META: Record<ServiceRole, { icon: string; iconSrc?: string; color: string; label: string }> = {
-  frontend: { icon: '🌐', color: '#3b82f6', label: '前端' },
-  backend: { icon: '', iconSrc: backendIcon, color: '#8b5cf6', label: '后端' },
-  database: { icon: '🗄️', color: '#f59e0b', label: '数据库' },
-  unknown: { icon: '❓', color: '#9ca3af', label: '未识别' },
-}
+const ROLE_META = computed<Record<ServiceRole, { icon: string; iconSrc?: string; color: string; label: string }>>(() => ({
+  frontend: { icon: '🌐', color: '#3b82f6', label: tr("前端") },
+  backend: { icon: '', iconSrc: backendIcon, color: '#8b5cf6', label: tr("后端") },
+  database: { icon: '🗄️', color: '#f59e0b', label: tr("数据库") },
+  unknown: { icon: '❓', color: '#9ca3af', label: tr("未识别") },
+}))
 const ROLE_OPTIONS: ServiceRole[] = ['frontend', 'backend', 'database', 'unknown']
 
 // 当前展开切换菜单的 service id（null = 无）
 const roleMenuOpen = ref<string | null>(null)
 // role 可能为 undefined（老数据/未填充），默认回退到 unknown，避免 ROLE_META[undefined] 崩溃。
 function roleMeta(role?: ServiceRole) {
-  return ROLE_META[role ?? 'unknown']
+  return ROLE_META.value[role ?? 'unknown']
 }
 function toggleRoleMenu(svcId: string) {
   roleMenuOpen.value = roleMenuOpen.value === svcId ? null : svcId
@@ -76,14 +121,14 @@ const isActive = computed(
 const urlReachable = computed(() => isActive.value)
 
 const statusLabel = computed(() => {
-  if (a.value.restarting) return '重启中'
+  if (a.value.restarting) return tr("重启中")
   const m: Record<string, string> = {
-    starting: '启动中',
-    running: '运行中',
-    degraded: '降级',
-    stopping: '停止中',
-    stopped: '已停止',
-    failed: '失败',
+    starting: tr("启动中"),
+    running: tr("运行中"),
+    degraded: tr("降级"),
+    stopping: tr("停止中"),
+    stopped: tr("已停止"),
+    failed: tr("失败"),
   }
   return m[a.value.status] || a.value.status
 })
@@ -91,9 +136,9 @@ const statusLabel = computed(() => {
 // 服务健康状态文本
 function healthText(h: string): string {
   const m: Record<string, string> = {
-    healthy: '健康',
-    unhealthy: '不健康',
-    unknown: '检测中',
+    healthy: tr("健康"),
+    unhealthy: tr("不健康"),
+    unknown: tr("检测中"),
   }
   return m[h] || h
 }
@@ -155,11 +200,12 @@ const cardStyle = computed(() => {
       <div class="name-row">
         <button
           class="ghost icon drag-handle"
-          title="按住拖拽调整卡片顺序"
-          aria-label="拖拽调整卡片顺序"
+          :title="tr('拖动可排序，或移到侧栏分组')"
+          :aria-label="tr('拖动项目')"
+          :disabled="moving"
           @pointerdown.stop.prevent="emit('drag-start', $event, a.id)"
         >⠿</button>
-        <h3 v-if="!editingName" :title="a.name + '（点✎改名）'" @dblclick="startRename">{{ a.name }}</h3>
+        <h3 v-if="!editingName" :title="a.name + tr('（点✎改名）')" @dblclick="startRename">{{ a.name }}</h3>
         <input
           v-else
           v-model="nameDraft"
@@ -171,11 +217,11 @@ const cardStyle = computed(() => {
         />
       </div>
       <div class="head-right">
-        <button v-if="!editingName" class="ghost icon rename-btn" title="改名" @click="startRename">✎</button>
+        <button v-if="!editingName" class="ghost icon rename-btn" :title="tr('改名')" @click="startRename">✎</button>
         <div class="color-wrap">
           <button
             class="ghost icon color-btn"
-            title="卡片背景色"
+            :title="tr('卡片背景色')"
             @click.stop="toggleColorMenu"
           >🎨</button>
           <div v-if="colorMenuOpen" class="color-backdrop" @click="colorMenuOpen = false"></div>
@@ -193,9 +239,9 @@ const cardStyle = computed(() => {
             </div>
             <label class="custom-color">
               <input type="color" :value="normalizeHexColor(a.cardColor) || '#1e293b'" @input="chooseColor(($event.target as HTMLInputElement).value)" />
-              <span>自定义</span>
+              <span>{{ tr("自定义") }}</span>
             </label>
-            <button v-if="a.cardColor" class="clear-color" @click="clearColor">清除颜色</button>
+            <button v-if="a.cardColor" class="clear-color" @click="clearColor">{{ tr("清除颜色") }}</button>
           </div>
         </div>
         <span class="badge" :class="a.restarting ? 'starting' : a.status">
@@ -215,7 +261,7 @@ const cardStyle = computed(() => {
               class="role-btn"
               :class="{ locked: svc.roleSource === 'manual' }"
               :style="{ color: roleMeta(svc.role).color }"
-              :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? '（已锁定）' : '') + ' — 点击切换'"
+              :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? tr('（已锁定）') : '') + tr(' — 点击切换')"
               @click.stop="toggleRoleMenu(svc.id)"
             >
               <img v-if="roleMeta(svc.role).iconSrc" class="role-icon" :src="roleMeta(svc.role).iconSrc" alt="" />
@@ -232,57 +278,92 @@ const cardStyle = computed(() => {
                 <span v-else>{{ ROLE_META[r].icon }}</span>
                 {{ ROLE_META[r].label }}
               </button>
-              <button class="reidentify" @click="reidentify(svc.id)">🔄 重新识别</button>
+              <button class="reidentify" @click="reidentify(svc.id)">{{ tr("🔄 重新识别") }}</button>
             </div>
           </div>
           <span class="svc-dot" :class="svc.health" :title="healthText(svc.health)"></span>
           <span class="svc-port mono">:{{ svc.port }}</span>
-          <a class="svc-url mono" :class="{ dim: !urlReachable }" :title="svc.url + (urlReachable ? '' : '（服务未运行）')" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
+          <a class="svc-url mono" :class="{ dim: !urlReachable }" :title="svc.url + (urlReachable ? '' : tr('（服务未运行）'))" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
         </div>
       </div>
       <!-- 无服务时回退到旧的 lastUrl -->
       <div class="meta-row url" :class="{ dim: !urlReachable }" v-else-if="a.lastUrl">
         <span class="k">URL</span>
-        <a class="v mono" :title="a.lastUrl + (urlReachable ? '' : '（服务未运行）')" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
+        <a class="v mono" :title="a.lastUrl + (urlReachable ? '' : tr('（服务未运行）'))" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
       </div>
       <div class="meta-row">
         <span class="k">PID</span>
         <span class="v mono">{{ a.pid || '—' }}</span>
       </div>
       <div class="meta-row path" :title="a.entryScript">
-        <span class="k">入口</span>
+        <span class="k">{{ tr("入口") }}</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
       </div>
     </div>
 
-    <footer class="actions">
+    <div class="group-row">
+      <label :for="`group-${a.id}`">{{ tr('分组') }}</label>
+      <select :id="`group-${a.id}`" class="group-select" :value="a.groupId || ''" :disabled="moving" @change="chooseGroup">
+        <option value="">{{ tr('未分组') }}</option>
+        <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+      </select>
+    </div>
+    <section v-if="a.status === 'failed' || recovering" class="startup-error" role="status" aria-live="polite">
+      <strong v-if="startupIssue?.code === 'port_in_use'">{{ tr('端口 {0} 被占用', [startupIssue.ports.join('、')]) }}</strong>
+      <strong v-else>{{ tr('启动失败') }}</strong>
+      <span v-if="recovering">{{ checkingIssue ? tr('正在检查占用进程…') : tr('正在释放端口并启动…') }}</span>
+      <span v-else-if="checkingIssue">{{ tr('正在检查失败原因…') }}</span>
+      <template v-else-if="startupIssue?.code === 'port_in_use'">
+        <span v-if="startupIssue.reason">{{ tr(startupIssue.reason) }}</span>
+        <span v-else-if="startupIssue.conflicts.length">{{ tr('将关闭本项目占用进程，再自动启动') }}</span>
+        <span v-else>{{ tr('端口已释放，可以重新启动') }}</span>
+        <details v-if="startupIssue.conflicts.length">
+          <summary>{{ tr('占用详情') }}</summary>
+          <div v-for="c in startupIssue.conflicts" :key="`${c.port}-${c.pid}`">:{{ c.port }} · {{ c.name }} · PID {{ c.pid }}</div>
+        </details>
+      </template>
+      <span v-if="recoveryError" role="alert">{{ recoveryError }}</span>
+      <div class="recovery-actions">
+        <button v-if="startupIssue?.canRecover" class="primary" :disabled="recovering || checkingIssue" @click="recoverPorts">{{ recovering ? tr('处理中…') : startupIssue.conflicts.length ? tr('释放端口并重试') : tr('重新启动') }}</button>
+        <button v-if="startupIssue?.code === 'port_in_use' && !startupIssue.canRecover" :disabled="recovering || checkingIssue" @click="checkStartupIssue">{{ tr('重新检查') }}</button>
+        <button class="ghost" :disabled="recovering" @click="emit('log', a.id)">{{ tr('查看日志') }}</button>
+      </div>
+    </section>
+    <fieldset class="actions" :disabled="recovering">
       <template v-if="a.restarting">
-        <button class="danger" disabled>停止</button>
-        <button disabled>重启中…</button>
+        <button class="danger" disabled>{{ tr("停止") }}</button>
+        <button disabled>{{ tr("重启中…") }}</button>
       </template>
       <template v-else-if="isActive">
-        <button @click="emit('stop', a.id)" class="danger">停止</button>
-        <button @click="emit('restart', a.id)">重启</button>
+        <button @click="emit('stop', a.id)" class="danger">{{ tr("停止") }}</button>
+        <button @click="emit('restart', a.id)">{{ tr("重启") }}</button>
       </template>
       <template v-else>
-        <button class="primary" @click="emit('start', a.id)">启动</button>
+        <button class="primary" @click="emit('start', a.id)">{{ tr("启动") }}</button>
       </template>
-      <button class="ghost icon" title="查看日志" @click="emit('log', a.id)">📜</button>
+      <button class="ghost icon" :title="tr('查看日志')" @click="emit('log', a.id)">📜</button>
       <button
         class="ghost icon"
         :class="{ dim: a.lastUrl && !urlReachable }"
-        :title="a.lastUrl ? (urlReachable ? '打开 URL' : '服务未运行，URL 可能无法访问') : '暂无 URL'"
+        :title="a.lastUrl ? (urlReachable ? tr('打开 URL') : tr('服务未运行，URL 可能无法访问')) : tr('暂无 URL')"
         :disabled="!a.lastUrl"
         @click="emit('open-url', a.id)"
       >🌐</button>
-      <button class="ghost icon" title="打开目录" @click="emit('open-dir', a.id)">📁</button>
-      <button class="ghost release-btn" title="Git 版本发布" @click="emit('release', a.id)">发布</button>
-      <button class="ghost icon danger-ico" title="删除" @click="emit('delete', a.id)">🗑</button>
-    </footer>
+      <button class="ghost icon" :title="tr('打开目录')" @click="emit('open-dir', a.id)">📁</button>
+      <button class="ghost icon danger-ico" :title="tr('删除')" @click="emit('delete', a.id)">🗑</button>
+      <button class="ghost release-btn" :title="tr('Git 版本发布')" @click="emit('release', a.id)">{{ tr("发布") }}</button>
+    </fieldset>
   </article>
 </template>
 
 <style scoped>
+.startup-error { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid rgba(248,113,113,.5); background: rgba(0,0,0,.18); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.startup-error strong { font-size: 14px; }
+.startup-error summary { cursor: pointer; }
+.recovery-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions { margin: 0; min-width: 0; border-left: 0; border-right: 0; border-bottom: 0; }
+.group-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--card-muted, var(--text-dim)); font-size: 12px; }
+.group-select { max-width: 180px; min-width: 0; padding: 4px 8px; font-size: 12px; }
 .card {
   background: var(--card-bg, var(--bg-elev));
   color: var(--card-fg, var(--text));
@@ -523,6 +604,9 @@ button.dim {
 }
 .actions button {
   flex-shrink: 0;
+}
+.release-btn {
+  margin-inline-start: auto;
 }
 .danger-ico:hover {
   color: var(--red);

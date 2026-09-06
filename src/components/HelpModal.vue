@@ -1,77 +1,79 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { tr } from '@/i18n'
+
+import { computed, ref } from 'vue'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 // 左侧菜单
-const tabs = [
-  { id: 'quick', label: '快速上手' },
-  { id: 'status', label: '状态与操作' },
-  { id: 'strategy', label: '智能策略' },
-  { id: 'tips', label: '小提示' },
-] as const
-type TabId = (typeof tabs)[number]['id']
+const tabs = computed(() => ([
+  { id: 'quick', label: tr("快速上手") },
+  { id: 'status', label: tr("状态与操作") },
+  { id: 'strategy', label: tr("智能策略") },
+  { id: 'tips', label: tr("小提示") },
+] as const))
+type TabId = (typeof tabs.value)[number]['id']
 const activeTab = ref<TabId>('quick')
 
-const statuses = [
-  { cls: 'starting', name: '启动中', desc: '刚点启动，正在初始化（装依赖、编译、起服务）。健康检查会持续复查，就绪后自动转运行中。' },
-  { cls: 'running', name: '运行中', desc: '进程活着，健康检查通过，URL 可正常访问。' },
-  { cls: 'degraded', name: '降级', desc: '进程活着，但健康检查暂未通过。常见原因：服务还在编译、刚起来还没就绪、或 /health 端点不存在。每 5 秒自动复查一次，恢复后转运行中。' },
-  { cls: 'stopping', name: '停止中', desc: '正在优雅停止（Ctrl-Break → 等待 → 强制回收进程树）。' },
-  { cls: 'stopped', name: '已停止', desc: '正常停止，端口已释放。' },
-  { cls: 'failed', name: '失败', desc: '进程异常退出（崩溃/报错）。看日志排查。' },
-]
+const statuses = computed(() => ([
+  { cls: 'starting', name: tr("启动中"), desc: tr("刚点启动，正在初始化（装依赖、编译、起服务）。健康检查会持续复查，就绪后自动转运行中。") },
+  { cls: 'running', name: tr("运行中"), desc: tr("进程活着，健康检查通过，URL 可正常访问。") },
+  { cls: 'degraded', name: tr("降级"), desc: tr("进程活着，但健康检查暂未通过。常见原因：服务还在编译、刚起来还没就绪、或 /health 端点不存在。每 5 秒自动复查一次，恢复后转运行中。") },
+  { cls: 'stopping', name: tr("停止中"), desc: tr("正在优雅停止（Ctrl-Break → 等待 → 强制回收进程树）。") },
+  { cls: 'stopped', name: tr("已停止"), desc: tr("正常停止，端口已释放。") },
+  { cls: 'failed', name: tr("失败"), desc: tr("进程异常退出（崩溃/报错）。看日志排查。") },
+]))
 
-const ops = [
-  { key: '启动 / 停止 / 重启', desc: '控制应用运行' },
-  { key: '📜', desc: '查看实时日志' },
-  { key: '🌐', desc: '用浏览器打开发现的 URL' },
-  { key: '📁', desc: '打开项目目录' },
-  { key: '🗑', desc: '删除应用' },
-  { key: '✎ / 双击名称', desc: '改名' },
-]
+const ops = computed(() => ([
+  { key: tr("启动 / 停止 / 重启"), desc: tr("控制应用运行") },
+  { key: '📜', desc: tr("查看实时日志") },
+  { key: '🌐', desc: tr("用浏览器打开发现的 URL") },
+  { key: '📁', desc: tr("打开项目目录") },
+  { key: '🗑', desc: tr("删除应用") },
+  { key: tr("✎ / 双击名称"), desc: tr("改名") },
+]))
 
-const strategies = [
+const strategies = computed(() => ([
   {
-    title: '多服务自动识别',
-    desc: '一个项目内可能有前端、后端、数据库多个服务，各自监听不同端口。平台会自动发现它们，每个端口独立显示健康状态，点端口行可直接打开对应服务。',
+    title: tr("多服务自动识别"),
+    desc: tr("一个项目内可能有前端、后端、数据库多个服务，各自监听不同端口。平台会自动发现它们，每个端口独立显示健康状态，点端口行可直接打开对应服务。"),
   },
   {
-    title: '双证据端口归属',
-    desc: '判断"这个端口属于哪个项目"用两条证据：① 端口的进程在本项目的进程树内（强证据）；② 项目日志里提到了这个端口的 URL（补证据，覆盖进程树断裂场景）。两条证据都不满足的端口不会被收入，所以多个项目同时运行也不会把对方的端口算进来。',
+    title: tr("双证据端口归属"),
+    desc: tr("判断\"这个端口属于哪个项目\"用两条证据：① 端口的进程在本项目的进程树内（强证据）；② 项目日志里提到了这个端口的 URL（补证据，覆盖进程树断裂场景）。两条证据都不满足的端口不会被收入，所以多个项目同时运行也不会把对方的端口算进来。"),
   },
   {
-    title: '启动前自动清端口',
-    desc: '启动项目时，若检测到该项目历史用过的端口被残留进程占用，会自动杀掉占用进程，然后才启动。告别 EADDRINUSE 端口冲突。',
+    title: tr("启动前自动清端口"),
+    desc: tr("启动项目时，若检测到该项目历史用过的端口被残留进程占用，会自动杀掉占用进程，然后才启动。告别 EADDRINUSE 端口冲突。"),
   },
   {
-    title: '时间窗约束',
-    desc: '日志证据必须叠加时间窗：端口必须是"本项目启动之后"才开始监听的。启动前就存在的端口不会被误收，避免把无关端口或别的项目早就占的端口算进来。',
+    title: tr("时间窗约束"),
+    desc: tr("日志证据必须叠加时间窗：端口必须是\"本项目启动之后\"才开始监听的。启动前就存在的端口不会被误收，避免把无关端口或别的项目早就占的端口算进来。"),
   },
   {
-    title: '木桶原则综合状态',
-    desc: '项目整体状态由所有服务综合判定：全部健康 = 运行中；任一不健康 = 降级；全挂 = 失败。一个服务出问题不会静默，会反映到项目状态上。',
+    title: tr("木桶原则综合状态"),
+    desc: tr("项目整体状态由所有服务综合判定：全部健康 = 运行中；任一不健康 = 降级；全挂 = 失败。一个服务出问题不会静默，会反映到项目状态上。"),
   },
   {
-    title: '持续健康复查（低开销）',
-    desc: '降级状态的服务每 5 秒复查一次，恢复就转运行中并停止复查。运行中的服务不再复查，零开销。复查只对 127.0.0.1 发本地 HTTP 请求，不走网络。',
+    title: tr("持续健康复查（低开销）"),
+    desc: tr("降级状态的服务每 5 秒复查一次，恢复就转运行中并停止复查。运行中的服务不再复查，零开销。复查只对 127.0.0.1 发本地 HTTP 请求，不走网络。"),
   },
-]
+]))
 
-const tips = [
-  '导入：粘贴完整路径（含盘符），或点「浏览」选文件后补全路径',
-  '改名：双击卡片名称，或悬停后点 ✎',
-  '改代码后：前端自动热更新；后端需重启 dev.bat 重新编译',
-  '关窗口/关服务：正在运行的应用会停止，配置永久保留在数据库',
-  '数据位置：%APPDATA%\\launcher-sidecar\\launcher.db',
-]
+const tips = computed(() => ([
+  tr("导入：粘贴完整路径（含盘符），或点「浏览」选文件后补全路径"),
+  tr("改名：双击卡片名称，或悬停后点 ✎"),
+  tr("改代码后：前端自动热更新；后端需重启 dev.bat 重新编译"),
+  tr("关窗口/关服务：正在运行的应用会停止，配置永久保留在数据库"),
+  tr("数据位置：%APPDATA%\\launcher-sidecar\\launcher.db"),
+]))
 </script>
 
 <template>
   <div class="overlay" @click.self="emit('close')">
     <div class="modal">
       <header class="m-head">
-        <h2>使用说明</h2>
+        <h2>{{ tr("使用说明") }}</h2>
         <button class="ghost icon" @click="emit('close')">✕</button>
       </header>
 
@@ -96,43 +98,43 @@ const tips = [
             <div class="quick-step">
               <span class="step-num">1</span>
               <div>
-                <div class="step-t">导入脚本</div>
-                <div class="step-d">在顶栏输入框粘贴 start.bat 完整路径（含盘符），回车或点导入。确认卡核对信息后生成卡片。</div>
+                <div class="step-t">{{ tr("导入脚本") }}</div>
+                <div class="step-d">{{ tr("在顶栏输入框粘贴 start.bat 完整路径（含盘符），回车或点导入。确认卡核对信息后生成卡片。") }}</div>
               </div>
             </div>
             <div class="quick-step">
               <span class="step-num">2</span>
               <div>
-                <div class="step-t">点「启动」</div>
-                <div class="step-d">项目在后台无窗口运行。日志实时采集，点 📜 查看。</div>
+                <div class="step-t">{{ tr("点「启动」") }}</div>
+                <div class="step-d">{{ tr("项目在后台无窗口运行。日志实时采集，点 📜 查看。") }}</div>
               </div>
             </div>
             <div class="quick-step">
               <span class="step-num">3</span>
               <div>
-                <div class="step-t">查看服务与 URL</div>
-                <div class="step-d">卡片自动列出项目内所有服务端口，点端口行用浏览器打开对应地址。</div>
+                <div class="step-t">{{ tr("查看服务与 URL") }}</div>
+                <div class="step-d">{{ tr("卡片自动列出项目内所有服务端口，点端口行用浏览器打开对应地址。") }}</div>
               </div>
             </div>
             <div class="quick-step">
               <span class="step-num">4</span>
               <div>
-                <div class="step-t">停止 / 重启</div>
-                <div class="step-d">停止会连同子进程一起回收、释放端口。改代码后用「重启」一键再来。</div>
+                <div class="step-t">{{ tr("停止 / 重启") }}</div>
+                <div class="step-d">{{ tr("停止会连同子进程一起回收、释放端口。改代码后用「重启」一键再来。") }}</div>
               </div>
             </div>
           </div>
 
           <!-- 状态与操作 -->
           <div v-show="activeTab === 'status'" class="pane">
-            <h4 class="pane-title">状态含义</h4>
+            <h4 class="pane-title">{{ tr("状态含义") }}</h4>
             <div class="status-list">
               <div v-for="s in statuses" :key="s.cls" class="status-row">
                 <span class="badge" :class="s.cls"><span class="dot"></span>{{ s.name }}</span>
                 <span class="status-desc">{{ s.desc }}</span>
               </div>
             </div>
-            <h4 class="pane-title">卡片操作</h4>
+            <h4 class="pane-title">{{ tr("卡片操作") }}</h4>
             <div class="op-grid">
               <div v-for="o in ops" :key="o.key" class="op">
                 <span class="op-key">{{ o.key }}</span>
@@ -161,7 +163,7 @@ const tips = [
       </div>
 
       <footer class="m-foot">
-        <span class="kbd-hint">按 <kbd>?</kbd> 或 <kbd>Esc</kbd> 关闭</span>
+        <span class="kbd-hint">{{ tr("按") }} <kbd>?</kbd> {{ tr("或") }} <kbd>Esc</kbd> {{ tr("关闭") }}</span>
       </footer>
     </div>
   </div>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { locale, setLocale, tr } from '@/i18n'
+
 import { onMounted, ref } from 'vue'
 import { api } from '@/api/http'
 import type { ExportSnapshot } from '@/types'
@@ -47,10 +49,10 @@ function importConfig() {
     try {
       const snap = JSON.parse(text) as Partial<ExportSnapshot>
       const r = await api.importConfig(snap)
-      alert(`导入完成：${r.apps} 个应用，${r.groups} 个分组`)
+      alert(tr("导入完成：{0} 个应用，{1} 个分组", [r.apps, r.groups]))
       location.reload()
     } catch (e: any) {
-      alert('导入失败：' + (e?.message || e))
+      alert(tr("导入失败：") + (e?.message || e))
     }
   }
   input.click()
@@ -84,56 +86,66 @@ onMounted(() => {
   <div class="overlay" @click.self="emit('close')">
     <div class="modal">
       <header class="m-head">
-        <h2>设置</h2>
+        <h2>{{ tr("设置") }}</h2>
         <button class="ghost icon" @click="emit('close')">✕</button>
       </header>
 
       <div class="m-body">
         <section class="block">
           <div class="version-row">
-            <span>当前版本</span>
+            <span>{{ tr("当前版本") }}</span>
             <code>v{{ appVersion }}</code>
           </div>
         </section>
 
         <section class="block">
-          <h4>运行参数</h4>
           <div class="row">
-            <label>优雅停止等待（秒）</label>
+            <label for="ui-language">{{ tr('界面语言') }}</label>
+            <select id="ui-language" :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value)">
+              <option value="zh-CN">简体中文</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="block">
+          <h4>{{ tr("运行参数") }}</h4>
+          <div class="row">
+            <label>{{ tr("优雅停止等待（秒）") }}</label>
             <input v-model="settings.grace_period_seconds" class="num" />
           </div>
           <div class="row">
-            <label>URL 发现超时（秒）</label>
+            <label>{{ tr("URL 发现超时（秒）") }}</label>
             <input v-model="settings.url_discover_timeout_seconds" class="num" />
           </div>
           <div class="row">
-            <label>健康检查间隔（秒）</label>
+            <label>{{ tr("健康检查间隔（秒）") }}</label>
             <input v-model="settings.health_check_interval_seconds" class="num" />
           </div>
           <div class="row">
-            <label>每运行日志保留条数</label>
+            <label>{{ tr("每运行日志保留条数") }}</label>
             <input v-model="settings.log_retention_per_run" class="num" />
           </div>
           <button class="primary" @click="save" :disabled="saving">
-            {{ saving ? '保存中…' : saved ? '已保存 ✓' : '保存' }}
+            {{ saving ? tr("保存中…") : saved ? tr("已保存 ✓") : tr("保存") }}
           </button>
         </section>
 
         <section class="block">
-          <h4>配置导入导出</h4>
-          <p class="desc">导出全部应用、分组、设置为 JSON 文件，方便迁移到其它机器或团队共享。</p>
+          <h4>{{ tr("配置导入导出") }}</h4>
+          <p class="desc">{{ tr("导出全部应用、分组、设置为 JSON 文件，方便迁移到其它机器或团队共享。") }}</p>
           <div class="btn-row">
-            <button @click="exportConfig">⬇ 导出配置</button>
-            <button @click="importConfig">⬆ 导入配置</button>
+            <button @click="exportConfig">{{ tr("⬇ 导出配置") }}</button>
+            <button @click="importConfig">{{ tr("⬆ 导入配置") }}</button>
           </div>
         </section>
 
         <section class="block">
-          <h4>关闭行为</h4>
+          <h4>{{ tr("关闭行为") }}</h4>
           <p class="desc">
-            {{ closeRemembered ? '当前：关闭窗口时自动最小化到托盘（已记住）。' : '当前：关闭窗口时每次询问。' }}
+            {{ closeRemembered ? tr("当前：关闭窗口时自动最小化到托盘（已记住）。") : tr("当前：关闭窗口时每次询问。") }}
           </p>
-          <button v-if="closeRemembered" @click="resetCloseBehavior">恢复每次询问</button>
+          <button v-if="closeRemembered" @click="resetCloseBehavior">{{ tr("恢复每次询问") }}</button>
         </section>
       </div>
     </div>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 // 关闭窗口选择弹窗：点 X 关闭时弹出，让用户选「最小化到托盘」或「退出程序」。
 // 选项由父组件(App.vue)处理具体动作（隐藏窗口/退出 + 记忆）。
 // 非 Tauri 环境（开发模式）下父组件不会触发此弹窗。
@@ -14,25 +16,25 @@ const emit = defineEmits<{
   <div class="overlay" @click.self="emit('close')">
     <div class="modal close-modal">
       <header class="m-head">
-        <h2>关闭窗口</h2>
-        <button class="ghost icon" @click="emit('close')" title="取消">✕</button>
+        <h2>{{ tr("关闭窗口") }}</h2>
+        <button class="ghost icon" @click="emit('close')" :title="tr('取消')">✕</button>
       </header>
 
       <div class="m-body">
-        <p class="hint">关闭窗口后，如何处理？</p>
+        <p class="hint">{{ tr("关闭窗口后，如何处理？") }}</p>
         <div class="options">
           <button class="opt" @click="emit('minimize')">
             <span class="opt-ico">🗕</span>
             <span class="opt-text">
-              <span class="opt-title">最小化到托盘</span>
-              <span class="opt-desc">后台保持运行，记住选择（下次不再询问）</span>
+              <span class="opt-title">{{ tr("最小化到托盘") }}</span>
+              <span class="opt-desc">{{ tr("后台保持运行，记住选择（下次不再询问）") }}</span>
             </span>
           </button>
           <button class="opt danger" @click="emit('quit')">
             <span class="opt-ico">⏻</span>
             <span class="opt-text">
-              <span class="opt-title">退出程序</span>
-              <span class="opt-desc">停止所有项目服务并完全退出</span>
+              <span class="opt-title">{{ tr("退出程序") }}</span>
+              <span class="opt-desc">{{ tr("停止所有项目服务并完全退出") }}</span>
             </span>
           </button>
         </div>

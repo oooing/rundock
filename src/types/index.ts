@@ -3,6 +3,16 @@
 /** App 状态机 */
 export type AppStatus = 'starting' | 'running' | 'degraded' | 'stopping' | 'stopped' | 'failed'
 
+export interface StartupIssue {
+  code: 'startup_failed' | 'port_in_use'
+  runId: string
+  ports: number[]
+  conflicts: { port: number; pid: number; name: string; safe: boolean }[]
+  canRecover: boolean
+  reason: string
+  fingerprint: string
+}
+
 /** 适配器类型 */
 export type AdapterType = 'batch' | 'ps1' | 'npm' | 'yarn' | 'pnpm'
 

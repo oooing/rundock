@@ -71,11 +71,12 @@ npm ci
 
 ### Browser development
 
-Start the backend in one terminal:
+Start the backend in one PowerShell terminal:
 
-```bat
+```powershell
 cd sidecar
-go run ./cmd/launcher-sidecar -port 17654
+$env:LAUNCHER_DATA_DIR = Join-Path $env:APPDATA 'launcher-sidecar-dev'
+go run ./cmd/launcher-sidecar -port 17655
 ```
 
 In another terminal, start the frontend from the repository root:
@@ -84,9 +85,11 @@ In another terminal, start the frontend from the repository root:
 npm run dev
 ```
 
-Open `http://localhost:1420`. The frontend uses port `1420` and the backend uses `17654`. Do not run an older version or another instance on the same ports.
+Open `http://127.0.0.1:1421`. Development uses frontend port `1421`, backend port `17655`, and `%APPDATA%\launcher-sidecar-dev` for data. The installed application retains port `17654` and `%APPDATA%\launcher-sidecar`, so both can run together.
 
-Alternatively, double-click [`scripts/dev.bat`](../scripts/dev.bat). It currently assumes Go is installed at `%USERPROFILE%\go`; use the manual commands above for other installations. It opens separate frontend and backend windows, so close both when finished. Frontend edits support hot reload; Go changes require restarting the backend.
+Prefer [`scripts/dev.bat`](../scripts/dev.bat), either by double-clicking or importing it into the installed application. It finds Go on PATH, falling back to `%USERPROFILE%\go`. Both services share a process tree, so stopping the project card stops both. Failures exit without a keypress; logs are saved under `dev-logs` in the development data directory. Frontend edits hot-reload; Go changes require a restart.
+
+Development starts with an empty project list. To copy your projects, export configuration from the installed application's Settings and import it into development. Databases are not copied automatically, and later edits are not synchronized. Do not launch the same business project from both instances. Use `dev.bat -SmokeTest` to start, verify, and exit; use `-NoBrowser` to skip opening a browser.
 
 ### Desktop development
 

@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RunDock",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "identifier": "com.launcher.platform",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1421",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "RunDock 启动坞",
-        "width": 1100,
-        "height": 720,
+        "width": 1440,
+        "height": 900,
         "minWidth": 800,
         "minHeight": 560,
         "resizable": true,

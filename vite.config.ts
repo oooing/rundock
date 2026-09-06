@@ -12,9 +12,10 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
-    port: 1420,
+    port: 1421,
+    host: '127.0.0.1',
     strictPort: true,
-    // Tauri 壳会把 sidecar 跑在固定端口；开发期前端直连 127.0.0.1:17654
+    // 开发期前端直连独立后端 127.0.0.1:17655。
     // 通过 .env / window.__LAUNCHER_BASE__ 注入 base url
   },
   // Tauri 期望固定的构建产物目录

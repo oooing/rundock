@@ -1,7 +1,7 @@
 {
   "name": "launcher-platform",
   "private": true,
-  "version": "2.0.3",
+  "version": "2.0.4",
   "type": "module",
   "description": "RunDock 启动坞 — AI 小工具与开发项目的 Windows 启动器",
   "scripts": {
@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit",
     "test:release": "node --test scripts/tests/release-scripts.test.mjs",
+    "test:i18n": "node --test scripts/tests/i18n.test.mjs",
     "tauri": "tauri",
     "sidecar": "echo \"Run via: cd sidecar && go run ./cmd/launcher-sidecar -port 17654\""
   },

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useAppsStore } from '@/stores/apps'
@@ -29,6 +31,15 @@ const apps = useAppsStore()
 const groups = useGroupsStore()
 
 const selectedGroupId = ref<string | null>(null)
+const dropGroupId = ref<string | null>(null)
+const movingGroups = ref<Record<string, boolean>>({})
+const groupPickerOpen = ref(false)
+const groupPickerRef = ref<HTMLElement | null>(null)
+watch(groupPickerOpen, async (open) => {
+  if (open) { await nextTick(); groupPickerRef.value?.focus() }
+})
+const selectedGroupName = computed(() => groups.groups.find(g => g.id === selectedGroupId.value)?.name || tr('未分组'))
+const availableGroupApps = computed(() => apps.apps.filter(a => (a.groupId || '') !== selectedGroupId.value))
 const showSettings = ref(false)
 const showHelp = ref(false)
 const candidate = ref<ImportCandidate | null>(null)
@@ -61,22 +72,22 @@ const isTauri = !!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAU
 
 const appsInGroup = computed(() => {
   if (selectedGroupId.value === null) return apps.apps
-  return apps.apps.filter((a) => a.groupId === selectedGroupId.value)
+  return apps.apps.filter((a) => (a.groupId || '') === selectedGroupId.value)
 })
 const releaseApp = computed(() => apps.apps.find((a) => a.id === releaseAppId.value) || null)
 
 function onDrop(paths: string[]) {
   const scripts = paths.filter((path) => /\.(bat|cmd|ps1)$/i.test(path))
   if (scripts.length === 0) {
-    showToast('请拖入 .bat、.cmd 或 .ps1 启动脚本', 3500, 'warn')
+    showToast(tr("请拖入 .bat、.cmd 或 .ps1 启动脚本"), 3500, 'warn')
     return
   }
   if (importing.value || candidate.value) {
-    showToast('请先完成当前脚本的导入确认', 3500, 'warn')
+    showToast(tr("请先完成当前脚本的导入确认"), 3500, 'warn')
     return
   }
   if (scripts.length > 1) {
-    showToast('一次导入一个脚本，已读取第一个文件', 3000, 'info')
+    showToast(tr("一次导入一个脚本，已读取第一个文件"), 3000, 'info')
   }
   void importScript(scripts[0])
 }
@@ -95,7 +106,7 @@ function onFileChange(e: Event) {
     } else if (f.name) {
       // 浏览器：只能拿到文件名，回填并提示补全
       pathInput.value = f.name
-      pathInputHint.value = '请补全完整路径（含盘符，如 D:\\proj\\start.bat），然后回车或点导入'
+      pathInputHint.value = tr("请补全完整路径（含盘符，如 D:\\proj\\start.bat），然后回车或点导入")
     }
   }
   input.value = ''
@@ -111,7 +122,7 @@ function onContentDrop(e: DragEvent) {
       onDrop([path])
     } else {
       // 浏览器拖放拿不到路径：提示改用输入框
-      pathInputHint.value = '浏览器无法获取拖入文件的路径，请点「浏览」选择，或直接粘贴路径'
+      pathInputHint.value = tr("浏览器无法获取拖入文件的路径，请点「浏览」选择，或直接粘贴路径")
     }
   }
 }
@@ -127,7 +138,7 @@ function importFromInput() {
   const p = pathInput.value.trim().replace(/^["']|["']$/g, '')
   if (!p) return
   if (!isPathComplete(p)) {
-    pathInputHint.value = '路径不完整。浏览器模式下「浏览」只能拿到文件名，请补全完整路径（含盘符），或直接粘贴完整路径。'
+    pathInputHint.value = tr("路径不完整。浏览器模式下「浏览」只能拿到文件名，请补全完整路径（含盘符），或直接粘贴完整路径。")
     return
   }
   pathInputHint.value = ''
@@ -146,7 +157,7 @@ async function importScript(scriptPath: string) {
   try {
     candidate.value = await apps.importRaw(scriptPath)
   } catch (e: any) {
-    showToast('导入失败：' + (e?.message || e), 5000, 'error')
+    showToast(tr("导入失败：") + (e?.message || e), 5000, 'error')
   } finally {
     importing.value = false
   }
@@ -155,11 +166,11 @@ async function importScript(scriptPath: string) {
 async function confirmCreate() {
   if (!candidate.value) return
   try {
-    await apps.createFromCandidate(candidate.value)
-    showToast(`「${candidate.value.name}」已导入`, 2500, 'success')
+    await apps.createFromCandidate(candidate.value, selectedGroupId.value || undefined)
+    showToast(tr("「{0}」已导入", [candidate.value.name]), 2500, 'success')
     candidate.value = null
   } catch (e: any) {
-    showToast('创建失败：' + (e?.message || e), 5000, 'error')
+    showToast(tr("创建失败：") + (e?.message || e), 5000, 'error')
   }
 }
 
@@ -167,7 +178,23 @@ async function handleReorder(order: string[]) {
   try {
     await apps.reorderCards(order)
   } catch (e: any) {
-    showToast('保存卡片顺序失败：' + (e?.message || e), 5000, 'error')
+    showToast(tr("保存卡片顺序失败：") + (e?.message || e), 5000, 'error')
+  }
+}
+
+async function handleMoveGroup(id: string, groupId: string) {
+  const app = apps.apps.find(a => a.id === id)
+  if (!app || movingGroups.value[id] || (app.groupId || '') === groupId) return
+  if (groupId && !groups.groups.some(g => g.id === groupId)) return
+  movingGroups.value[id] = true
+  try {
+    await apps.moveToGroup(id, groupId)
+    const name = groups.groups.find(g => g.id === groupId)?.name || tr('未分组')
+    showToast(tr('已将“{0}”移到“{1}”', [app.name, name]), 2500, 'success')
+  } catch (e: any) {
+    showToast(tr('移动分组失败：') + (e?.message || e), 5000, 'error')
+  } finally {
+    delete movingGroups.value[id]
   }
 }
 
@@ -239,7 +266,7 @@ async function quitWithNotice() {
     await quitApp()
   } catch (e: any) {
     isQuitting.value = false
-    showToast('退出失败：' + (e?.message || e), 5000, 'error')
+    showToast(tr("退出失败：") + (e?.message || e), 5000, 'error')
   }
 }
 
@@ -271,17 +298,17 @@ async function handleStart(id: string) {
       // 脚本风险变化：记下待执行操作，弹 ConfirmCard
       pending.value = { id, op: 'start', candidate: r.confirmation.candidate }
     } else {
-      if (r.configUpdatedToast) showToast('脚本配置已自动更新，正在启动…', 3000, 'info')
-      else showToast(`「${name}」已开始启动`, 2500, 'success')
+      if (r.configUpdatedToast) showToast(tr("脚本配置已自动更新，正在启动…"), 3000, 'info')
+      else showToast(tr("「{0}」已开始启动", [name]), 2500, 'success')
     }
-  } catch (e: any) { showToast('启动失败：' + (e?.message || e), 5000, 'error') }
+  } catch (e: any) { showToast(tr("启动失败：") + (e?.message || e), 5000, 'error') }
 }
 async function handleStop(id: string) {
   const name = apps.apps.find(a => a.id === id)?.name || id
   try {
     await apps.stop(id)
-    showToast(`「${name}」已停止`, 2500, 'success')
-  } catch (e: any) { showToast('停止失败：' + (e?.message || e), 5000, 'error') }
+    showToast(tr("「{0}」已停止", [name]), 2500, 'success')
+  } catch (e: any) { showToast(tr("停止失败：") + (e?.message || e), 5000, 'error') }
 }
 async function handleRestart(id: string) {
   const name = apps.apps.find(a => a.id === id)?.name || id
@@ -290,10 +317,10 @@ async function handleRestart(id: string) {
     if (r.confirmation) {
       pending.value = { id, op: 'restart', candidate: r.confirmation.candidate }
     } else {
-      if (r.configUpdatedToast) showToast('脚本配置已自动更新，正在重启…', 3000, 'info')
-      else showToast(`「${name}」正在重启`, 2500, 'success')
+      if (r.configUpdatedToast) showToast(tr("脚本配置已自动更新，正在重启…"), 3000, 'info')
+      else showToast(tr("「{0}」正在重启", [name]), 2500, 'success')
     }
-  } catch (e: any) { showToast('重启失败：' + (e?.message || e), 5000, 'error') }
+  } catch (e: any) { showToast(tr("重启失败：") + (e?.message || e), 5000, 'error') }
 }
 
 // ConfirmCard（脚本变更确认）：用户确认 → 携带哈希重试原 start/restart 操作。
@@ -310,10 +337,10 @@ async function confirmPending() {
       return
     }
     pending.value = null
-    if (r.configUpdatedToast) showToast('脚本配置已自动更新，正在继续…', 3000, 'info')
-    else showToast(`「${name}」已${p.op === 'restart' ? '重启' : '启动'}`, 2500, 'success')
+    if (r.configUpdatedToast) showToast(tr("脚本配置已自动更新，正在继续…"), 3000, 'info')
+    else showToast(tr("「{0}」已{1}", [name, p.op === 'restart' ? tr("重启") : tr("启动")]), 2500, 'success')
   } catch (e: any) {
-    showToast((p.op === 'restart' ? '重启' : '启动') + '失败：' + (e?.message || e), 5000, 'error')
+    showToast((p.op === 'restart' ? tr("重启") : tr("启动")) + tr("失败：") + (e?.message || e), 5000, 'error')
     pending.value = null
   }
 }
@@ -372,6 +399,7 @@ onUnmounted(() => {
   <div class="layout">
     <GroupSidebar
       :selected="selectedGroupId"
+      :drop-group-id="dropGroupId"
       @select="selectedGroupId = $event"
       @settings="showSettings = true"
     />
@@ -379,11 +407,7 @@ onUnmounted(() => {
     <main class="main">
       <header class="topbar">
         <div class="title">
-          <h1>项目启动器</h1>
-          <button class="ghost icon help-btn" title="使用说明（快捷键 ?）" @click="showHelp = true">?</button>
-          <span class="conn" :class="{ ok: conn.sidecarReady }">
-            {{ conn.sidecarReady ? '已连接' : '等待 sidecar…' }}
-          </span>
+          <h1>{{ tr("项目启动器") }}</h1>
         </div>
         <div class="actions">
           <div class="import-box">
@@ -391,16 +415,16 @@ onUnmounted(() => {
               v-model="pathInput"
               class="path-input"
               :class="{ incomplete: pathInput && !pathComplete }"
-              :placeholder="isTauri ? '拖入脚本到下方，或点浏览' : '粘贴完整路径，如 D:\\proj\\start.bat'"
+              :placeholder="isTauri ? tr('拖入脚本到下方，或点浏览') : tr('粘贴完整路径，如 D:\\proj\\start.bat')"
               @keyup.enter="importFromInput"
             />
-            <button class="ghost" @click="fileInput?.click()" title="选择脚本文件">浏览</button>
+            <button class="ghost" @click="fileInput?.click()" :title="tr('选择脚本文件')">{{ tr("浏览") }}</button>
             <button
               class="primary"
               :disabled="!pathInput.trim() || !pathComplete || importing"
               @click="importFromInput"
             >
-              {{ importing ? '导入中…' : '导入' }}
+              {{ importing ? tr("导入中…") : tr("导入") }}
             </button>
             <input
               ref="fileInput"
@@ -411,7 +435,7 @@ onUnmounted(() => {
             />
           </div>
           <div v-if="pathInput && !pathComplete" class="path-hint warn">
-            ⚠ 只拿到文件名「{{ pathInput }}」，浏览器无法自动获取磁盘路径。请补全完整路径（含盘符），例如在前面加上 <code>D:\项目目录\</code>
+            {{ tr("⚠ 只拿到文件名「") }}{{ pathInput }}{{ tr("」，浏览器无法自动获取磁盘路径。请补全完整路径（含盘符），例如在前面加上") }} <code>{{ tr("D:\\项目目录\\") }}</code>
           </div>
           <div v-else-if="pathInputHint" class="path-hint">{{ pathInputHint }}</div>
         </div>
@@ -424,7 +448,16 @@ onUnmounted(() => {
         @dragleave.prevent="dragOver = false"
         @drop.prevent="onContentDrop"
       >
+        <div v-if="selectedGroupId !== null" class="group-toolbar">
+          <strong>{{ selectedGroupName }}</strong>
+          <button @click="groupPickerOpen = true" :disabled="!conn.sidecarReady">{{ tr('添加项目') }}</button>
+        </div>
         <Dashboard
+          :groups="groups.groups"
+          :moving="movingGroups"
+          :group-view="selectedGroupId !== null"
+          @move-group="handleMoveGroup"
+          @group-hover="dropGroupId = $event"
           :apps="appsInGroup"
           :loading="apps.loading"
           :ready="conn.sidecarReady"
@@ -451,7 +484,7 @@ onUnmounted(() => {
     <ConfirmCard
       v-if="pending"
       mode="script-change"
-      :action="pending.op === 'restart' ? '重启' : '启动'"
+      :action="pending.op === 'restart' ? tr('重启') : tr('启动')"
       :candidate="pending.candidate"
       @confirm="confirmPending"
       @cancel="cancelPending"
@@ -475,10 +508,22 @@ onUnmounted(() => {
       <div class="quitting-card">
         <div class="spinner"></div>
         <div>
-          <div class="quitting-title">正在关闭服务并退出…</div>
-          <div class="quitting-sub">请稍等，正在停止所有正在运行的项目服务。</div>
+          <div class="quitting-title">{{ tr("正在关闭服务并退出…") }}</div>
+          <div class="quitting-sub">{{ tr("请稍等，正在停止所有正在运行的项目服务。") }}</div>
         </div>
       </div>
+    </div>
+    <div v-if="groupPickerOpen && selectedGroupId !== null" class="group-picker-overlay" @click.self="groupPickerOpen = false">
+      <section ref="groupPickerRef" class="group-picker" role="dialog" aria-modal="true" tabindex="-1" :aria-label="tr('添加项目')" @keydown.esc="groupPickerOpen = false">
+        <header><h2>{{ tr('添加到“{0}”', [selectedGroupName]) }}</h2><button :aria-label="tr('关闭')" @click="groupPickerOpen = false">✕</button></header>
+        <div class="group-picker-list">
+          <p v-if="!availableGroupApps.length">{{ tr('没有可添加的项目') }}</p>
+          <div v-for="app in availableGroupApps" :key="app.id" class="group-picker-row">
+            <span><strong>{{ app.name }}</strong><small>{{ groups.groups.find(g => g.id === app.groupId)?.name || tr('未分组') }}</small></span>
+            <button :disabled="movingGroups[app.id]" @click="handleMoveGroup(app.id, selectedGroupId!)">{{ movingGroups[app.id] ? tr('保存中…') : tr('添加') }}</button>
+          </div>
+        </div>
+      </section>
     </div>
     <!-- 置顶通知栏：成功/失败/提示 集中显示在顶部中央，可堆叠、可手动关闭 -->
     <div class="toast-stack">
@@ -492,7 +537,7 @@ onUnmounted(() => {
         >
           <span class="toast-ico">{{ toastIcon(t.kind) }}</span>
           <span class="toast-msg">{{ t.msg }}</span>
-          <button class="toast-x" title="关闭" @click.stop="dismissToast(t.id)">✕</button>
+          <button class="toast-x" :title="tr('关闭')" @click.stop="dismissToast(t.id)">✕</button>
         </div>
       </transition-group>
     </div>
@@ -500,6 +545,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.group-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.group-toolbar strong { min-width: 0; overflow-wrap: anywhere; }
+.group-picker-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 20px; }
+.group-picker { width: min(520px,100%); max-height: 85vh; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev); }
+.group-picker header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; }
+.group-picker h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.group-picker-list { padding: 0 16px 16px; overflow: auto; }
+.group-picker-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.group-picker-row span { min-width: 0; overflow-wrap: anywhere; }
+.group-picker-row small { display: block; margin-top: 4px; color: var(--text-faint); }
+.group-picker-row button { flex-shrink: 0; }
 .layout {
   display: flex;
   height: 100vh;
@@ -532,37 +588,11 @@ onUnmounted(() => {
   font-weight: 600;
   margin: 0;
 }
-.conn {
-  font-size: 12px;
-  color: var(--amber);
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(251, 191, 36, 0.12);
-}
-.conn.ok {
-  color: var(--green);
-  background: rgba(52, 211, 153, 0.12);
-}
 .actions {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
-}
-.help-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  padding: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-dim);
-  flex-shrink: 0;
-  line-height: 1;
-}
-.help-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
 }
 .import-box {
   display: flex;
@@ -576,6 +606,14 @@ onUnmounted(() => {
 .path-input.incomplete {
   border-color: var(--amber);
   background: rgba(251, 191, 36, 0.06);
+}
+/* Longer translated labels must not push the import controls off-screen. */
+@media (max-width: 1100px) {
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .title { flex-shrink: 0; }
+  .title h1 { white-space: nowrap; }
+  .actions, .import-box { width: 100%; min-width: 0; }
+  .path-input { flex: 1; width: 0; min-width: 0; }
 }
 .path-hint {
   font-size: 11px;

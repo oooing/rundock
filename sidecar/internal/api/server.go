@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/launcher-sidecar/internal/adapter"
@@ -22,6 +23,7 @@ import (
 
 // Server 汇总所有依赖。
 type Server struct {
+	startupMu     sync.Mutex
 	Store         *store.Store
 	Manager       *app.Manager
 	Hub           *logbus.Hub

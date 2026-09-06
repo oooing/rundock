@@ -1,7 +1,9 @@
 // HTTP 客户端：所有 REST 调用集中在此，返回类型化结果。
 import { getBaseURL } from './base'
+import { tr } from '@/i18n'
 import type {
   AppView,
+  StartupIssue,
   CreateAppBody,
   ExportSnapshot,
   Group,
@@ -30,11 +32,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     let msg = `HTTP ${r.status}`
     try {
       const body = await r.json()
-      msg = body.error || msg
+      msg = body.code === 'script_confirmation_required' ? '启动脚本已变化，请先点击启动确认新配置' : body.error || msg
     } catch {
       /* ignore */
     }
-    throw new Error(msg)
+    throw new Error(tr(msg))
   }
   return r.json() as Promise<T>
 }
@@ -60,8 +62,9 @@ async function startReq(
     ...init,
   })
   if (r.status === 409) {
-    const body = (await r.json()) as ScriptConfirmationResponse
-    return { ok: false, confirmation: body }
+    const body = await r.json()
+    if (body.code === 'script_confirmation_required') return { ok: false, confirmation: body }
+    throw new Error(tr(body.error || 'HTTP 409'))
   }
   if (!r.ok) {
     let msg = `HTTP ${r.status}`
@@ -71,7 +74,7 @@ async function startReq(
     } catch {
       /* ignore */
     }
-    throw new Error(msg)
+    throw new Error(tr(msg))
   }
   const data = (await r.json()) as StartResponse
   return { ok: true, data }
@@ -88,6 +91,8 @@ export const api = {
   // Apps
   listApps: () => req<AppView[]>('/api/apps'),
   getApp: (id: string) => req<AppView>(`/api/apps/${id}`),
+  startupIssue: (id: string) => req<StartupIssue | null>(`/api/apps/${id}/startup-issue`),
+  recoverPorts: (id: string, fingerprint: string) => req<StartResponse>(`/api/apps/${id}/recover-ports`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
   createApp: (body: CreateAppBody) =>
     req<AppView>('/api/apps', { method: 'POST', body: JSON.stringify(body) }),
   updateApp: (id: string, body: Record<string, unknown>) =>

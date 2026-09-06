@@ -71,11 +71,12 @@ npm ci
 
 ### 浏览器开发模式
 
-在第一个终端启动后端：
+在第一个 PowerShell 终端启动后端：
 
-```bat
+```powershell
 cd sidecar
-go run ./cmd/launcher-sidecar -port 17654
+$env:LAUNCHER_DATA_DIR = Join-Path $env:APPDATA 'launcher-sidecar-dev'
+go run ./cmd/launcher-sidecar -port 17655
 ```
 
 在另一个终端，从仓库根目录启动前端：
@@ -84,9 +85,11 @@ go run ./cmd/launcher-sidecar -port 17654
 npm run dev
 ```
 
-打开 `http://localhost:1420`。前端使用 `1420`，后端使用 `17654`；不要同时启动占用相同端口的旧版或另一个实例。
+打开 `http://127.0.0.1:1421`。开发版前端使用 `1421`，后端使用 `17655`，数据独立保存在 `%APPDATA%\launcher-sidecar-dev`。安装版仍使用 `17654` 和 `%APPDATA%\launcher-sidecar`，两者可以同时运行。
 
-也可以双击 [`scripts/dev.bat`](../scripts/dev.bat)。该脚本目前假定 Go 位于 `%USERPROFILE%\go`；安装位置不同时可使用上面的手动方式。它分别打开前后端窗口，结束调试时需关闭两者。前端修改支持热更新，Go 修改后需重启后端。
+推荐双击 [`scripts/dev.bat`](../scripts/dev.bat)，也可将它导入安装版作为开发项目管理。脚本优先使用 PATH 中的 Go，未找到时尝试 `%USERPROFILE%\go`；前后端作为同一进程树运行，卡片停止时一起回收。启动失败直接退出，不等待按键；日志在开发数据目录的 `dev-logs` 下。前端支持热更新，Go 修改后需重启开发版。
+
+首次打开开发版没有项目。需要已有列表时，在正式版“设置”导出配置，再在开发版导入；不自动复制数据库或同步后续修改。同一业务项目不要在两边同时启动。`dev.bat -SmokeTest` 可验证启动并自动退出，`-NoBrowser` 可关闭自动打开浏览器。
 
 ### 桌面开发模式
 

@@ -1,9 +1,12 @@
+import { tr } from '@/i18n'
+
 // sidecar 基址解析。
-// - 开发模式（vite dev）：连 127.0.0.1:17654（LAUNCHER_PORT 默认），需先手动 go run sidecar
+// - 开发模式（vite dev）：连独立后端 127.0.0.1:17655
 // - Tauri 壳：壳启动 sidecar 后通过 window.__LAUNCHER_BASE__ 注入基址
 // 通过运行期探测 /api/health 判断 sidecar 是否就绪
 
-const DEV_BASE = (import.meta.env.VITE_LAUNCHER_BASE as string | undefined) || 'http://127.0.0.1:17654'
+const DEV_BASE = (import.meta.env.VITE_LAUNCHER_BASE as string | undefined) ||
+  (import.meta.env.DEV ? 'http://127.0.0.1:17655' : 'http://127.0.0.1:17654')
 
 export class IncompatibleSidecarError extends Error {}
 
@@ -29,7 +32,7 @@ export async function pingSidecar(timeoutMs = 2000): Promise<boolean> {
     if (!r.ok) return false
     const health = await r.json() as { apiVersion?: string; capabilities?: string }
     if (health.apiVersion !== '2' || health.capabilities !== 'release-v2') {
-      throw new IncompatibleSidecarError('检测到旧版 sidecar。请关闭旧的 Launcher-Backend 窗口，然后重新运行 scripts/dev.bat。')
+      throw new IncompatibleSidecarError(tr("检测到旧版 sidecar。请关闭旧的 Launcher-Backend 窗口，然后重新运行 scripts/dev.bat。"))
     }
     return true
   } catch (error) {

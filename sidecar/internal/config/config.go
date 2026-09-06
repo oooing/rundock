@@ -35,6 +35,17 @@ func Default() *Config {
 // resolveDataDir 决定数据根目录，并保证其存在。
 func resolveDataDir() string {
 	var dir string
+	if explicit := os.Getenv("LAUNCHER_DATA_DIR"); explicit != "" {
+		// Never fall back to shared data when isolation was explicitly requested.
+		absolute, err := filepath.Abs(explicit)
+		if err != nil {
+			panic(fmt.Errorf("resolve LAUNCHER_DATA_DIR: %w", err))
+		}
+		if err := os.MkdirAll(absolute, 0o755); err != nil {
+			panic(fmt.Errorf("create LAUNCHER_DATA_DIR: %w", err))
+		}
+		return absolute
+	}
 	if appdata := os.Getenv("APPDATA"); appdata != "" {
 		dir = filepath.Join(appdata, "launcher-sidecar")
 	} else {

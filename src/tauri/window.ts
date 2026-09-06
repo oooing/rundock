@@ -9,6 +9,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import pkg from '../../package.json'
+import type { Locale } from '@/i18n'
 
 export type FileDragDropEvent =
   | { type: 'enter'; paths: string[] }
@@ -44,6 +45,14 @@ export async function quitApp(): Promise<void> {
 /** 应用版本号。Tauri 中读取打包版本；开发浏览器中回退到 package.json。 */
 export async function getAppVersion(): Promise<string> {
   return getVersion().catch(() => pkg.version)
+}
+
+/** Sync native window/tray labels without restarting the app or its projects. */
+export async function setNativeLanguage(locale: Locale): Promise<void> {
+  if (!isTauri) return
+  await invoke('set_ui_language', { locale }).catch((error) => {
+    console.warn('Could not update native language:', error)
+  })
 }
 
 /**

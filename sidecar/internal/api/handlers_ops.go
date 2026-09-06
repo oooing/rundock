@@ -72,7 +72,11 @@ func applyUpdate(a *store.App, b *updateAppBody) {
 		a.Tags = *b.Tags
 	}
 	if b.GroupID != nil {
-		a.GroupID = b.GroupID
+		if *b.GroupID == "" {
+			a.GroupID = nil
+		} else {
+			a.GroupID = b.GroupID
+		}
 	}
 	if b.PortHints != nil {
 		a.PortHints = *b.PortHints
@@ -134,6 +138,11 @@ func appView(a *store.App, s *Server) map[string]any {
 // ----- 操作 -----
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, id string) {
+	if !s.startupMu.TryLock() {
+		writeError(w, 409, "已有启停操作进行中，请稍后重试")
+		return
+	}
+	defer s.startupMu.Unlock()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -157,6 +166,11 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, id string) 
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, id string) {
+	if !s.startupMu.TryLock() {
+		writeError(w, 409, "已有启停操作进行中，请稍后重试")
+		return
+	}
+	defer s.startupMu.Unlock()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -170,6 +184,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, id string) {
 
 // POST /api/apps/stop-all 停止所有正在运行的项目（退出前清理用）。
 func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {
+	if !s.startupMu.TryLock() {
+		writeError(w, 409, "已有启停操作进行中，请稍后重试")
+		return
+	}
+	defer s.startupMu.Unlock()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -179,6 +198,11 @@ func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, id string) {
+	if !s.startupMu.TryLock() {
+		writeError(w, 409, "已有启停操作进行中，请稍后重试")
+		return
+	}
+	defer s.startupMu.Unlock()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

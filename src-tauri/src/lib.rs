@@ -22,20 +22,48 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
 
+mod window_layout;
+
+#[cfg(not(debug_assertions))]
 const SIDECAR_PORT: &str = "17654";
+#[cfg(debug_assertions)]
+const SIDECAR_PORT: &str = "17655";
 
 struct SidecarState(Mutex<Option<Child>>);
+
+struct UiMenu {
+    show: MenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+}
+
+/// Only changes presentation; project configuration and running processes are untouched.
+#[tauri::command]
+fn set_ui_language(app: tauri::AppHandle, locale: String) -> Result<(), String> {
+    let english = locale == "en";
+    let title = if english { "RunDock" } else { "RunDock 启动坞" };
+    let menu = app.state::<UiMenu>();
+    menu.show.set_text(if english { "Show window" } else { "显示窗口" }).map_err(|e| e.to_string())?;
+    menu.quit.set_text(if english { "Quit" } else { "退出" }).map_err(|e| e.to_string())?;
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_title(title).map_err(|e| e.to_string())?;
+    }
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        tray.set_tooltip(Some(title)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 
 /// 解析 sidecar 数据目录（%APPDATA%\launcher-sidecar）。
 /// 与 Go config.Default() 保持一致。
 fn sidecar_data_dir() -> Option<PathBuf> {
+    let name = if cfg!(debug_assertions) { "launcher-sidecar-dev" } else { "launcher-sidecar" };
     #[cfg(target_os = "windows")]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            return Some(PathBuf::from(appdata).join("launcher-sidecar"));
+            return Some(PathBuf::from(appdata).join(name));
         }
     }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".launcher-sidecar"))
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(format!(".{}", name)))
 }
 
 /// 读取 sidecar 写出的端口发现文件。空表示尚未就绪。
@@ -130,6 +158,7 @@ fn spawn_sidecar(data_dir: &PathBuf) -> std::io::Result<Child> {
         .open(&log_path)?;
     let mut cmd = Command::new(exe);
     cmd.args(["-port", SIDECAR_PORT])
+        .env("LAUNCHER_DATA_DIR", data_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
@@ -224,6 +253,24 @@ pub fn run() {
 
     builder
 		.setup(|app| {
+            // Prefer a roomy three-column window; on small/high-DPI displays use
+            // the available work area rather than opening beyond the screen.
+            if let (Some(window), Some(config)) = (
+                app.get_webview_window("main"),
+                app.config().app.windows.first(),
+            ) {
+                if let Ok(Some(monitor)) = window.current_monitor() {
+                    let area = monitor.work_area();
+                    if window_layout::needs_maximized(
+                        config.width, config.height, monitor.scale_factor(),
+                        area.size.width, area.size.height,
+                    ) {
+                        let _ = window.maximize();
+                    } else {
+                        let _ = window.center();
+                    }
+                }
+            }
             let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
             let child = if sidecar_health_ok(SIDECAR_PORT) {
                 println!("[shell] reuse existing sidecar on {}", SIDECAR_PORT);
@@ -263,7 +310,8 @@ pub fn run() {
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-            let _tray = TrayIconBuilder::new()
+            app.manage(UiMenu { show: show_item, quit: quit_item });
+            let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().cloned().expect("no window icon"))
                 .tooltip("RunDock 启动坞")
                 .menu(&menu)
@@ -320,7 +368,7 @@ pub fn run() {
                 let _ = window.emit("close-requested", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app])
+        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, set_ui_language])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

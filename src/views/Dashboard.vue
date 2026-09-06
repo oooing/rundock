@@ -1,13 +1,18 @@
 <script setup lang="ts">
+import { tr } from '@/i18n'
+
 import { onBeforeUnmount, ref } from 'vue'
 import AppCard from '@/components/AppCard.vue'
-import type { AppView, ServiceRole } from '@/types'
+import type { AppView, Group, ServiceRole } from '@/types'
 
 const props = defineProps<{
   apps: AppView[]
   loading: boolean
   ready: boolean
   connectionError?: string
+  groups: Group[]
+  moving: Record<string, boolean>
+  groupView?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +30,8 @@ const emit = defineEmits<{
   (e: 'reidentify', appId: string, serviceId: string): void
   (e: 'set-color', id: string, color: string): void
   (e: 'reorder', order: string[]): void
+  (e: 'move-group', id: string, groupId: string): void
+  (e: 'group-hover', groupId: string | null): void
 }>()
 
 const draggingId = ref<string | null>(null)
@@ -38,6 +45,13 @@ function onCardDragStart(event: PointerEvent, id: string) {
   window.addEventListener('pointermove', onCardPointerMove, { passive: false })
   window.addEventListener('pointerup', onCardPointerUp)
   window.addEventListener('pointercancel', resetCardDrag)
+  window.addEventListener('blur', resetCardDrag)
+  window.addEventListener('keydown', cancelOnEscape)
+}
+
+function cancelOnEscape(event: KeyboardEvent) { if (event.key === 'Escape') resetCardDrag() }
+function groupAtPoint(x: number, y: number) {
+  return document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-drop-group-id]') || null
 }
 
 function cardIdAtPoint(x: number, y: number) {
@@ -48,12 +62,20 @@ function cardIdAtPoint(x: number, y: number) {
 function onCardPointerMove(event: PointerEvent) {
   if (!draggingId.value) return
   event.preventDefault()
+  const group = groupAtPoint(event.clientX, event.clientY)
+  emit('group-hover', group ? group.dataset.dropGroupId! : null)
   const targetId = cardIdAtPoint(event.clientX, event.clientY)
   dragOverId.value = targetId && targetId !== draggingId.value ? targetId : null
 }
 
 function onCardPointerUp(event: PointerEvent) {
   const sourceId = draggingId.value
+  const group = groupAtPoint(event.clientX, event.clientY)
+  if (sourceId && group) {
+    emit('move-group', sourceId, group.dataset.dropGroupId!)
+    resetCardDrag()
+    return
+  }
   const targetId = cardIdAtPoint(event.clientX, event.clientY)
   if (!sourceId || !targetId || sourceId === targetId) {
     resetCardDrag()
@@ -77,10 +99,13 @@ function onCardPointerUp(event: PointerEvent) {
 function resetCardDrag() {
   draggingId.value = null
   dragOverId.value = null
+  emit('group-hover', null)
   document.body.classList.remove('card-reordering')
   window.removeEventListener('pointermove', onCardPointerMove)
   window.removeEventListener('pointerup', onCardPointerUp)
   window.removeEventListener('pointercancel', resetCardDrag)
+  window.removeEventListener('blur', resetCardDrag)
+  window.removeEventListener('keydown', cancelOnEscape)
 }
 
 onBeforeUnmount(resetCardDrag)
@@ -89,53 +114,57 @@ onBeforeUnmount(resetCardDrag)
 <template>
   <div class="dashboard">
     <!-- 空状态 -->
-    <div v-if="ready && apps.length === 0 && !loading" class="empty">
+    <div v-if="ready && apps.length === 0 && !loading && groupView" class="empty">
+      <h2>{{ tr('分组暂无项目') }}</h2>
+      <p>{{ tr('点击“添加项目”，或从全部应用拖入此分组。') }}</p>
+    </div>
+    <div v-else-if="ready && apps.length === 0 && !loading" class="empty">
       <div class="empty-ico">📥</div>
-      <h2>拖入脚本即可开始</h2>
-      <p class="empty-sub">把任意 <code>.bat</code> / <code>.cmd</code> / <code>.ps1</code> 拖进窗口，或点右上角「＋ 导入脚本」选择文件。</p>
+      <h2>{{ tr("拖入脚本即可开始") }}</h2>
+      <p class="empty-sub">{{ tr("把任意") }} <code>.bat</code> / <code>.cmd</code> / <code>.ps1</code> {{ tr("拖进窗口，或点右上角「＋ 导入脚本」选择文件。") }}</p>
 
       <div class="guide">
         <div class="guide-row">
           <span class="step">1</span>
           <div class="step-body">
-            <div class="step-title">拖入脚本，确认导入</div>
-            <div class="step-desc">平台只读分析项目，列出入口、命令、环境变量和<span class="hl">风险项</span>，确认后生成卡片。</div>
+            <div class="step-title">{{ tr("拖入脚本，确认导入") }}</div>
+            <div class="step-desc">{{ tr("平台只读分析项目，列出入口、命令、环境变量和") }}<span class="hl">{{ tr("风险项") }}</span>{{ tr("，确认后生成卡片。") }}</div>
           </div>
         </div>
         <div class="guide-row">
           <span class="step">2</span>
           <div class="step-body">
-            <div class="step-title">点「启动」，后台无窗口运行</div>
-            <div class="step-desc">不弹黑窗。日志实时采集，可点 📜 查看。</div>
+            <div class="step-title">{{ tr("点「启动」，后台无窗口运行") }}</div>
+            <div class="step-desc">{{ tr("不弹黑窗。日志实时采集，可点 📜 查看。") }}</div>
           </div>
         </div>
         <div class="guide-row">
           <span class="step">3</span>
           <div class="step-body">
-            <div class="step-title">自动发现 URL</div>
-            <div class="step-desc">服务起來后，卡片自动显示地址，点 🌐 即用浏览器打开。</div>
+            <div class="step-title">{{ tr("自动发现 URL") }}</div>
+            <div class="step-desc">{{ tr("服务起來后，卡片自动显示地址，点 🌐 即用浏览器打开。") }}</div>
           </div>
         </div>
         <div class="guide-row">
           <span class="step">4</span>
           <div class="step-body">
-            <div class="step-title">停止 = 连同子进程一起回收</div>
-            <div class="step-desc">关掉进程树、释放端口，不留残余。改代码后用「重启」一键再来。</div>
+            <div class="step-title">{{ tr("停止 = 连同子进程一起回收") }}</div>
+            <div class="step-desc">{{ tr("关掉进程树、释放端口，不留残余。改代码后用「重启」一键再来。") }}</div>
           </div>
         </div>
       </div>
 
       <div class="tips">
-        <span class="tip-k">提示</span>
-        首次启动需确认 · 左侧可建分组归类 · 左下角 ⚙ 可导出配置迁移到其它机器
+        <span class="tip-k">{{ tr("提示") }}</span>
+        {{ tr("首次启动需确认 · 左侧可建分组归类 · 左下角 ⚙ 可导出配置迁移到其它机器") }}
       </div>
     </div>
 
     <!-- 未就绪 -->
     <div v-else-if="!ready" class="empty">
       <div class="empty-ico spin">⟳</div>
-      <h2>{{ connectionError ? 'v2 后端未就绪' : '正在启动后台服务…' }}</h2>
-      <p>{{ connectionError || 'sidecar 进程正在初始化，请稍候。' }}</p>
+      <h2>{{ connectionError ? tr("v2 后端未就绪") : tr("正在启动后台服务…") }}</h2>
+      <p>{{ connectionError || tr("sidecar 进程正在初始化，请稍候。") }}</p>
     </div>
 
     <!-- 卡片网格 -->
@@ -149,6 +178,9 @@ onBeforeUnmount(resetCardDrag)
       >
         <AppCard
           :app="a"
+          :groups="groups"
+          :moving="moving[a.id]"
+          @move-group="(id, groupId) => emit('move-group', id, groupId)"
           @start="emit('start', $event)"
           @stop="emit('stop', $event)"
           @restart="emit('restart', $event)"
@@ -170,12 +202,11 @@ onBeforeUnmount(resetCardDrag)
 
 <style scoped>
 .dashboard {
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: 16px;
 }
 .card-slot {

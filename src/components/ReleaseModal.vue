@@ -4,6 +4,7 @@ import { tr } from '@/i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/http'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
+import { releaseContentState } from '@/utils/releaseContent'
 import type {
   AppView,
   ReleaseConfig,
@@ -229,9 +230,22 @@ const targetSelectionValid = computed(() => (gitOnly.value
   && (pushRemote.value || !selectedNeedsRemotePush.value)
   && (createTag.value || !automationTargetRequiresTag.value)
   && !automationBranchMismatch.value)
+const newContentState = computed(() => {
+  const pf = preflight.value
+  if (!pf) return 'unknown'
+  const namespaced = (releaseConfig.value?.versionGroups.length || 0) > 1
+  const baseTags = plannedVersions.value.map(version => namespaced && version.versionGroupId !== 'repository'
+    ? pf.latestGroupTags[version.versionGroupId] || '' : pf.latestTag || '')
+  return releaseContentState(createTag.value, selectedPaths.value, pf.changes.map(change => change.path), baseTags, pf.commitsSinceTags)
+})
+const releaseContentHint = computed(() => newContentState.value === 'none'
+  ? tr('暂无新内容，无需发布新版本')
+  : newContentState.value === 'unknown' && preflight.value?.remoteChecked && !checkingRemote.value
+    ? tr('无法确认版本后的改动，请刷新发布检查；旧版后端需先更新') : '')
 const canPublish = computed(() => {
   if (!preflight.value?.canRelease || !preflight.value.remoteChecked || checkingRemote.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
   if (createTag.value && (!versionValid.value || releaseNotesLoading.value || !releaseNotes.value.trim())) return false
+  if (newContentState.value !== 'new') return false
   return targetSelectionValid.value
 })
 function canRetryRun(run: ReleaseRun | null | undefined) {
@@ -1386,6 +1400,7 @@ onBeforeUnmount(() => {
       </div>
 
       <footer v-if="preflight && !activeRun" class="m-foot" :inert="publishing">
+        <span v-if="releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
         <div ref="publishControlRef" class="publish-control">
           <div class="publish-button-group" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
@@ -1415,6 +1430,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.m-foot { flex-wrap: wrap; align-items: center; }
+.release-content-hint { margin-right: auto; flex: 1 1 180px; font-size: 12px; color: var(--text-dim); }
 .overlay { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.58); display: flex; align-items: center; justify-content: center; padding: 20px; }.modal { width: min(920px,100%); max-height: 94vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }.m-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border); }.m-head h2 { margin: 0; font-size: 17px; }.m-body { padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }.m-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }.state,.muted { color: var(--text-faint); font-size: 12px; }.alert { padding: 9px 11px; border-radius: 7px; font-size: 12px; line-height: 1.5; }.alert.error { color: var(--red); background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.3); }.alert.warn { color: var(--amber); background: rgba(251,191,36,.08); }.alert.info { color: var(--accent); background: rgba(79,140,255,.08); border: 1px solid rgba(79,140,255,.2); }
 .repo-glance { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 12px; border: 1px solid rgba(52,211,153,.22); border-radius: 9px; color: var(--text-dim); background: rgba(52,211,153,.05); font-size: 12px; }.repo-glance strong { color: var(--text); }.repo-glance-status { margin-left: auto; color: var(--green); }.ready-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }.repo-glance.checking { border-color: rgba(79,140,255,.3); background: rgba(79,140,255,.06); }.repo-glance.checking .ready-dot { background: var(--accent); animation: checking-pulse 1s ease-in-out infinite alternate; }.repo-glance.checking .repo-glance-status { color: var(--accent); }.repo-glance.problem { border-color: rgba(248,113,113,.25); background: rgba(248,113,113,.05); }.repo-glance.problem .ready-dot { background: var(--red); }.repo-glance.problem .repo-glance-status { color: var(--red); } @keyframes checking-pulse { to { opacity: .35; transform: scale(.75); } }
 .platform-section { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.platform-section h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.basic-section-head { align-items: center; }.platform-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-top: 12px; }.platform-card { position: relative; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; min-height: 76px; padding: 12px; overflow: hidden; text-align: left; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--bg); }.platform-card:not(:disabled):hover { border-color: rgba(79,140,255,.65); }.platform-card.selected { border-color: var(--accent); background: rgba(79,140,255,.1); box-shadow: inset 0 0 0 1px rgba(79,140,255,.16); }.platform-card.partial { border-color: var(--amber); border-style: dashed; }.platform-card.limited:not(.selected):not(.partial) { border-style: dashed; }.platform-card.unavailable { cursor: not-allowed; opacity: .62; }.platform-icon { font-size: 22px; line-height: 1; }.platform-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding-right: 14px; }.platform-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.platform-copy small { color: var(--text-faint); font-size: 10px; line-height: 1.35; }.chosen-mark { position: absolute; top: 8px; right: 9px; color: var(--accent); font-weight: 700; }.risk-badge { position: absolute; right: 8px; bottom: 6px; padding: 1px 5px; border-radius: 8px; color: var(--amber); background: rgba(251,191,36,.12); font-size: 9px; }.git-card .platform-icon { color: var(--accent); font-size: 26px; }

@@ -564,5 +564,7 @@
   "占用进程不属于本项目或受保护，请先手动关闭或修改端口": "The port owner belongs to another app or is protected. Close it manually or change the port",
   "端口或项目配置已变化，请重新检查": "The port owner or project configuration changed. Check again",
   "已有启停操作进行中，请稍后重试": "Another start/stop operation is in progress. Try again shortly",
-  "脚本配置已更新，请重新检查端口后重试": "Script settings were updated. Check the ports and retry"
+  "脚本配置已更新，请重新检查端口后重试": "Script settings were updated. Check the ports and retry",
+  "暂无新内容，无需发布新版本": "No new changes. A new release is not needed",
+  "无法确认版本后的改动，请刷新发布检查；旧版后端需先更新": "Cannot compare release changes. Refresh the release check; update older backends first"
 }

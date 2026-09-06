@@ -227,6 +227,7 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 	}
 	refreshSuggestions()
 
+	remoteTagRevisions := map[string]string{}
 	if checkRemote && contains(pf.Remotes, pf.RemoteName) && pf.Branch != "" {
 		fetchCtx, fetchCancel := commandContext(ctx, 45*time.Second)
 		_, fetchErr := s.git(fetchCtx, root, "fetch", pf.RemoteName, pf.Branch, "--no-tags")
@@ -241,6 +242,7 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 				pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "remote_tag_check_failed", Message: "无法检查远程 Tag，请检查网络和 Git 凭据"})
 			} else {
 				tagNames = dedupe(append(tagNames, remoteTagNames(remoteTags)...))
+				remoteTagRevisions = parseTagRevisions(remoteTags)
 				refreshSuggestions()
 			}
 			countCtx, countCancel := commandContext(ctx, 10*time.Second)
@@ -265,6 +267,7 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 			}
 		}
 	}
+	s.compareReleaseContent(ctx, pf, remoteTagRevisions)
 	pf.CanRelease = len(pf.BlockingIssues) == 0
 	return pf, nil
 }

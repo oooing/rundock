@@ -42,6 +42,7 @@ type Preflight struct {
 	Remotes           []string              `json:"remotes"`
 	LatestTag         string                `json:"latestTag"`
 	LatestGroupTags   map[string]string     `json:"latestGroupTags"`
+	CommitsSinceTags  map[string]int        `json:"commitsSinceTags"` // missing key = comparison unavailable; empty tag = first release
 	SuggestedVersion  string                `json:"suggestedVersion"`
 	SuggestedVersions map[string]string     `json:"suggestedVersions"`
 	VersionStrategy   string                `json:"versionStrategy"`

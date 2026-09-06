@@ -308,6 +308,7 @@ export interface ReleasePreflight {
   remotes: string[]
   latestTag: string
   latestGroupTags: Record<string, string>
+  commitsSinceTags?: Record<string, number>
   suggestedVersion: string
   suggestedVersions: Record<string, string>
   versionStrategy: Exclude<VersionStrategy, 'auto'>

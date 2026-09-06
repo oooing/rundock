@@ -34,7 +34,7 @@ const emit = defineEmits<{
             <span class="opt-ico">⏻</span>
             <span class="opt-text">
               <span class="opt-title">{{ tr("退出程序") }}</span>
-              <span class="opt-desc">{{ tr("停止所有项目服务并完全退出") }}</span>
+              <span class="opt-desc">{{ tr("选择关闭项目或保留运行") }}</span>
             </span>
           </button>
         </div>

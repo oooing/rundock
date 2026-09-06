@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/launcher-sidecar/internal/adapter"
@@ -23,16 +24,18 @@ import (
 
 // Server 汇总所有依赖。
 type Server struct {
-	startupMu     sync.Mutex
-	Store         *store.Store
-	Manager       *app.Manager
-	Hub           *logbus.Hub
-	Launcher      *launcher.Launcher
-	Publisher     *publisher.Service
-	ReleaseConfig *releaseconfig.Service
-	Diagnostics   *diagnostics.Service
-	Registry      *adapter.Registry
-	httpSrv       *http.Server
+	startupMu         sync.Mutex
+	closing           atomic.Bool
+	shutdownRequested chan struct{}
+	Store             *store.Store
+	Manager           *app.Manager
+	Hub               *logbus.Hub
+	Launcher          *launcher.Launcher
+	Publisher         *publisher.Service
+	ReleaseConfig     *releaseconfig.Service
+	Diagnostics       *diagnostics.Service
+	Registry          *adapter.Registry
+	httpSrv           *http.Server
 }
 
 // New 组装 server。Launcher 由外部创建后注入（依赖 store/hub/registry）。
@@ -65,7 +68,7 @@ func New(s *store.Store, hub *logbus.Hub, reg *adapter.Registry) *Server {
 	l.Diagnostics = diag
 	pub := publisher.New(s)
 	pub.SetDiagnostics(diag)
-	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg}
+	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg, shutdownRequested: make(chan struct{})}
 }
 
 // Router 构建路由（含 CORS 中间件）。
@@ -73,6 +76,7 @@ func (s *Server) Router() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/desktop/shutdown", s.handleDesktopShutdown)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/apps", s.handleApps)
 	mux.HandleFunc("/api/apps/reorder", s.handleAppsReorder)
@@ -129,6 +133,10 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if s.closing.Load() && r.Method != http.MethodGet {
+			writeError(w, http.StatusServiceUnavailable, "后台正在退出")
 			return
 		}
 		next.ServeHTTP(w, r)

@@ -1,30 +1,38 @@
 <script setup lang="ts">
 import { tr } from '@/i18n'
+import { onMounted, ref } from 'vue'
 
-// 通用退出确认弹窗（从托盘「退出」菜单触发）。
-// 提示退出会停止所有正在运行的项目服务，需用户二次确认。
+// 每次完全退出都明确选择；默认焦点在取消，避免误停项目。
+const cancelButton = ref<HTMLButtonElement | null>(null)
+onMounted(() => cancelButton.value?.focus())
 
 const emit = defineEmits<{
-  (e: 'confirm'): void
+  (e: 'confirm', keepProjects: boolean): void
   (e: 'cancel'): void
 }>()
 </script>
 
 <template>
-  <div class="overlay" @click.self="emit('cancel')">
-    <div class="modal">
+  <div class="overlay" @click.self="emit('cancel')" @keydown.esc.stop="emit('cancel')">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="quit-title">
       <header class="m-head">
-        <h2>{{ tr("确认退出") }}</h2>
+        <h2 id="quit-title">{{ tr("退出软件") }}</h2>
       </header>
 
       <div class="m-body">
-        <p class="msg">{{ tr("退出将停止所有正在运行的项目服务并关闭程序。") }}</p>
-        <p class="sub">{{ tr("确定要退出吗？") }}</p>
+        <p class="msg">{{ tr("如何处理正在运行的项目？") }}</p>
+        <button class="quit-option" @click="emit('confirm', true)">
+          <strong>{{ tr("保留项目，仅退出软件") }}</strong>
+          <span>{{ tr("后台托管继续运行，下次打开可继续管理。") }}</span>
+        </button>
+        <button class="quit-option stop-projects" @click="emit('confirm', false)">
+          <strong>{{ tr("关闭所有项目并退出") }}</strong>
+          <span>{{ tr("停止运行中的项目，同时退出后台。") }}</span>
+        </button>
       </div>
 
       <footer class="m-foot">
-        <button @click="emit('cancel')">{{ tr("取消") }}</button>
-        <button class="danger" @click="emit('confirm')">{{ tr("退出") }}</button>
+        <button ref="cancelButton" @click="emit('cancel')">{{ tr("取消") }}</button>
       </footer>
     </div>
   </div>
@@ -44,7 +52,7 @@ const emit = defineEmits<{
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 14px;
-  width: 360px;
+  width: 420px;
   max-width: 92vw;
   display: flex;
   flex-direction: column;
@@ -59,7 +67,14 @@ const emit = defineEmits<{
 }
 .m-body {
   padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
+.quit-option { display: flex; flex-direction: column; gap: 6px; padding: 14px; text-align: left; white-space: normal; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; }
+.quit-option span { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.quit-option:hover { border-color: var(--accent); }
+.stop-projects:hover { border-color: var(--red); }
 .msg {
   margin: 0 0 6px;
   font-size: 14px;

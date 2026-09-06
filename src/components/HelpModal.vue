@@ -26,11 +26,11 @@ const statuses = computed(() => ([
 
 const ops = computed(() => ([
   { key: tr("启动 / 停止 / 重启"), desc: tr("控制应用运行") },
-  { key: '📜', desc: tr("查看实时日志") },
-  { key: '🌐', desc: tr("用浏览器打开发现的 URL") },
-  { key: '📁', desc: tr("打开项目目录") },
-  { key: '🗑', desc: tr("删除应用") },
-  { key: tr("✎ / 双击名称"), desc: tr("改名") },
+  { key: tr('查看日志'), desc: tr("查看实时日志") },
+  { key: tr('打开 URL'), desc: tr("用浏览器打开发现的 URL") },
+  { key: tr('打开目录'), desc: tr("打开项目目录") },
+  { key: tr('更多操作 → 删除'), desc: tr("删除应用") },
+  { key: tr('更多操作 → 改名 / 双击名称'), desc: tr("改名") },
 ]))
 
 const strategies = computed(() => ([

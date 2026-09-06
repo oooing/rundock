@@ -37,9 +37,9 @@ export async function showMainWindow(): Promise<void> {
   await w.setFocus().catch(() => {})
 }
 
-/** 退出应用（quit_app command：先停止所有项目服务，再退出）。非 Tauri 环境为 no-op。 */
-export async function quitApp(): Promise<void> {
-  await invoke('quit_app')
+/** 退出桌面壳；保留项目时让后台继续托管，重开窗口可继续管理。 */
+export async function quitApp(keepProjects: boolean): Promise<void> {
+  await invoke('quit_app', { keepProjects })
 }
 
 /** 应用版本号。Tauri 中读取打包版本；开发浏览器中回退到 package.json。 */

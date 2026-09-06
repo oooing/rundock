@@ -6,6 +6,7 @@ import { useConnectionStore } from '@/stores/connection'
 import { useAppsStore } from '@/stores/apps'
 import { useGroupsStore } from '@/stores/groups'
 import GroupSidebar from '@/components/GroupSidebar.vue'
+import UiIcon from '@/components/UiIcon.vue'
 import Dashboard from '@/views/Dashboard.vue'
 import ConfirmCard from '@/components/ConfirmCard.vue'
 import LogDrawer from '@/components/LogDrawer.vue'
@@ -53,6 +54,11 @@ watch(releaseAppId, (appId) => {
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pathInput = ref('')
+const importPanelOpen = ref(false)
+const importPathRef = ref<HTMLInputElement | null>(null)
+watch(importPanelOpen, async (open) => {
+  if (open) { await nextTick(); importPathRef.value?.focus() }
+})
 let unlistenFileDragDrop: (() => void) | null = null
 
 // 启动/重启时脚本风险变化需确认：记下待执行的 op + appId + 最新候选。
@@ -63,6 +69,7 @@ const pending = ref<{ id: string; op: PendingOp; candidate: ImportCandidate } | 
 const showCloseDialog = ref(false)
 const showQuitConfirm = ref(false)
 const isQuitting = ref(false)
+const keepProjectsOnQuit = ref(false)
 // 记忆 key（复用 sidecar settings 表）
 const CLOSE_BEHAVIOR_KEY = 'closeBehavior'
 
@@ -74,6 +81,7 @@ const appsInGroup = computed(() => {
   if (selectedGroupId.value === null) return apps.apps
   return apps.apps.filter((a) => (a.groupId || '') === selectedGroupId.value)
 })
+const runningCount = computed(() => appsInGroup.value.filter(a => ['running', 'degraded'].includes(a.status)).length)
 const releaseApp = computed(() => apps.apps.find((a) => a.id === releaseAppId.value) || null)
 
 function onDrop(paths: string[]) {
@@ -122,7 +130,7 @@ function onContentDrop(e: DragEvent) {
       onDrop([path])
     } else {
       // 浏览器拖放拿不到路径：提示改用输入框
-      pathInputHint.value = tr("浏览器无法获取拖入文件的路径，请点「浏览」选择，或直接粘贴路径")
+      pathInputHint.value = tr('浏览器无法获取拖入文件的完整路径，请粘贴脚本的完整路径。')
     }
   }
 }
@@ -133,6 +141,7 @@ function onContentDragOver(e: DragEvent) {
 }
 
 const pathInputHint = ref('')
+watch(pathInputHint, (hint) => { if (hint) importPanelOpen.value = true })
 
 function importFromInput() {
   const p = pathInput.value.trim().replace(/^["']|["']$/g, '')
@@ -217,6 +226,7 @@ async function readCloseBehavior(): Promise<string> {
 // 点 X 关闭时（Rust prevent_close + emit "close-requested"）。
 async function onCloseRequested() {
   if (!isTauriShell) return
+  if (isQuitting.value || showQuitConfirm.value) return
   const behavior = await readCloseBehavior()
   if (behavior === 'minimize') {
     // 记住了最小化，直接隐藏
@@ -238,32 +248,35 @@ async function onCloseMinimize() {
   }
 }
 
-// CloseDialog：选「退出」—— 不记忆，直接退出（CloseDialog 已说明会停服务）
+// 所有完全退出入口都询问如何处理项目，不记忆破坏性选择。
 async function onCloseQuit() {
-  await quitWithNotice()
+  showCloseDialog.value = false
+  showQuitConfirm.value = true
 }
 
 // 托盘右键「退出」菜单（Rust emit "tray-quit-requested"）—— 弹二次确认
 async function onTrayQuitRequested() {
+  if (isQuitting.value) return
   showCloseDialog.value = false
   await showMainWindow()
   await nextTick()
   showQuitConfirm.value = true
 }
 
-async function onQuitConfirm() {
-  await quitWithNotice()
+async function onQuitConfirm(keepProjects: boolean) {
+  await quitWithNotice(keepProjects)
 }
 
-async function quitWithNotice() {
+async function quitWithNotice(keepProjects: boolean) {
   if (isQuitting.value) return
   showCloseDialog.value = false
   showQuitConfirm.value = false
   isQuitting.value = true
+  keepProjectsOnQuit.value = keepProjects
   await nextTick()
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   try {
-    await quitApp()
+    await quitApp(keepProjects)
   } catch (e: any) {
     isQuitting.value = false
     showToast(tr("退出失败：") + (e?.message || e), 5000, 'error')
@@ -402,18 +415,28 @@ onUnmounted(() => {
       :drop-group-id="dropGroupId"
       @select="selectedGroupId = $event"
       @settings="showSettings = true"
+      @help="showHelp = true"
     />
 
     <main class="main">
       <header class="topbar">
         <div class="title">
-          <h1>{{ tr("项目启动器") }}</h1>
+          <h1 :title="selectedGroupId === null ? tr('全部应用') : selectedGroupName">{{ selectedGroupId === null ? tr('全部应用') : selectedGroupName }}</h1>
+          <p class="workspace-summary" aria-live="polite">{{ tr('{0} 个项目 · {1} 个运行中', [appsInGroup.length, runningCount]) }}</p>
         </div>
+        <div class="header-actions">
+          <button class="primary import-toggle" :aria-expanded="importPanelOpen" aria-controls="import-panel" @click="importPanelOpen = !importPanelOpen"><UiIcon name="plus" />{{ tr('导入脚本') }}</button>
+        </div>
+      </header>
+      <div v-if="importPanelOpen" id="import-panel" class="import-panel">
+        <div class="import-panel-heading"><strong>{{ tr('导入脚本') }}</strong><button class="ghost icon" :aria-label="tr('收起导入')" @click="importPanelOpen = false"><UiIcon name="close" /></button></div>
         <div class="actions">
           <div class="import-box">
             <input
+              ref="importPathRef"
               v-model="pathInput"
               class="path-input"
+              :aria-label="tr('脚本完整路径')"
               :class="{ incomplete: pathInput && !pathComplete }"
               :placeholder="isTauri ? tr('拖入脚本到下方，或点浏览') : tr('粘贴完整路径，如 D:\\proj\\start.bat')"
               @keyup.enter="importFromInput"
@@ -426,20 +449,15 @@ onUnmounted(() => {
             >
               {{ importing ? tr("导入中…") : tr("导入") }}
             </button>
-            <input
-              ref="fileInput"
-              type="file"
-              accept=".bat,.cmd,.ps1"
-              style="display: none"
-              @change="onFileChange"
-            />
           </div>
           <div v-if="pathInput && !pathComplete" class="path-hint warn">
             {{ tr("⚠ 只拿到文件名「") }}{{ pathInput }}{{ tr("」，浏览器无法自动获取磁盘路径。请补全完整路径（含盘符），例如在前面加上") }} <code>{{ tr("D:\\项目目录\\") }}</code>
           </div>
           <div v-else-if="pathInputHint" class="path-hint">{{ pathInputHint }}</div>
         </div>
-      </header>
+        <p class="import-description">{{ isTauri ? tr('支持 .bat、.cmd、.ps1，也可以直接拖入窗口。') : tr('支持 .bat、.cmd、.ps1。浏览器中请粘贴脚本的完整路径。') }}</p>
+      </div>
+      <input ref="fileInput" type="file" accept=".bat,.cmd,.ps1" hidden @change="onFileChange" />
 
       <section
         class="content"
@@ -448,20 +466,23 @@ onUnmounted(() => {
         @dragleave.prevent="dragOver = false"
         @drop.prevent="onContentDrop"
       >
-        <div v-if="selectedGroupId !== null" class="group-toolbar">
-          <strong>{{ selectedGroupName }}</strong>
-          <button @click="groupPickerOpen = true" :disabled="!conn.sidecarReady">{{ tr('添加项目') }}</button>
+        <div v-if="selectedGroupId !== null" class="workspace-toolbar">
+          <button class="add-to-group" @click="groupPickerOpen = true" :disabled="!conn.sidecarReady"><UiIcon name="plus" :size="14" />{{ tr('添加项目') }}</button>
         </div>
         <Dashboard
           :groups="groups.groups"
           :moving="movingGroups"
           :group-view="selectedGroupId !== null"
+          :native-drop="isTauri"
+          @show-import="importPanelOpen = true"
           @move-group="handleMoveGroup"
           @group-hover="dropGroupId = $event"
           :apps="appsInGroup"
           :loading="apps.loading"
           :ready="conn.sidecarReady"
           :connection-error="conn.error"
+          :load-error="apps.apps.length ? '' : apps.error"
+          @retry="apps.load()"
           @start="handleStart($event)"
           @stop="handleStop($event)"
           @restart="handleRestart($event)"
@@ -508,8 +529,8 @@ onUnmounted(() => {
       <div class="quitting-card">
         <div class="spinner"></div>
         <div>
-          <div class="quitting-title">{{ tr("正在关闭服务并退出…") }}</div>
-          <div class="quitting-sub">{{ tr("请稍等，正在停止所有正在运行的项目服务。") }}</div>
+          <div class="quitting-title">{{ keepProjectsOnQuit ? tr("正在退出软件…") : tr("正在关闭服务并退出…") }}</div>
+          <div class="quitting-sub">{{ keepProjectsOnQuit ? tr("项目继续在后台运行，下次打开可继续管理。") : tr("请稍等，正在停止所有正在运行的项目服务。") }}</div>
         </div>
       </div>
     </div>
@@ -545,8 +566,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.group-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.group-toolbar strong { min-width: 0; overflow-wrap: anywhere; }
 .group-picker-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 20px; }
 .group-picker { width: min(520px,100%); max-height: 85vh; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev); }
 .group-picker header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; }
@@ -557,6 +576,13 @@ onUnmounted(() => {
 .group-picker-row small { display: block; margin-top: 4px; color: var(--text-faint); }
 .group-picker-row button { flex-shrink: 0; }
 .layout {
+  --workspace-header-top: 28px;
+  --workspace-header-bottom: 20px;
+  --workspace-title-line: 32px;
+  --workspace-subtitle-line: 16px;
+  --workspace-heading-gap: 8px;
+  --workspace-header-extra: 0px;
+  --workspace-header-height: calc(var(--workspace-header-top) + var(--workspace-title-line) + var(--workspace-heading-gap) + var(--workspace-subtitle-line) + var(--workspace-header-bottom) + var(--workspace-header-extra));
   display: flex;
   height: 100vh;
   overflow: hidden;
@@ -567,53 +593,39 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
 }
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev);
-}
-.title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.logo {
-  font-size: 20px;
-}
-.title h1 {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0;
-}
-.actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-}
-.import-box {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.path-input {
-  width: 320px;
-  font-size: 12.5px;
-}
-.path-input.incomplete {
-  border-color: var(--amber);
-  background: rgba(251, 191, 36, 0.06);
-}
-/* Longer translated labels must not push the import controls off-screen. */
+.topbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--workspace-header-height); padding: var(--workspace-header-top) 28px var(--workspace-header-bottom); }
+.title { min-width: 0; }
+.title h1 { margin: 0; font-size: 24px; line-height: var(--workspace-title-line); font-weight: 600; letter-spacing: -.025em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workspace-summary { margin: var(--workspace-heading-gap) 0 0; color: var(--text-faint); font-size: 12px; line-height: var(--workspace-subtitle-line); font-variant-numeric: tabular-nums; }
+.header-actions { display: flex; align-items: center; gap: 22px; flex-shrink: 0; }
+.import-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; }
+.import-panel { margin: 0 28px 16px; padding: 12px 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; }
+.import-panel-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.actions { display: flex; flex-direction: column; gap: 7px; }
+.import-box { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.path-input { flex: 1; min-width: 0; width: 0; font-size: 12.5px; }
+.path-input.incomplete { border-color: var(--amber); }
+.import-description { margin: 10px 0 0; font-size: 12px; color: var(--text-faint); }
+.workspace-toolbar { display: flex; align-items: center; gap: 14px; min-width: 0; margin-bottom: 20px; }
+.add-to-group { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
 @media (max-width: 1100px) {
-  .topbar { flex-wrap: wrap; gap: 10px; }
-  .title { flex-shrink: 0; }
-  .title h1 { white-space: nowrap; }
-  .actions, .import-box { width: 100%; min-width: 0; }
-  .path-input { flex: 1; width: 0; min-width: 0; }
+  .layout { --workspace-header-top: 22px; --workspace-header-bottom: 18px; }
+  .topbar { padding-inline: 20px; gap: 16px; }
+  .header-actions { gap: 14px; }
+  .import-panel { margin-inline: 20px; }
+}
+@media (max-width: 800px) {
+  .layout { --workspace-title-line: 28px; }
+  .workspace-toolbar { flex-wrap: wrap; }
+  .title h1 { font-size: 21px; }
+}
+@media (max-width: 600px) {
+  .layout { --workspace-header-top: 18px; --workspace-header-bottom: 18px; --workspace-header-extra: 52px; }
+  .topbar { flex-wrap: wrap; padding-inline: 14px; }
+  .title { flex-basis: 100%; }
+  .import-panel { margin-inline: 14px; padding: 10px; }
+  .import-box { flex-wrap: wrap; }
+  .path-input { flex-basis: 100%; }
 }
 .path-hint {
   font-size: 11px;
@@ -633,7 +645,7 @@ onUnmounted(() => {
 .content {
   flex: 1;
   overflow: auto;
-  padding: 20px;
+  padding: 0 28px 28px;
   position: relative;
   transition: background 0.15s;
 }
@@ -642,6 +654,8 @@ onUnmounted(() => {
   outline: 2px dashed var(--accent);
   outline-offset: -10px;
 }
+@media (max-width: 1100px) { .content { padding: 0 20px 24px; } }
+@media (max-width: 600px) { .content { padding: 0 14px 20px; } }
 .quitting-overlay {
   position: fixed;
   inset: 0;

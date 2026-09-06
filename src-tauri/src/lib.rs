@@ -4,12 +4,12 @@
 //   1. spawn sidecar 二进制（externalBin，固定 LAUNCHER_PORT=17654）
 //   2. 轮询 %APPDATA%\launcher-sidecar\sidecar.port 直到就绪（或超时）
 //   3. 通过初始化脚本把 window.__LAUNCHER_BASE__ 注入 webview
-//   4. 应用退出时 sidecar 随之结束（sidecar 收到 SIGINT 或 Job 句柄关闭即回收所有托管进程）
+//   4. 保留项目时只退出桌面壳；停止项目时请求 sidecar 停止项目并退出。
 //
 // 窗口行为：
 //   - 点关闭(X) 不真退出，而是 emit "close-requested" 给前端弹窗选择（最小化到托盘 / 退出）。
 //   - 托盘图标：双击显示窗口；右键菜单「显示窗口」「退出」。
-//   - 退出(quit_app)前调 sidecar stop-all 停止所有项目，再 exit。
+//   - 退出(quit_app)明确传入是否保留项目；下次启动复用保留的 sidecar。
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write as IoWrite};
@@ -23,6 +23,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, WindowEvent};
 
 mod window_layout;
+mod desktop_exit;
 
 #[cfg(not(debug_assertions))]
 const SIDECAR_PORT: &str = "17654";
@@ -184,55 +185,28 @@ fn sidecar_base() -> Option<String> {
         .map(|port| format!("http://127.0.0.1:{}", port))
 }
 
-/// 向本地 sidecar 发送 POST /api/apps/stop-all（loopback，裸 TCP 手写 HTTP）。
-/// 退出前优雅停止所有项目。失败不阻塞退出（Job 兜底回收）。
-fn sidecar_stop_all(data_dir: &PathBuf) {
-    let port = match read_port_file(data_dir) {
-        Some(p) => p,
-        None => return,
-    };
-    let addr = format!("127.0.0.1:{}", port);
-    let req = "POST /api/apps/stop-all HTTP/1.0\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    // 停止项目可能耗时（grace period），给充裕超时
-    let Ok(mut stream) = TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
-        Duration::from_secs(3),
-    ) else {
-        return;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-    let _ = stream.write_all(req.as_bytes());
-    // 读取会阻塞直到 sidecar 处理完 stop-all 并关闭连接（Connection: close）。
-    // 只需等它结束，不解析响应内容。
-    let mut sink = [0u8; 256];
-    while let Ok(n) = stream.read(&mut sink) {
-        if n == 0 {
-            break;
-        }
-    }
-    let _ = stream.shutdown(std::net::Shutdown::Both);
-}
-
-/// 退出应用：先停止所有项目服务，再退出。供前端「退出」调用。
+/// Exit only after the chosen action succeeds; errors leave the window usable.
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
-    // 停服务可能需要几秒，放到后台线程，避免前端窗口看起来卡死。
-    std::thread::spawn(move || {
-        let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
-        // 1) 优雅停止所有项目
-        sidecar_stop_all(&data_dir);
-        if let Ok(mut child) = app.state::<SidecarState>().0.lock() {
-            if let Some(mut child) = child.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+async fn quit_app(app: tauri::AppHandle, keep_projects: bool) -> Result<(), String> {
+    let port = sidecar_data_dir()
+        .and_then(|dir| read_port_file(&dir))
+        .ok_or_else(|| "无法连接后台，请稍后重试".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if !sidecar_health_ok(&port) {
+            return Err("无法连接后台，请稍后重试".to_string());
         }
-        // 2) 退出（Job Object 关闭会级联回收 sidecar 及其子进程作为兜底）
-        app.exit(0);
-    });
+        desktop_exit::prepare_exit(&port, keep_projects)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // Dropping std::process::Child does NOT terminate it. In keep mode, sidecar
+    // retains the live process registry, logs, ConPTY sessions and Job handles.
+    // In stop mode it exits itself after the successful shutdown response.
+    if let Ok(mut child) = app.state::<SidecarState>().0.lock() {
+        child.take();
+    }
+    app.exit(0);
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -351,8 +325,8 @@ pub fn run() {
                                 "window.dispatchEvent(new CustomEvent('launcher-tray-quit-requested'));",
                             );
                         } else {
-                            // 找不到窗口时没有地方弹确认，退化为直接退出。
-                            app.exit(0);
+                            // No confirmation surface: never silently terminate projects.
+                            eprintln!("cannot request quit: main window unavailable");
                         }
                     }
                     _ => {}

@@ -79,7 +79,10 @@ func main() {
 	// 优雅退出：SIGINT/SIGTERM；退出时 Job Object 关闭即回收所有托管进程。
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	select {
+	case <-sigCh:
+	case <-server.ShutdownRequested():
+	}
 	log.Printf("shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

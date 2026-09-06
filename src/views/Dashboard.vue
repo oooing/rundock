@@ -3,6 +3,7 @@ import { tr } from '@/i18n'
 
 import { onBeforeUnmount, ref } from 'vue'
 import AppCard from '@/components/AppCard.vue'
+import UiIcon from '@/components/UiIcon.vue'
 import type { AppView, Group, ServiceRole } from '@/types'
 
 const props = defineProps<{
@@ -10,12 +11,16 @@ const props = defineProps<{
   loading: boolean
   ready: boolean
   connectionError?: string
+  loadError?: string
   groups: Group[]
   moving: Record<string, boolean>
   groupView?: boolean
+  nativeDrop?: boolean
 }>()
 
 const emit = defineEmits<{
+  (e: 'show-import'): void
+  (e: 'retry'): void
   (e: 'start', id: string): void
   (e: 'stop', id: string): void
   (e: 'restart', id: string): void
@@ -113,60 +118,33 @@ onBeforeUnmount(resetCardDrag)
 
 <template>
   <div class="dashboard">
-    <!-- 空状态 -->
-    <div v-if="ready && apps.length === 0 && !loading && groupView" class="empty">
+    <div v-if="!ready" class="empty" role="status">
+      <div class="empty-symbol" :class="{ spin: !connectionError }"><UiIcon name="refresh" :size="26" /></div>
+      <h2>{{ connectionError ? tr('后台服务连接失败') : tr('正在连接后台服务…') }}</h2>
+      <p>{{ connectionError || tr('连接完成后，项目会自动显示。') }}</p>
+    </div>
+    <div v-else-if="loading && !apps.length" class="empty" role="status">
+      <div class="empty-symbol spin"><UiIcon name="refresh" :size="26" /></div>
+      <h2>{{ tr('正在加载项目…') }}</h2>
+    </div>
+    <div v-else-if="!apps.length && loadError" class="empty" role="alert">
+      <div class="empty-symbol"><UiIcon name="refresh" :size="26" /></div>
+      <h2>{{ tr('项目加载失败') }}</h2>
+      <p>{{ loadError }}</p>
+      <button @click="emit('retry')">{{ tr('重新加载') }}</button>
+    </div>
+    <div v-else-if="!apps.length && groupView" class="empty">
+      <div class="empty-symbol"><UiIcon name="folder" :size="26" /></div>
       <h2>{{ tr('分组暂无项目') }}</h2>
       <p>{{ tr('点击“添加项目”，或从全部应用拖入此分组。') }}</p>
     </div>
-    <div v-else-if="ready && apps.length === 0 && !loading" class="empty">
-      <div class="empty-ico">📥</div>
-      <h2>{{ tr("拖入脚本即可开始") }}</h2>
-      <p class="empty-sub">{{ tr("把任意") }} <code>.bat</code> / <code>.cmd</code> / <code>.ps1</code> {{ tr("拖进窗口，或点右上角「＋ 导入脚本」选择文件。") }}</p>
-
-      <div class="guide">
-        <div class="guide-row">
-          <span class="step">1</span>
-          <div class="step-body">
-            <div class="step-title">{{ tr("拖入脚本，确认导入") }}</div>
-            <div class="step-desc">{{ tr("平台只读分析项目，列出入口、命令、环境变量和") }}<span class="hl">{{ tr("风险项") }}</span>{{ tr("，确认后生成卡片。") }}</div>
-          </div>
-        </div>
-        <div class="guide-row">
-          <span class="step">2</span>
-          <div class="step-body">
-            <div class="step-title">{{ tr("点「启动」，后台无窗口运行") }}</div>
-            <div class="step-desc">{{ tr("不弹黑窗。日志实时采集，可点 📜 查看。") }}</div>
-          </div>
-        </div>
-        <div class="guide-row">
-          <span class="step">3</span>
-          <div class="step-body">
-            <div class="step-title">{{ tr("自动发现 URL") }}</div>
-            <div class="step-desc">{{ tr("服务起來后，卡片自动显示地址，点 🌐 即用浏览器打开。") }}</div>
-          </div>
-        </div>
-        <div class="guide-row">
-          <span class="step">4</span>
-          <div class="step-body">
-            <div class="step-title">{{ tr("停止 = 连同子进程一起回收") }}</div>
-            <div class="step-desc">{{ tr("关掉进程树、释放端口，不留残余。改代码后用「重启」一键再来。") }}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="tips">
-        <span class="tip-k">{{ tr("提示") }}</span>
-        {{ tr("首次启动需确认 · 左侧可建分组归类 · 左下角 ⚙ 可导出配置迁移到其它机器") }}
-      </div>
+    <div v-else-if="!apps.length" class="empty welcome">
+      <div class="empty-symbol"><UiIcon name="upload" :size="28" /></div>
+      <h2>{{ tr('把第一个项目放进启动坞') }}</h2>
+      <p>{{ nativeDrop ? tr('拖入启动脚本，确认后即可在这里启停项目、打开服务和查看日志。') : tr('粘贴启动脚本的完整路径，确认后即可在这里启停项目、打开服务和查看日志。') }}</p>
+      <button class="primary" @click="emit('show-import')"><UiIcon name="plus" />{{ tr('导入脚本') }}</button>
+      <span class="supported-formats">.bat <span>·</span> .cmd <span>·</span> .ps1</span>
     </div>
-
-    <!-- 未就绪 -->
-    <div v-else-if="!ready" class="empty">
-      <div class="empty-ico spin">⟳</div>
-      <h2>{{ connectionError ? tr("v2 后端未就绪") : tr("正在启动后台服务…") }}</h2>
-      <p>{{ connectionError || tr("sidecar 进程正在初始化，请稍候。") }}</p>
-    </div>
-
     <!-- 卡片网格 -->
     <div v-else class="grid">
       <div
@@ -207,15 +185,14 @@ onBeforeUnmount(resetCardDrag)
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  align-items: stretch;
   gap: 16px;
 }
 .card-slot {
   min-width: 0;
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
-.card-slot :deep(.card) {
-  height: 100%;
-}
+.card-slot :deep(.card) { height: 100%; }
 .card-slot.dragging {
   opacity: 0.42;
 }
@@ -230,102 +207,13 @@ onBeforeUnmount(resetCardDrag)
   cursor: grabbing !important;
   user-select: none !important;
 }
-.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 80px 20px;
-  color: var(--text-dim);
-}
-.empty-ico {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.8;
-}
-.empty h2 {
-  margin: 0 0 8px;
-  color: var(--text);
-  font-weight: 600;
-}
-.empty p {
-  max-width: 480px;
-  line-height: 1.6;
-  margin: 0;
-}
-.empty-sub code {
-  background: var(--bg-elev-2);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-.guide {
-  margin-top: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 520px;
-  text-align: left;
-}
-.guide-row {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-.step {
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.step-body {
-  padding-top: 2px;
-}
-.step-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 2px;
-}
-.step-desc {
-  font-size: 12.5px;
-  color: var(--text-dim);
-  line-height: 1.55;
-}
-.hl {
-  color: var(--amber);
-  font-weight: 600;
-}
-.tips {
-  margin-top: 26px;
-  font-size: 12px;
-  color: var(--text-faint);
-  padding: 10px 14px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  max-width: 520px;
-  line-height: 1.6;
-}
-.tip-k {
-  color: var(--accent);
-  font-weight: 600;
-  margin-right: 6px;
-}
-.spin {
-  animation: spin 1.4s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+.empty { min-height: 340px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 64px 24px; color: var(--text-dim); }
+.empty-symbol { color: var(--text-dim); margin-bottom: 20px; }
+.empty h2 { margin: 0 0 10px; font-size: 20px; font-weight: 600; color: var(--text); }
+.empty p { max-width: 440px; line-height: 1.8; margin: 0; overflow-wrap: anywhere; }
+.empty button { margin-top: 24px; display: inline-flex; align-items: center; gap: 8px; }
+.supported-formats { margin-top: 16px; color: var(--text-faint); font: 12px Consolas, monospace; }
+.supported-formats span { margin: 0 9px; }
+.spin { animation: spin 1.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

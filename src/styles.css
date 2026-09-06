@@ -1,13 +1,13 @@
 :root {
-  --bg: #0f1115;
-  --bg-elev: #171a21;
-  --bg-elev-2: #1f232c;
-  --border: #2a2f3a;
-  --text: #e6e9ef;
-  --text-dim: #9aa3b2;
-  --text-faint: #6b7280;
-  --accent: #4f8cff;
-  --accent-hover: #6a9eff;
+  --bg: #101216;
+  --bg-elev: #191c22;
+  --bg-elev-2: #23272f;
+  --border: #303640;
+  --text: #eef0f4;
+  --text-dim: #acb4c0;
+  --text-faint: #929cab;
+  --accent: #4b83e6;
+  --accent-hover: #5a90ef;
   --green: #34d399;
   --amber: #fbbf24;
   --red: #f87171;
@@ -56,12 +56,12 @@ button:disabled {
   cursor: not-allowed;
 }
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: #2f68cb;
+  border-color: #2f68cb;
   color: #fff;
 }
 button.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: #3873d8;
 }
 button.danger {
   border-color: var(--red);
@@ -90,6 +90,20 @@ select {
 input:focus,
 textarea:focus {
   border-color: var(--accent);
+}
+
+:where(button, a, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 code,

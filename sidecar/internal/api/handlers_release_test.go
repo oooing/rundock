@@ -42,6 +42,22 @@ func TestReleaseCreateRequestExternalConfirmationWireContract(t *testing.T) {
 	}
 }
 
+func TestVersionPlanChangedIncludesCheckedPreflight(t *testing.T) {
+	res := httptest.NewRecorder()
+	writePublisherError(res, &publisher.Error{Code: "version_plan_changed", Message: "confirm updated versions",
+		Preflight: &publisher.Preflight{SuggestedVersion: "1.0.3", RemoteChecked: true}})
+	var body struct {
+		Code      string               `json:"code"`
+		Preflight *publisher.Preflight `json:"preflight"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusConflict || body.Code != "version_plan_changed" || body.Preflight == nil || body.Preflight.SuggestedVersion != "1.0.3" || !body.Preflight.RemoteChecked {
+		t.Fatalf("version confirmation response: %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestReleaseProfileHistoryAndExportAPI(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
 	if err != nil {

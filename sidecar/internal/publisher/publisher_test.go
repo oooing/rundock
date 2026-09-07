@@ -120,7 +120,7 @@ func TestPreflightLocalSkipsRemoteFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if local.RemoteChecked || !local.CanRelease || hasIssue(local, "fetch_failed") {
+	if local.RemoteChecked || !local.CanRelease || hasIssue(local, "remote_check_failed") {
 		t.Fatalf("local preflight should skip remote fetch: %+v", local)
 	}
 
@@ -128,7 +128,7 @@ func TestPreflightLocalSkipsRemoteFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !full.RemoteChecked || full.CanRelease || !hasIssue(full, "fetch_failed") {
+	if !full.RemoteChecked || full.CanRelease || !hasIssue(full, "remote_check_failed") {
 		t.Fatalf("full preflight should report remote fetch failure: %+v", full)
 	}
 }

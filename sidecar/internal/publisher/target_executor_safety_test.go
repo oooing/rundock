@@ -224,7 +224,9 @@ func TestNamespacedVersionIncludesHigherRemoteTag(t *testing.T) {
 		t.Fatalf("remote tag was not reflected: tags=%v suggestions=%v", pf.LatestGroupTags, pf.SuggestedVersions)
 	}
 
-	createTag, pushRemote := true, false
+	// Only an uploading release checks the current remote version history.
+	// A deliberately local release must remain independent of remote tags.
+	createTag, pushRemote := true, true
 	_, err = svc.Start(context.Background(), "app1", CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "manual",
 		Versions:          []ReleaseVersionInput{{VersionGroupID: "mobile", TargetVersion: "5.1.0"}},

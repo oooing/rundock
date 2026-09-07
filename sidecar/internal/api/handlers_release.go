@@ -17,10 +17,14 @@ func writePublisherError(w http.ResponseWriter, err error) {
 		status := http.StatusBadRequest
 		if pe.Code == "app_not_found" || pe.Code == "release_not_found" {
 			status = http.StatusNotFound
-		} else if pe.Code == "status_changed" || pe.Code == "release_in_progress" || pe.Code == "tag_exists" || pe.Code == "staged_changes" {
+		} else if pe.Code == "status_changed" || pe.Code == "release_in_progress" || pe.Code == "tag_exists" || pe.Code == "staged_changes" || pe.Code == "version_plan_changed" {
 			status = http.StatusConflict
 		}
-		writeJSON(w, status, map[string]string{"error": pe.Message, "code": pe.Code})
+		body := map[string]any{"error": pe.Message, "code": pe.Code}
+		if pe.Preflight != nil {
+			body["preflight"] = pe.Preflight
+		}
+		writeJSON(w, status, body)
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())

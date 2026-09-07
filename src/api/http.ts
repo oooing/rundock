@@ -23,6 +23,13 @@ import type {
   ReleaseRunView,
 } from '@/types'
 
+export class ApiError extends Error {
+  constructor(message: string, public code = '', public preflight?: ReleasePreflight) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${getBaseURL()}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -30,13 +37,17 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!r.ok) {
     let msg = `HTTP ${r.status}`
+    let code = ''
+    let preflight: ReleasePreflight | undefined
     try {
       const body = await r.json()
       msg = body.code === 'script_confirmation_required' ? '启动脚本已变化，请先点击启动确认新配置' : body.error || msg
+      code = typeof body.code === 'string' ? body.code : ''
+      preflight = body.preflight
     } catch {
       /* ignore */
     }
-    throw new Error(tr(msg))
+    throw new ApiError(tr(msg), code, preflight)
   }
   return r.json() as Promise<T>
 }

@@ -35,9 +35,27 @@ func (execRunner) Run(ctx context.Context, dir, name string, args ...string) (st
 }
 
 func (execRunner) RunWithInput(ctx context.Context, dir, name string, input []byte, args ...string) (string, error) {
+	networkGit := name == "git" && len(args) > 2 && contains([]string{"fetch", "ls-remote", "push"}, args[2])
+	if name == "git" {
+		args = append([]string{"-c", "credential.interactive=false", "-c", "core.askPass="}, args...)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GIT_ASKPASS=", "SSH_ASKPASS_REQUIRE=never")
+	if networkGit && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" {
+		// Respect repository-specific SSH identities/proxies. The default SSH
+		// transport can use batch mode; custom transports retain their options
+		// and remain bounded by the same deadline and disabled askpass prompts.
+		lookup := exec.CommandContext(ctx, name, "-C", dir, "config", "--get", "core.sshCommand")
+		lookup.WaitDelay = time.Second
+		configured, _ := lookup.Output()
+		if strings.TrimSpace(string(configured)) == "" {
+			cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -oBatchMode=yes -oConnectTimeout=10")
+		}
+	}
+	// Credential or SSH children can retain stdout/stderr after Git is killed.
+	// Bound pipe cleanup as well as the command so cancellation reaches the UI.
+	cmd.WaitDelay = time.Second
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)
 	}
@@ -731,7 +749,11 @@ func runCheckCommand(ctx context.Context, runner commandRunner, repo, command st
 
 func redact(text string) string {
 	re := regexp.MustCompile(`(?i)(https?://)[^/@\s]+@`)
-	return re.ReplaceAllString(text, `${1}***@`)
+	text = re.ReplaceAllString(text, `${1}***@`)
+	query := regexp.MustCompile(`(?i)([?&](?:access_token|token|api_key|key|password|secret)=)[^&\s]+`)
+	text = query.ReplaceAllString(text, `${1}***`)
+	header := regexp.MustCompile(`(?i)(authorization:\s*(?:bearer|basic)\s+)[^\s]+`)
+	return header.ReplaceAllString(text, `${1}***`)
 }
 
 func commandContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

@@ -27,6 +27,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - run: node -p "require('./frontend/package.json').version"
       - uses: docker/build-push-action@v6
 `)
 	writeFixture(t, root, ".github/workflows/desktop-client.yml", `name: Clients

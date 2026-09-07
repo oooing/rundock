@@ -20,15 +20,16 @@ type nodeProject struct {
 }
 
 type discoveryBuilder struct {
-	root          string
-	config        *Config
-	groupByKey    map[string]string
-	expoGroups    map[string]string
-	groupIDs      map[string]bool
-	targetIDs     map[string]bool
-	dockerDirs    []string
-	gitPushDocker bool
-	warnings      []string
+	root             string
+	config           *Config
+	groupByKey       map[string]string
+	expoGroups       map[string]string
+	groupIDs         map[string]bool
+	targetIDs        map[string]bool
+	dockerDirs       []string
+	gitPushDocker    bool
+	branchPushDocker bool
+	warnings         []string
 }
 
 func (s *Service) scanRoot(root string, repoFound bool) *Config {
@@ -79,6 +80,7 @@ func (s *Service) scanRoot(root string, repoFound bool) *Config {
 	}
 	b.dockerDirs = uniqueDirs(dockerfiles)
 	b.gitPushDocker = hasPushTriggeredDockerWorkflow(root)
+	b.branchPushDocker = hasBranchTriggeredDockerWorkflow(root)
 	for _, dockerDir := range b.dockerDirs {
 		b.discoverDocker(dockerDir)
 	}
@@ -89,11 +91,8 @@ func (s *Service) scanRoot(root string, repoFound bool) *Config {
 		b.discoverPython(pyDir)
 	}
 	b.applyTargetPriorities()
-	// Tag prefixes are normally added while decorating the response.  Resolve
-	// them one step earlier as well so a repository's existing tag-triggered
-	// workflow can be matched to the exact version group it will receive.
-	ensureTagPrefixes(b.config)
 	b.applyTagTriggeredWorkflowRunners()
+	ensureTagPrefixes(b.config)
 
 	if len(b.config.VersionGroups) == 0 {
 		b.ensureGroup("default", "", nil)
@@ -244,9 +243,13 @@ func (b *discoveryBuilder) discoverDocker(dir string) {
 	rel := relative(b.root, dir)
 	group := b.nearestGroup(rel)
 	if b.gitPushDocker {
+		trigger := "tag-push"
+		if b.branchPushDocker {
+			trigger = "branch-push"
+		}
 		b.addTarget(Target{ID: b.targetID(rel, "cloud-container"), Name: displayName(dir) + " 云端容器", Kind: "server", VersionGroup: group,
-			WorkingDir: rel, Runner: Runner{Type: RunnerGitPush, OS: []string{}}, Enabled: true, Detected: true, Confidence: 0.94,
-			Steps: Steps{Publish: "branch-push"}, Artifacts: []string{}})
+			WorkingDir: rel, Runner: Runner{Type: RunnerGitPush, OS: []string{}}, Enabled: b.branchPushDocker, Detected: true, Confidence: 0.94,
+			Steps: Steps{Publish: trigger}, Artifacts: []string{}})
 		b.warnings = append(b.warnings, "检测到 GitHub Actions 容器构建；不会在本机运行 Docker")
 		return
 	}
@@ -255,9 +258,15 @@ func (b *discoveryBuilder) discoverDocker(dir string) {
 		Steps: Steps{Check: "docker version", Build: "docker build ."}, Artifacts: []string{}})
 }
 
-var workflowPushRE = regexp.MustCompile(`(?m)^\s*push\s*:`)
-
 func hasPushTriggeredDockerWorkflow(root string) bool {
+	return hasDockerWorkflow(root, false)
+}
+
+func hasBranchTriggeredDockerWorkflow(root string) bool {
+	return hasDockerWorkflow(root, true)
+}
+
+func hasDockerWorkflow(root string, requireBranch bool) bool {
 	workflowDir := filepath.Join(root, ".github", "workflows")
 	entries, err := os.ReadDir(workflowDir)
 	if err != nil {
@@ -276,7 +285,7 @@ func hasPushTriggeredDockerWorkflow(root string) bool {
 			continue
 		}
 		content := strings.ToLower(string(raw))
-		pushTriggered := workflowPushRE.MatchString(content) || strings.Contains(content, "on: [push")
+		pushTriggered := hasBranchPushEvent(string(raw)) || (!requireBranch && len(parsePushTagPatterns(string(raw))) > 0)
 		if pushTriggered && strings.Contains(content, "docker/build-push-action") {
 			return true
 		}

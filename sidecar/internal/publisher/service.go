@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,16 +38,16 @@ func New(st *store.Store) *Service {
 func (s *Service) SetDiagnostics(value *diagnostics.Service) { s.diagnostics = value }
 
 func (s *Service) Preflight(ctx context.Context, appID string) (*Preflight, error) {
-	return s.preflight(ctx, appID, true)
+	return s.preflight(ctx, appID, true, true, true)
 }
 
 // PreflightLocal performs the fast, local-only portion used to render the
-// release panel. A full Preflight is still required before a release starts.
+// release panel. Start checks only the resources required by the chosen actions.
 func (s *Service) PreflightLocal(ctx context.Context, appID string) (*Preflight, error) {
-	return s.preflight(ctx, appID, false)
+	return s.preflight(ctx, appID, false, true, true)
 }
 
-func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool) (*Preflight, error) {
+func (s *Service) preflight(ctx context.Context, appID string, checkRemote, checkTags, checkConfig bool) (*Preflight, error) {
 	a, err := s.store.GetApp(appID)
 	if err != nil || a == nil {
 		return nil, &Error{Code: "app_not_found", Message: "项目不存在"}
@@ -86,7 +85,9 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 		pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "detached_head", Message: "当前仓库处于 detached HEAD，不能发布"})
 	}
 	if !contains(pf.Remotes, pf.RemoteName) {
-		pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "remote_missing", Message: "远程仓库不存在：" + pf.RemoteName})
+		if checkRemote {
+			pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "remote_missing", Message: "远程仓库不存在：" + pf.RemoteName + "；仅本地提交可关闭“提交后上传”"})
+		}
 	} else {
 		url, _ := s.git(ctx15, root, "remote", "get-url", pf.RemoteName)
 		pf.RemoteURL = redact(url)
@@ -110,6 +111,17 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 		}
 	}
 	pf.StatusFingerprint = statusFingerprint(root, pf.HeadSHA, statusRaw, pf.Changes)
+	if !checkRemote {
+		s.readCachedRemoteChanges(ctx15, pf)
+	}
+	if !checkConfig {
+		// A plain commit does not read, update or execute release configuration.
+		if checkRemote && len(pf.BlockingIssues) == 0 {
+			s.checkRemote(ctx, pf, false)
+		}
+		pf.CanRelease = len(pf.BlockingIssues) == 0
+		return pf, nil
+	}
 
 	strategy, files, versions := detectVersionStrategy(root, profile.VersionStrategy)
 	pf.VersionStrategy, pf.VersionFiles = strategy, files
@@ -182,7 +194,10 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 			Message: "诊断目录中的未跟踪文件不能作为版本文件：" + strings.Join(paths, "、"),
 		})
 	}
-	localTags, _ := s.git(ctx15, root, "tag", "--list")
+	localTags := ""
+	if checkTags {
+		localTags, _ = s.git(ctx15, root, "tag", "--list")
+	}
 	tagNames := nonEmptyLines(localTags)
 	suggestionValues := mapValues(versions)
 	if repositoryScopedSourceOnly {
@@ -227,47 +242,16 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote bool)
 	}
 	refreshSuggestions()
 
-	remoteTagRevisions := map[string]string{}
-	if checkRemote && contains(pf.Remotes, pf.RemoteName) && pf.Branch != "" {
-		fetchCtx, fetchCancel := commandContext(ctx, 45*time.Second)
-		_, fetchErr := s.git(fetchCtx, root, "fetch", pf.RemoteName, pf.Branch, "--no-tags")
-		fetchCancel()
-		if fetchErr != nil {
-			pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "fetch_failed", Message: "无法获取远程分支，请检查网络和 Git 凭据"})
-		} else {
-			tagCtx, tagCancel := commandContext(ctx, 30*time.Second)
-			remoteTags, tagErr := s.git(tagCtx, root, "ls-remote", "--tags", pf.RemoteName)
-			tagCancel()
-			if tagErr != nil {
-				pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "remote_tag_check_failed", Message: "无法检查远程 Tag，请检查网络和 Git 凭据"})
-			} else {
-				tagNames = dedupe(append(tagNames, remoteTagNames(remoteTags)...))
-				remoteTagRevisions = parseTagRevisions(remoteTags)
-				refreshSuggestions()
-			}
-			countCtx, countCancel := commandContext(ctx, 10*time.Second)
-			counts, _ := s.git(countCtx, root, "rev-list", "--left-right", "--count", "HEAD...FETCH_HEAD")
-			countCancel()
-			parts := strings.Fields(counts)
-			if len(parts) == 2 {
-				localAhead, _ := strconv.Atoi(parts[0])
-				remoteAhead, _ := strconv.Atoi(parts[1])
-				pf.AheadCount = localAhead
-				if localAhead > 0 {
-					diffCtx, diffCancel := commandContext(ctx, 10*time.Second)
-					diffRaw, diffErr := s.gitRaw(diffCtx, root, "diff", "--name-status", "-z", "FETCH_HEAD...HEAD")
-					diffCancel()
-					if diffErr == nil {
-						pf.UnpushedChanges = parseCommittedChanges(diffRaw)
-					}
-				}
-				if remoteAhead > 0 {
-					pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "branch_behind", Message: "当前分支落后或已与远程分叉，请先同步代码"})
-				}
-			}
+	if checkRemote && len(pf.BlockingIssues) == 0 {
+		s.checkRemote(ctx, pf, checkTags)
+		for tag := range pf.remoteTags {
+			tagNames = append(tagNames, tag)
 		}
+		refreshSuggestions()
 	}
-	s.compareReleaseContent(ctx, pf, remoteTagRevisions)
+	if checkTags {
+		s.compareReleaseContent(ctx, pf, pf.remoteTags)
+	}
 	pf.CanRelease = len(pf.BlockingIssues) == 0
 	return pf, nil
 }
@@ -300,7 +284,20 @@ func (s *Service) ensureFrozenCommit(ctx context.Context, run *store.ReleaseRun)
 }
 
 func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*store.ReleaseRun, error) {
-	pf, err := s.Preflight(ctx, appID)
+	profile, err := s.store.GetReleaseProfile(appID)
+	if err != nil {
+		return nil, err
+	}
+	createTag := profile.CreateTag
+	if req.CreateTag != nil {
+		createTag = *req.CreateTag
+	}
+	pushRemote := true
+	if req.PushRemote != nil {
+		pushRemote = *req.PushRemote
+	}
+	checkConfig := createTag || len(req.SelectedTargets) > 0
+	pf, err := s.preflight(ctx, appID, pushRemote, createTag, checkConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -310,14 +307,6 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	}
 	if req.StatusFingerprint == "" || req.StatusFingerprint != pf.StatusFingerprint {
 		return nil, &Error{Code: "status_changed", Message: "仓库内容已变化，请重新检查后再发布"}
-	}
-	createTag := pf.Profile.CreateTag
-	if req.CreateTag != nil {
-		createTag = *req.CreateTag
-	}
-	pushRemote := true
-	if req.PushRemote != nil {
-		pushRemote = *req.PushRemote
 	}
 	if req.VersionMode == "" {
 		req.VersionMode = pf.Profile.VersionMode
@@ -336,9 +325,13 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	if requiresExternalActionsConfirmation(selectedTargets) && !req.ExternalActionsConfirmed {
 		return nil, &Error{Code: "external_actions_confirmation_required", Message: "上传或部署会影响外部环境，请明确确认后再继续"}
 	}
-	plan, err := s.freezeExecutionPlan(ctx, appID, pf.RepoRoot, selectedTargets)
-	if err != nil {
-		return nil, err
+	plan := &executionPlan{SchemaVersion: executionPlanSchemaVersion, ConfigPath: releaseconfig.ManifestPath,
+		VersionGroups: []planVersionGroup{}, Targets: []planTarget{}}
+	if checkConfig {
+		plan, err = s.freezeExecutionPlan(ctx, appID, pf.RepoRoot, selectedTargets)
+		if err != nil {
+			return nil, err
+		}
 	}
 	plan.RemoteURL = pf.RemoteURL
 	plan.PushRemote = &pushRemote
@@ -402,6 +395,10 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 				prefix = group.ID
 			}
 			version := requestedVersions[group.ID]
+			expectedVersion := version
+			if expectedVersion == "" && len(plan.VersionGroups) == 1 {
+				expectedVersion = req.TargetVersion
+			}
 			if req.VersionMode == "auto" {
 				if plan.NamespacedTags {
 					version = pf.SuggestedVersions[group.ID]
@@ -414,6 +411,9 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 				}
 			} else if version == "" && len(plan.VersionGroups) == 1 {
 				version = req.TargetVersion
+			}
+			if req.VersionMode == "auto" && expectedVersion != "" && expectedVersion != version {
+				return nil, versionPlanChanged(pf)
 			}
 			if plan.NamespacedTags {
 				_, latestVersion := latestTagForPrefix([]string{pf.LatestGroupTags[group.ID]}, prefix)
@@ -456,8 +456,12 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 		if requested, ok := requestedVersions["repository"]; ok {
 			version = requested
 		}
+		expectedVersion := version
 		if req.VersionMode == "auto" {
 			version = suggestReleaseVersion(versionReferences, pf.LatestTag)
+			if expectedVersion != "" && expectedVersion != version {
+				return nil, versionPlanChanged(pf)
+			}
 		}
 		if err := validateReleaseVersion(version, versionReferences, pf.LatestTag); err != nil {
 			return nil, err
@@ -472,11 +476,7 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 			if _, err := s.git(checkCtx, pf.RepoRoot, "rev-parse", "--verify", "refs/tags/"+version.TagName); err == nil {
 				return nil, &Error{Code: "tag_exists", Message: "本地已存在 tag：" + version.TagName}
 			}
-			remoteTag, err := s.git(checkCtx, pf.RepoRoot, "ls-remote", "--tags", pf.RemoteName, "refs/tags/"+version.TagName)
-			if err != nil {
-				return nil, &Error{Code: "remote_check_failed", Message: "无法检查远程 tag，请检查网络和 Git 凭据"}
-			}
-			if strings.TrimSpace(remoteTag) != "" {
+			if pushRemote && pf.remoteTags[version.TagName] != "" {
 				return nil, &Error{Code: "tag_exists", Message: "远程已存在 tag：" + version.TagName}
 			}
 		}
@@ -514,9 +514,13 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 		_ = s.store.UpdateReleaseRun(run.ID, "failed", "preparing", "", "target_state_failed", err.Error(), true)
 		return nil, err
 	}
-	profile := pf.Profile
+	profile = pf.Profile
 	go s.execute(run, pf, selected, message, profile.PreReleaseCommand)
 	return run, nil
+}
+
+func versionPlanChanged(pf *Preflight) *Error {
+	return &Error{Code: "version_plan_changed", Message: "版本建议已更新，请确认新版本后重试", Preflight: pf}
 }
 
 func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []string, message, checkCommand string) {

@@ -14,9 +14,12 @@ import (
 // arbitrary YAML or expressions: an uncertain workflow must leave the target
 // on its existing local runner.
 type tagWorkflow struct {
-	name        string
-	tagPatterns []string
-	signals     workflowSignals
+	name           string
+	tagPatterns    []string
+	signals        workflowSignals
+	versionSources []string
+	dockerfiles    []string
+	versionGroup   string
 }
 
 type workflowSignals struct {
@@ -42,6 +45,10 @@ func (b *discoveryBuilder) applyTagTriggeredWorkflowRunners() {
 	if len(workflows) == 0 {
 		return
 	}
+	b.bindContainerWorkflowVersions(workflows)
+	// Resolve inferred prefixes only after evidence-based container ownership;
+	// otherwise an unrelated first package keeps a stale "server" namespace.
+	ensureTagPrefixes(b.config)
 	groupPrefixes := make(map[string]string, len(b.config.VersionGroups))
 	for _, group := range b.config.VersionGroups {
 		prefix := strings.TrimSpace(group.TagPrefix)
@@ -65,6 +72,9 @@ func (b *discoveryBuilder) applyTagTriggeredWorkflowRunners() {
 			continue
 		}
 		for _, workflow := range workflows {
+			if workflow.signals.container && (workflow.versionGroup == "" || workflow.versionGroup != target.VersionGroup) {
+				continue
+			}
 			if !workflow.matchesPrefix(prefix) || !workflow.supports(*target, prefix) {
 				continue
 			}
@@ -127,6 +137,7 @@ func discoverTagWorkflows(root string) []tagWorkflow {
 		desktop := desktopBuildRE.MatchString(content)
 		out = append(out, tagWorkflow{
 			name: entry.Name(), tagPatterns: patterns,
+			versionSources: workflowNodeVersionSources(string(raw)), dockerfiles: workflowDockerfiles(string(raw)),
 			signals: workflowSignals{
 				container: container,
 				web:       webBuildRE.MatchString(content) && (uploadsArtifact || publishesWeb),

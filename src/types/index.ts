@@ -319,7 +319,7 @@ export interface ReleasePreflight {
   unpushedChanges: ReleaseCommittedFileChange[]
   blockingIssues: ReleaseIssue[]
   canRelease: boolean
-  /** 是否已经完成远程分支同步检查；发布前必须为 true。 */
+  /** 本次预检是否包含远端；本地操作无需远程检查。 */
   remoteChecked: boolean
   statusFingerprint: string
   profile: ReleaseProfile

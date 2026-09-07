@@ -2,7 +2,7 @@
 import { tr } from '@/i18n'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api } from '@/api/http'
+import { api, ApiError } from '@/api/http'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { releaseContentState } from '@/utils/releaseContent'
 import type {
@@ -50,6 +50,8 @@ const checkingRemote = ref(false)
 const savingProfile = ref(false)
 const publishing = ref(false)
 const error = ref('')
+const errorCode = ref('')
+const versionPlanNotice = ref('')
 const preflight = ref<ReleasePreflight | null>(null)
 const history = ref<ReleaseRun[]>([])
 const selected = ref<Record<string, boolean>>({})
@@ -86,8 +88,6 @@ const preflightStale = ref(false)
 const gitOnly = ref(false)
 const advancedOpen = ref(false)
 const confirmAction = ref<'retry' | 'regenerate-notes' | null>(null)
-const pushMenuOpen = ref(false)
-const publishControlRef = ref<HTMLElement | null>(null)
 const bodyRef = ref<HTMLElement | null>(null)
 
 const activeRun = ref<ReleaseRun | null>(null)
@@ -240,10 +240,18 @@ const newContentState = computed(() => {
 })
 const releaseContentHint = computed(() => newContentState.value === 'none'
   ? tr('暂无新内容，无需发布新版本')
-  : newContentState.value === 'unknown' && preflight.value?.remoteChecked && !checkingRemote.value
+  : newContentState.value === 'unknown' && preflight.value && !loading.value
     ? tr('无法确认版本后的改动，请刷新发布检查；旧版后端需先更新') : '')
+const blockingIssues = computed(() => (preflight.value?.blockingIssues || []).filter(issue => {
+  if (issue.code === 'remote_missing' && !pushRemote.value) return false
+  if (gitOnly.value && !createTag.value && ['release_config_invalid', 'version_file_invalid', 'version_file_ignored', 'diagnostics_version_file_untracked'].includes(issue.code)) return false
+  return true
+}))
+const localChecksPassed = computed(() => !!preflight.value && !blockingIssues.value.length
+  && (preflight.value.canRelease || preflight.value.blockingIssues.length > 0))
+const remoteMissing = computed(() => pushRemote.value && !!preflight.value && !preflight.value.remotes.includes(remoteName.value))
 const canPublish = computed(() => {
-  if (!preflight.value?.canRelease || !preflight.value.remoteChecked || checkingRemote.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
+  if (!localChecksPassed.value || remoteMissing.value || savingProfile.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
   if (createTag.value && (!versionValid.value || releaseNotesLoading.value || !releaseNotes.value.trim())) return false
   if (newContentState.value !== 'new') return false
   return targetSelectionValid.value
@@ -266,8 +274,10 @@ const automationPageUrl = computed(() => runAutomation.value?.url
   || activeRun.value?.automationUrl
   || githubActionsUrl(preflight.value?.remoteUrl || '', configuredAutomation.value?.workflow || ''))
 const automationHandedOff = computed(() => !!activeRun.value?.pushRemote
-  && !!activeRun.value?.createTag
-  && !!(runAutomation.value || activeRun.value.automationUrl || configuredAutomation.value))
+  && (runTargets.value.some((target) => ['triggered', 'remote_pending', 'handed_off'].includes(target.status))
+    || activeRun.value.selectedTargets.some((selection) => selection.publish
+      && configuredTargets.value.find((target) => target.id === selection.targetId)?.runner.type.trim().toLowerCase() === 'git-push')
+    || (!!activeRun.value.createTag && !!(runAutomation.value || activeRun.value.automationUrl || configuredAutomation.value))))
 const activeRunStatusLabel = computed(() => {
   if (activeRun.value?.status === 'failed') return tr("失败")
   if (activeRun.value?.status !== 'succeeded') return tr("进行中")
@@ -294,7 +304,7 @@ const cloudExecutionNotice = computed(() => {
       : tr("云端目标由 GitHub Actions 构建、打包并按项目配置发布；本地目标仍按配置执行。"),
   }
 })
-const completionTitle = computed(() => activeRun.value?.pushRemote
+const completionTitle = computed(() => automationHandedOff.value ? tr('代码已上传，云端结果待确认') : activeRun.value?.pushRemote
   ? tr("已提交到 {0}", [automationHandedOff.value ? 'GitHub' : remoteDestination.value])
   : tr("本地操作已完成"))
 const completionDescription = computed(() => {
@@ -490,7 +500,7 @@ const targetStageLabel = computed<Record<string, string>>(() => ({
   waiting: tr("等待执行"), checking: tr("检查"), check: tr("检查"), build: tr("构建"), package: tr("打包"),
   ready_to_publish: tr("等待上传或部署"), waiting_publish: tr("等待上传或部署"), publish: tr("上传"),
   deploy: tr("部署"), artifacts: tr("核对产物"), triggered: tr("已触发云端流程"), remote_pending: tr("等待云端处理"),
-  cloud_pending: tr("已交给 GitHub"), completed: tr("已完成"),
+  cloud_pending: tr('云端结果待确认'), completed: tr("已完成"),
 }))
 
 const summaryLines = computed(() => {
@@ -705,14 +715,14 @@ function preferenceKey() {
   return `launcher.release-preferences.${props.app.id}`
 }
 
-function readLocalPreferences(): { createTag?: boolean; versionMode?: ReleaseVersionMode } {
-  try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') as { createTag?: boolean; versionMode?: ReleaseVersionMode } }
+function readLocalPreferences(): { createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } {
+  try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') as { createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } }
   catch { return {} }
 }
 
 function rememberPreferences() {
   if (!profileReady.value) return
-  localStorage.setItem(preferenceKey(), JSON.stringify({ createTag: createTag.value, versionMode: versionMode.value }))
+  localStorage.setItem(preferenceKey(), JSON.stringify({ createTag: createTag.value, versionMode: versionMode.value, pushRemote: pushRemote.value }))
   if (preferenceTimer) clearTimeout(preferenceTimer)
   preferenceTimer = setTimeout(() => {
     const body = profileBody()
@@ -805,6 +815,7 @@ function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = tru
   preReleaseCommand.value = pf.profile?.preReleaseCommand || ''
   if (initial) {
     const remembered = readLocalPreferences()
+    pushRemote.value = typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true
     createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true)
     versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto')
   }
@@ -819,6 +830,8 @@ async function load(resumeFailedRun = true) {
   loading.value = true
   checkingRemote.value = false
   error.value = ''
+  errorCode.value = ''
+  versionPlanNotice.value = ''
   configNotice.value = ''
   try {
     const localPreflight = api.releasePreflight(props.app.id, false)
@@ -848,20 +861,6 @@ async function load(resumeFailedRun = true) {
 
     applyPreflight(await localPreflight, true)
     profileReady.value = true
-    if (!resumable && !disposed) {
-      checkingRemote.value = true
-      try {
-        const remotePreflight = await api.releasePreflight(props.app.id)
-        if (!disposed) applyPreflight(remotePreflight, false, false)
-      } catch (reason) {
-        if (!disposed) {
-          error.value = messageOf(reason)
-          preflightStale.value = true
-        }
-      } finally {
-        if (!disposed) checkingRemote.value = false
-      }
-    }
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -876,14 +875,13 @@ function profileBody() {
 
 async function saveAndRecheck() {
   savingProfile.value = true
-  checkingRemote.value = true
   error.value = ''
   preflightStale.value = true
   try {
     await api.saveReleaseProfile(props.app.id, profileBody())
-    applyPreflight(await api.releasePreflight(props.app.id))
+    applyPreflight(await api.releasePreflight(props.app.id, false))
   } catch (reason) { error.value = messageOf(reason) }
-  finally { savingProfile.value = false; checkingRemote.value = false }
+  finally { savingProfile.value = false }
 }
 
 function onVersionInput(groupID: string, value: string) {
@@ -986,7 +984,7 @@ async function saveReleaseConfig() {
     configBeforeEdit.value = null
     configNotice.value = tr("发布说明书已保存到 {0}。", [saved.configPath || '.launcher/release.yaml'])
     preflightStale.value = true
-    applyPreflight(await api.releasePreflight(props.app.id))
+    applyPreflight(await api.releasePreflight(props.app.id, false))
   } catch (reason) {
     const message = messageOf(reason)
     configValidationError.value = message
@@ -1036,8 +1034,11 @@ async function publish() {
   if (!pf || !canPublish.value) return
   publishing.value = true
   error.value = ''
+  errorCode.value = ''
+  versionPlanNotice.value = ''
   try {
     await api.saveReleaseProfile(props.app.id, profileBody())
+    checkingRemote.value = pushRemote.value
     rememberReleaseSession({ appId: props.app.id, submittedAt: Date.now() })
     const run = await api.createRelease(props.app.id, {
       targetVersion: createTag.value ? primaryTargetVersion.value : '',
@@ -1050,8 +1051,38 @@ async function publish() {
       externalActionsConfirmed: hasExternalAction.value,
     })
     if (!disposed) showRun(run)
-  } catch (reason) { error.value = messageOf(reason) }
-  finally { publishing.value = false }
+  } catch (reason) {
+    rememberReleaseSession({ appId: props.app.id })
+    if (disposed) return
+    if (reason instanceof ApiError && reason.code === 'version_plan_changed' && reason.preflight) {
+      applyPreflight(reason.preflight, false, false)
+      versionPlanNotice.value = tr('版本建议已更新。请核对版本与更新说明，再次确认后继续。')
+    } else {
+      error.value = releaseErrorMessage(reason)
+      errorCode.value = reason instanceof ApiError ? reason.code : ''
+      if (errorCode.value === 'status_changed') preflightStale.value = true
+    }
+    await nextTick()
+    bodyRef.value?.scrollTo({ top: 0 })
+  }
+  finally { publishing.value = false; checkingRemote.value = false }
+}
+
+function releaseErrorMessage(reason: unknown) {
+  const message = messageOf(reason)
+  if (!(reason instanceof ApiError)) return message
+  const titles: Record<string, string> = {
+    remote_timeout: tr('远程检查超时。请检查网络或代理，也可关闭“提交后上传”在本机完成。'),
+    remote_auth_failed: tr('远程仓库认证失败。请检查 Git 凭据和仓库访问权限。'),
+    remote_branch_missing: tr('远程仓库没有当前分支。请确认分支名称或先建立远程分支。'),
+    remote_network_failed: tr('无法连接远程仓库。请检查网络、代理或证书设置。'),
+    remote_check_cancelled: tr('远程检查已取消。'),
+    remote_check_failed: tr('远程检查失败。请查看下方 Git 返回的原因。'),
+  }
+  const title = titles[reason.code]
+  if (!title) return message
+  const detail = message.split('\n').slice(1).join('\n').trim()
+  return detail ? `${title}\n${detail}` : title
 }
 
 function showRun(run: ReleaseRun) {
@@ -1130,11 +1161,10 @@ function startNew() {
   void load(false)
 }
 
-function closePushMenuOnOutsideClick(event: PointerEvent) {
-  if (pushMenuOpen.value && event.target instanceof Node && !publishControlRef.value?.contains(event.target)) pushMenuOpen.value = false
-}
-
-watch([createTag, versionMode], rememberPreferences)
+watch([createTag, versionMode, pushRemote], rememberPreferences)
+watch(pushRemote, () => {
+  if (errorCode.value.startsWith('remote_') || errorCode.value === 'fetch_failed') { error.value = ''; errorCode.value = '' }
+})
 watch([() => activeRun.value?.id, () => activeRun.value?.status], async () => {
   await nextTick()
   bodyRef.value?.scrollTo({ top: 0 })
@@ -1153,12 +1183,10 @@ watch(plannedTagNames, (tags) => {
 })
 onMounted(() => {
   disposed = false
-  document.addEventListener('pointerdown', closePushMenuOnOutsideClick)
   void load()
 })
 onBeforeUnmount(() => {
   disposed = true
-  document.removeEventListener('pointerdown', closePushMenuOnOutsideClick)
   if (pollTimer) clearTimeout(pollTimer)
   if (preferenceTimer) clearTimeout(preferenceTimer)
   if (releaseNotesTimer) clearTimeout(releaseNotesTimer)
@@ -1176,14 +1204,15 @@ onBeforeUnmount(() => {
 
       <div ref="bodyRef" class="m-body" :inert="publishing">
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
-        <div v-if="error" class="alert error">{{ error }}</div>
+        <div v-if="error" class="alert error" role="alert">{{ error }}</div>
+        <div v-if="versionPlanNotice" class="alert warn" role="status">{{ versionPlanNotice }}</div>
         <div v-if="preflightStale" class="alert warn">{{ tr("配置或 Git 已变化，请重新检查。") }}<button :disabled="savingProfile" @click="saveAndRecheck">{{ tr("重新检查") }}</button></div>
         <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
 
         <template v-if="activeRun">
           <section class="progress-block">
-            <section v-if="activeRun.status === 'succeeded'" class="completion-banner" role="status" aria-live="polite">
-              <span class="completion-icon" aria-hidden="true">✓</span>
+            <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff }" role="status" aria-live="polite">
+              <span class="completion-icon" aria-hidden="true">{{ automationHandedOff ? '↑' : '✓' }}</span>
               <h3>{{ completionTitle }}</h3>
               <p>{{ completionDescription }}</p>
               <template v-if="automationHandedOff">
@@ -1205,14 +1234,15 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else-if="(preflight || releaseConfig) && !loading">
-          <section v-if="preflight" class="repo-glance" :class="{ problem: preflight.remoteChecked && !preflight.canRelease, checking: !preflight.remoteChecked }">
+          <section v-if="preflight" class="repo-glance" :class="{ problem: !localChecksPassed }">
             <span class="ready-dot"></span>
             <strong>{{ preflight.branch || tr("未绑定分支") }}</strong>
-            <span>{{ preflight.latestTag ? tr("最新 Tag：{0}", [preflight.latestTag]) : tr("暂无 Tag") }}</span>
-            <span class="repo-glance-status" :title="!preflight.remoteChecked ? tr('面板可以先操作；发布按钮会在远程分支检查完成后启用') : preflight.canRelease ? tr('分支已同步；未发现冲突、进行中的 Git 操作或暂存文件') : tr('请按下方提示处理仓库问题')">{{ !preflight.remoteChecked ? tr("正在检查远程分支…") : preflight.canRelease ? tr("仓库状态正常") : tr("仓库需要处理") }}</span>
+            <span>{{ preflight.latestTag ? (preflight.remoteChecked ? tr("最新 Tag：{0}", [preflight.latestTag]) : tr("本地 Tag：{0}", [preflight.latestTag])) : tr("暂无 Tag") }}</span>
+            <span class="repo-glance-status" :title="localChecksPassed ? tr('已检查本地 Git 状态；需要上传时，将在确认后检查远端。') : tr('请按下方提示处理仓库问题')">{{ localChecksPassed ? tr("本地检查通过") : tr("本地仓库需要处理") }}</span>
           </section>
           <section v-else class="repo-glance checking"><span class="ready-dot"></span><strong>{{ tr("正在读取本地仓库…") }}</strong><span class="repo-glance-status">{{ tr("构建端可以先选择") }}</span></section>
-          <section v-if="preflight?.blockingIssues.length" class="issues"><div v-for="issue in preflight.blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
+          <section v-if="blockingIssues.length" class="issues"><div v-for="issue in blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
+          <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
 
           <section class="platform-section">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
@@ -1359,7 +1389,7 @@ onBeforeUnmount(() => {
 
           <section v-if="createTag" class="release-notes">
             <div class="release-notes-head">
-              <h3>{{ tr("更新说明（将显示在 GitHub）") }}</h3>
+              <h3>{{ pushRemote ? tr("更新说明（将显示在 GitHub）") : tr('更新说明') }}</h3>
               <button type="button" :disabled="releaseNotesLoading" @click="generateReleaseNotesDraft(true)">{{ releaseNotesLoading ? tr("生成中…") : tr("重新生成") }}</button>
             </div>
             <textarea
@@ -1402,22 +1432,16 @@ onBeforeUnmount(() => {
       <footer v-if="preflight && !activeRun" class="m-foot" :inert="publishing">
         <span v-if="releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
-        <div ref="publishControlRef" class="publish-control">
-          <div class="publish-button-group" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-            <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ checkingRemote ? tr("正在检查 Git…") : publishing ? tr("正在创建…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : tr("确认提交并执行") }}</button>
-            <button type="button" class="publish-menu-trigger" :class="{ open: pushMenuOpen }" :aria-label="tr('发布选项')" :aria-expanded="pushMenuOpen" aria-haspopup="menu" @click="pushMenuOpen = !pushMenuOpen">▾</button>
-          </div>
-          <div v-if="pushMenuOpen" class="publish-menu" role="menu">
-            <label class="publish-menu-option">
-              <input v-model="pushRemote" type="checkbox" @change="pushMenuOpen = false" />
-              <span class="publish-menu-check" aria-hidden="true">{{ pushRemote ? '✓' : '' }}</span>
-              <span>{{ tr("上传") }} {{ remoteDestination }}</span>
-            </label>
-          </div>
+        <div class="publish-control">
+          <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
+            <input v-model="pushRemote" type="checkbox" :disabled="publishing" />
+            <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('确认后检查远端并上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
+          </label>
+          <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ checkingRemote ? tr("正在检查远端…") : publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
       </footer>
       <datalist id="target-kinds"><option value="desktop" /><option value="web" /><option value="android" /><option value="server" /><option value="custom" /></datalist><datalist id="runner-types"><option value="local" /><option value="git-push" /></datalist><datalist id="version-formats"><option value="json" /><option value="npm-lock" /><option value="cargo" /><option value="cargo-lock" /><option value="toml" /><option value="gradle" /></datalist>
-      <div v-if="publishing" class="submitting-lock" role="status"><div class="submitting-message"><span class="submitting-spinner"></span><strong>{{ tr("正在创建发布任务…") }}</strong><p v-if="cloudExecutionNotice">{{ cloudExecutionNotice.text }}</p></div></div>
+      <div v-if="publishing" class="submitting-lock" role="status"><div class="submitting-message"><span class="submitting-spinner"></span><strong>{{ checkingRemote ? tr('正在检查远端并准备发布…') : tr('正在准备本地操作…') }}</strong><p v-if="cloudExecutionNotice">{{ cloudExecutionNotice.text }}</p></div></div>
     </div>
     <div v-if="confirmAction" class="action-confirm-overlay" role="dialog" aria-modal="true" :aria-label="confirmDialogTitle" @click.self="confirmAction = null">
       <section class="action-confirm">
@@ -1430,6 +1454,11 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.alert.error { white-space: pre-line; overflow-wrap: anywhere; }
+.completion-banner.pending { border-color: color-mix(in srgb, var(--amber) 35%, transparent); background: color-mix(in srgb, var(--amber) 5%, var(--bg-elev)); }
+.completion-banner.pending .completion-icon { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.completion-banner.pending h3 { color: var(--text); }
+.completion-banner.pending .completion-next { border-color: color-mix(in srgb, var(--amber) 20%, transparent); }
 .m-foot { flex-wrap: wrap; align-items: center; }
 .release-content-hint { margin-right: auto; flex: 1 1 180px; font-size: 12px; color: var(--text-dim); }
 .overlay { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.58); display: flex; align-items: center; justify-content: center; padding: 20px; }.modal { width: min(920px,100%); max-height: 94vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }.m-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border); }.m-head h2 { margin: 0; font-size: 17px; }.m-body { padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }.m-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }.state,.muted { color: var(--text-faint); font-size: 12px; }.alert { padding: 9px 11px; border-radius: 7px; font-size: 12px; line-height: 1.5; }.alert.error { color: var(--red); background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.3); }.alert.warn { color: var(--amber); background: rgba(251,191,36,.08); }.alert.info { color: var(--accent); background: rgba(79,140,255,.08); border: 1px solid rgba(79,140,255,.2); }
@@ -1445,11 +1474,11 @@ onBeforeUnmount(() => {
 .tag-switch-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }.tag-switch-row h3 { margin-bottom: 4px; }.tag-switch-row p { margin: 0; color: var(--text-faint); font-size: 12px; }.switch { position: relative; display: inline-flex; flex-shrink: 0; }.switch input { position: absolute; opacity: 0; }.switch span { width: 42px; height: 23px; border-radius: 20px; background: var(--border); transition: .15s; }.switch span::after { content: ''; display: block; width: 17px; height: 17px; margin: 3px; border-radius: 50%; background: #fff; transition: .15s; }.switch input:checked + span { background: var(--accent); }.switch input:checked + span::after { transform: translateX(19px); }.strategy-line,.current-versions { color: var(--text-dim); font-size: 12px; margin: 10px 0 9px; }.current-versions { display: flex; flex-wrap: wrap; gap: 7px; }.current-versions code { padding: 2px 5px; background: var(--bg); border-radius: 4px; }.mode-picker { display: flex; gap: 8px; margin: 10px 0; }.mode-picker label { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-dim); font-size: 12px; }.mode-picker label.active { border-color: var(--accent); background: rgba(79,140,255,.08); }.mode-picker small { color: var(--text-faint); }.no-tag-note { margin-top: 10px; padding: 10px; border-radius: 8px; color: var(--text-dim); background: var(--bg); font-size: 12px; }.invalid { border-color: var(--red)!important; }.field-error { margin-top: 5px; color: var(--red); font-size: 11px; }
 .run-targets { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; }.run-target { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: 8px; padding: 7px 9px; border-radius: 6px; background: var(--bg); font-size: 11px; }.run-target span { color: var(--text-faint); }.run-target em { font-style: normal; color: var(--text-dim); }.run-target em.succeeded { color: var(--green); }.run-target em.triggered,.run-target em.remote_pending,.run-target em.handed_off { color: var(--accent); }.run-target em.failed { color: var(--red); }.artifacts { margin: 9px 0; color: var(--text-dim); font-size: 11px; }.artifact-row { display: grid; grid-template-columns: minmax(0,1fr) auto 90px; gap: 8px; padding: 5px 0; }.artifact-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action-confirm-overlay { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.68); }.action-confirm { width: min(430px,100%); padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elev); box-shadow: var(--shadow); }.action-confirm h3 { margin: 0 0 9px; color: var(--text); font-size: 16px; }.action-confirm p { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.6; }.action-confirm-buttons { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
-.publish-control { position: relative; display: inline-flex; }.publish-button-group { display: inline-flex; overflow: hidden; border-radius: 7px; box-shadow: 0 0 0 1px rgba(79,140,255,.38); }.publish-submit { border-radius: 7px 0 0 7px; }.publish-menu-trigger { width: 34px; padding: 0; border: 0; border-left: 1px solid rgba(255,255,255,.22); border-radius: 0 7px 7px 0; color: rgba(255,255,255,.72); background: var(--accent); font-size: 12px; }.publish-menu-trigger:hover:not(:disabled),.publish-menu-trigger.open { color: #fff; background: var(--accent-hover); }.publish-button-group.required { box-shadow: 0 0 0 1px rgba(251,191,36,.72); }.publish-button-group.required .publish-menu-trigger { color: var(--amber); background: rgba(251,191,36,.14); }.publish-menu { position: absolute; z-index: 4; right: 0; bottom: calc(100% + 8px); min-width: 176px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elev-2); box-shadow: var(--shadow); }.publish-menu-option { display: flex; align-items: center; gap: 9px; padding: 9px 10px; cursor: pointer; border-radius: 6px; color: var(--text); font-size: 12px; white-space: nowrap; user-select: none; }.publish-menu-option:hover { background: rgba(79,140,255,.1); }.publish-menu-option input { position: absolute; opacity: 0; pointer-events: none; }.publish-menu-option:has(input:focus-visible) { outline: 2px solid var(--accent); }.publish-menu-check { display: grid; width: 16px; height: 16px; place-items: center; border: 1px solid var(--text-faint); border-radius: 4px; color: var(--accent); font-size: 11px; line-height: 1; }.publish-menu-option input:checked + .publish-menu-check { border-color: var(--accent); background: rgba(79,140,255,.13); }
+.publish-control { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; max-width: 100%; }.push-choice { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12px; cursor: pointer; }.push-choice input { margin: 0; accent-color: var(--accent); }.push-choice small { display: block; margin-top: 3px; color: var(--text-faint); font-size: 10px; line-height: 1.4; }.push-choice.required { color: var(--amber); }.publish-submit { min-height: 36px; border-radius: 7px; }
 .modal { position: relative; }.submitting-lock { position: absolute; inset: 0; z-index: 115; display: flex; align-items: center; justify-content: center; gap: 10px; border-radius: inherit; color: var(--text); background: rgba(11,14,20,.78); backdrop-filter: blur(2px); }.submitting-spinner { width: 18px; height: 18px; border: 2px solid rgba(79,140,255,.25); border-top-color: var(--accent); border-radius: 50%; animation: submitting-spin .7s linear infinite; } @keyframes submitting-spin { to { transform: rotate(360deg); } }
 .file-row { display: grid; grid-template-columns: auto 54px minmax(0,1fr); align-items: center; gap: 8px; min-height: 32px; color: var(--text-dim); font-size: 12px; }.file-row + .file-row { border-top: 1px solid rgba(148,163,184,.08); }.file-row.unselected { opacity: .62; }.file-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.file-status { color: var(--amber); font-size: 11px; }.file-status.added { color: var(--accent); }.summary-card { padding: 13px; border: 1px solid rgba(79,140,255,.35); border-radius: 10px; background: rgba(79,140,255,.06); }.summary-card p { margin: 0 0 6px; color: var(--text-dim); font-size: 12px; }.summary-card ul { margin: 0 0 10px; padding-left: 20px; color: var(--text); font-size: 12px; line-height: 1.8; }.history-row { display: grid; grid-template-columns: 100px 1fr auto; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }.history-row span { color: var(--text-faint); }.history-row .succeeded,.status.succeeded { color: var(--green); }.history-row .failed,.status.failed { color: var(--red); }.progress-title { display: flex; align-items: center; justify-content: space-between; }.status { font-size: 12px; }.current-stage { margin: 8px 0; color: var(--accent); font-size: 13px; }.log-box { min-height: 180px; max-height: 320px; overflow: auto; padding: 10px; border-radius: 8px; background: #070b11; color: #cbd5e1; font: 12px/1.55 Consolas,monospace; white-space: pre-wrap; }.log-line.error { color: #fca5a5; }.log-line.stderr { color: #fbbf24; }.button-row { display: flex; gap: 8px; margin-top: 12px; }
 @media (max-width: 720px) { .overlay { padding: 8px; }.modal { max-height: 97vh; }.m-head > div { min-width: 0; }.m-head h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.m-body { padding: 14px; }.repo-glance { flex-wrap: wrap; }.repo-glance-status { margin-left: 0; width: 100%; padding-left: 18px; }.section-head,.setup-callout { flex-direction: column; align-items: stretch; }.platform-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.form-grid,.form-grid.three,.target-list { grid-template-columns: 1fr; }.version-row { grid-template-columns: minmax(0,1fr) minmax(100px,140px); }.version-row code { grid-column: 1 / -1; }.version-file-row { grid-template-columns: 1fr; }.file-actions { align-items: stretch; }.file-row { grid-template-columns: auto 48px minmax(0,1fr); }.os-row,.mode-picker { flex-wrap: wrap; }.mode-picker label { flex: 1 1 160px; }.run-target { grid-template-columns: minmax(0,1fr) auto; }.run-target span { grid-column: 1 / -1; grid-row: 2; }.artifact-row { grid-template-columns: minmax(0,1fr) auto; }.artifact-row code:last-child { grid-column: 1 / -1; }.release-notes-head,.release-notes-meta,.automation-result { align-items: flex-start; flex-direction: column; }.automation-result a { align-self: flex-start; } }
-@media (max-width: 440px) { .overlay { padding: 0; }.modal { width: 100%; max-height: 100vh; border-radius: 0; }.m-head,.m-foot { padding-left: 14px; padding-right: 14px; }.platform-grid { grid-template-columns: 1fr; }.platform-card { min-height: 68px; }.m-foot > button { flex: 0 0 auto; }.publish-control,.publish-button-group { flex: 1; min-width: 0; }.publish-submit { flex: 1; min-width: 0; }.history-row { grid-template-columns: 85px minmax(0,1fr) auto; } }
+@media (max-width: 440px) { .overlay { padding: 0; }.modal { width: 100%; max-height: 100vh; border-radius: 0; }.m-head,.m-foot { padding-left: 14px; padding-right: 14px; }.platform-grid { grid-template-columns: 1fr; }.platform-card { min-height: 68px; }.m-foot > button { flex: 0 0 auto; }.publish-control { flex: 1 1 100%; min-width: 0; justify-content: space-between; }.publish-submit { flex: 1; min-width: 0; }.history-row { grid-template-columns: 85px minmax(0,1fr) auto; } }
 .completion-banner { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 24px; padding: 30px 24px; border: 1px solid rgba(52,211,153,.5); border-radius: 14px; background: linear-gradient(145deg,rgba(52,211,153,.13),rgba(52,211,153,.035)); text-align: center; }
 .completion-icon { display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(52,211,153,.16); color: var(--green); font-size: 36px; font-weight: 700; line-height: 1; }
 .completion-banner h3 { margin: 0; color: var(--green); font-size: 28px; line-height: 1.3; }

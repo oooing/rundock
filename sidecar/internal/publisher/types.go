@@ -10,8 +10,9 @@ const (
 )
 
 type Error struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string     `json:"code"`
+	Message   string     `json:"message"`
+	Preflight *Preflight `json:"preflight,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -34,6 +35,7 @@ type CommittedFileChange struct {
 }
 
 type Preflight struct {
+	remoteTags        map[string]string
 	RepoRoot          string                `json:"repoRoot"`
 	Branch            string                `json:"branch"`
 	HeadSHA           string                `json:"headSha"`

@@ -223,18 +223,54 @@ async function readCloseBehavior(): Promise<string> {
   }
 }
 
+// 读取全部项目的最新状态，不能使用当前分组的运行数或尚未加载的列表。
+async function hasActiveProjects(): Promise<boolean> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 2000)
+  try {
+    const latest = await api.listApps(controller.signal)
+    return apps.apps.some(app => app.restarting) || latest.some(app =>
+      !['stopped', 'failed'].includes(app.status) || app.pid > 0 || app.restarting,
+    )
+  } catch {
+    // 状态无法确认时保留选择，避免把连接失败误当作没有项目。
+    return true
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+// 原生事件和 DOM 兜底可能同时到达，整个判断过程只执行一次。
+let checkingExit = false
+async function requestExit(source: 'window' | 'quit') {
+  if (checkingExit || isQuitting.value || showQuitConfirm.value) return
+  checkingExit = true
+  try {
+    if (source === 'window' && await readCloseBehavior() === 'minimize') {
+      await hideMainWindow()
+      return
+    }
+    if (!await hasActiveProjects()) {
+      await quitWithNotice(false)
+      return
+    }
+    if (source === 'window') {
+      showCloseDialog.value = true
+    } else {
+      showCloseDialog.value = false
+      await showMainWindow()
+      await nextTick()
+      showQuitConfirm.value = true
+    }
+  } finally {
+    checkingExit = false
+  }
+}
+
 // 点 X 关闭时（Rust prevent_close + emit "close-requested"）。
 async function onCloseRequested() {
   if (!isTauriShell) return
-  if (isQuitting.value || showQuitConfirm.value) return
-  const behavior = await readCloseBehavior()
-  if (behavior === 'minimize') {
-    // 记住了最小化，直接隐藏
-    await hideMainWindow()
-  } else {
-    // 每次询问：弹选择框
-    showCloseDialog.value = true
-  }
+  await requestExit('window')
 }
 
 // CloseDialog：选「最小化到托盘」—— 隐藏窗口并记住选择
@@ -248,19 +284,14 @@ async function onCloseMinimize() {
   }
 }
 
-// 所有完全退出入口都询问如何处理项目，不记忆破坏性选择。
+// 没有活动项目时直接退出；否则询问如何处理项目。
 async function onCloseQuit() {
-  showCloseDialog.value = false
-  showQuitConfirm.value = true
+  await requestExit('quit')
 }
 
-// 托盘右键「退出」菜单（Rust emit "tray-quit-requested"）—— 弹二次确认
+// 托盘右键「退出」菜单（Rust emit "tray-quit-requested"）。
 async function onTrayQuitRequested() {
-  if (isQuitting.value) return
-  showCloseDialog.value = false
-  await showMainWindow()
-  await nextTick()
-  showQuitConfirm.value = true
+  await requestExit('quit')
 }
 
 async function onQuitConfirm(keepProjects: boolean) {

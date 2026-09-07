@@ -100,7 +100,7 @@ export const api = {
     }),
 
   // Apps
-  listApps: () => req<AppView[]>('/api/apps'),
+  listApps: (signal?: AbortSignal) => req<AppView[]>('/api/apps', { signal }),
   getApp: (id: string) => req<AppView>(`/api/apps/${id}`),
   startupIssue: (id: string) => req<StartupIssue | null>(`/api/apps/${id}/startup-issue`),
   recoverPorts: (id: string, fingerprint: string) => req<StartResponse>(`/api/apps/${id}/recover-ports`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
@@ -132,6 +132,10 @@ export const api = {
   saveReleaseProfile: (id: string, body: Omit<ReleaseProfile, 'appId' | 'updatedAt'>) =>
     req<ReleaseProfile>(`/api/apps/${id}/release-profile`, { method: 'PATCH', body: JSON.stringify(body) }),
   getReleaseConfig: (id: string) => req<ReleaseConfig>(`/api/apps/${id}/release-config`),
+  getReleaseConfigFile: (id: string) =>
+    req<{ path: string; content: string; exists: boolean; revision: string; example: string }>(`/api/apps/${id}/release-config/file`),
+  saveReleaseConfigFile: (id: string, content: string, revision: string) =>
+    req<ReleaseConfig>(`/api/apps/${id}/release-config/file`, { method: 'PUT', body: JSON.stringify({ content, revision }) }),
   scanReleaseConfig: (id: string) =>
     req<ReleaseConfig>(`/api/apps/${id}/release-config/scan`, { method: 'POST' }),
   saveReleaseConfig: (id: string, body: ReleaseConfig) =>

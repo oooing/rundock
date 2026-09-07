@@ -10,6 +10,8 @@ func writeReleaseConfigError(w http.ResponseWriter, err error) {
 	if configErr, ok := err.(*releaseconfig.Error); ok {
 		status := http.StatusBadRequest
 		switch configErr.Code {
+		case "config_conflict":
+			status = http.StatusConflict
 		case "app_not_found":
 			status = http.StatusNotFound
 		case "config_read_failed", "config_write_failed":
@@ -19,6 +21,40 @@ func writeReleaseConfigError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+// GET shows the current file (or a draft) with the annotated reference.
+// PUT only saves validated text to the project's fixed manifest path.
+func (s *Server) handleReleaseConfigFile(w http.ResponseWriter, r *http.Request, appID string) {
+	switch r.Method {
+	case http.MethodGet:
+		file, err := s.ReleaseConfig.GetFile(r.Context(), appID)
+		if err != nil {
+			writeReleaseConfigError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			*releaseconfig.ConfigFile
+			Example string `json:"example"`
+		}{file, releaseconfig.ExampleFile})
+	case http.MethodPut:
+		var body struct {
+			Content  string `json:"content"`
+			Revision string `json:"revision"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+			return
+		}
+		cfg, err := s.ReleaseConfig.PutFile(r.Context(), appID, body.Content, body.Revision)
+		if err != nil {
+			writeReleaseConfigError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, cfg)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 // GET /api/apps/{id}/release-config returns the saved project manifest, or a

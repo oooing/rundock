@@ -170,6 +170,8 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleReleaseConfig(w, r, id, false)
 	case "release-config/scan":
 		s.handleReleaseConfig(w, r, id, true)
+	case "release-config/file":
+		s.handleReleaseConfigFile(w, r, id)
 	case "releases":
 		s.handleAppReleases(w, r, id)
 	default:

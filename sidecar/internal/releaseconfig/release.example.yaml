@@ -1,0 +1,114 @@
+# RunDock 发布配置样例：保存位置为项目根目录下的 .launcher/release.yaml。
+# 使用 JSON 对象格式；说明写在独立的 # 注释行。不要使用行尾注释或尾逗号。
+# 这是可解析的示例，需把版本文件、分支和工作流名称改成项目实际值。
+# 本文件描述“如何发布”；高级设置中的 GitHub / 本地构建、远程仓库、
+# 本次版本号与是否上传等选择，由 RunDock 为每个项目另行记忆。
+# 云端构建由 .github/workflows/*.yml 执行；本配置不会自动创建工作流。
+{
+  # 配置格式版本，固定为 1。
+  "schemaVersion": 1,
+  # 版本组：同组的多个发布目标共享版本号，不同组独立递增。
+  "versionGroups": [
+    {
+      # 版本组唯一标识，供 targets 中的 versionGroup 引用。
+      "id": "web",
+      # 在发布页面显示的名称。
+      "name": "Web 前端",
+      # Tag 前缀，例如 web/v1.0.1；必须与 GitHub 工作流的 tags 规则匹配。
+      "tagPrefix": "web",
+      # 没有可读版本文件时的参考版本；存在版本文件时以文件实际值为准。
+      "currentVersion": "1.0.0",
+      # 发布时需要同步更新版本号的文件，可添加 package-lock.json 等条目。
+      "versionFiles": [
+        {
+          # 相对于项目根目录的路径，不可使用绝对路径或 ../。
+          "path": "package.json",
+          # 支持 json、npm-lock、cargo、cargo-lock、toml、gradle。
+          "format": "json",
+          # JSON 版本字段位置，支持 /version 或 /package/version；其他格式可省略。
+          "jsonPointer": "/version"
+        }
+      ]
+    }
+  ],
+  # 发布目标：本例为同一个 Web 项目提供云端和本地两种执行方式。
+  "targets": [
+    {
+      # 每个目标的唯一标识，不可重复。
+      "id": "web-cloud",
+      # 用户可见名称。
+      "name": "Web 云端构建",
+      # 平台类别，例如 web、desktop、android、server。
+      "kind": "web",
+      # 关联上方版本组的 id。
+      "versionGroup": "web",
+      # 命令工作目录，相对于项目根目录；. 表示根目录。
+      "workingDir": ".",
+      # 执行器配置。
+      "runner": {
+        # git-push 表示上传代码和 Tag 后交给 GitHub；local 表示在本机执行命令。
+        "type": "git-push",
+        # 本地执行器可运行的系统：windows、linux、darwin；空数组不限制。
+        "os": []
+      },
+      # 是否允许选择这个发布目标。
+      "enabled": true,
+      # 执行步骤；云端目标只用 tag-push 标记，不在本机构建。
+      "steps": {
+        # 固定写 tag-push，表示推送 Tag 触发已有的 GitHub 工作流。
+        "publish": "tag-push"
+      },
+      # 本地生成文件的匹配路径；云端产物由工作流管理，此处留空。
+      "artifacts": []
+    },
+    {
+      # 第二个目标的唯一标识。
+      "id": "web-local",
+      # 本地构建的显示名称。
+      "name": "Web 本地构建",
+      # 同样属于 Web 平台。
+      "kind": "web",
+      # 与云端目标共用版本号。
+      "versionGroup": "web",
+      # 在项目根目录执行下方命令。
+      "workingDir": ".",
+      # 本机执行器。
+      "runner": {
+        # 只有选择本地构建时才执行此目标。
+        "type": "local",
+        # 空数组表示不限制操作系统。
+        "os": []
+      },
+      # 启用本地构建选项。
+      "enabled": true,
+      # 各项命令都需按项目修改；空字符串表示没有配置此步骤。
+      "steps": {
+        # 可选的本地发布前检查；配置后会先执行，失败会中止发布。
+        "check": "",
+        # 本地构建命令，示例要求 package.json 中存在 build 脚本。
+        "build": "npm run build",
+        # 可选打包命令，例如创建安装包或压缩包。
+        "package": "",
+        # 可选上传命令；留空不会上传本地构建产物。
+        "publish": "",
+        # 可选部署命令；留空不会执行部署。
+        "deploy": ""
+      },
+      # 相对于项目根目录的本地产物匹配路径，可填写多个。
+      "artifacts": ["dist/**/*"]
+    }
+  ],
+  # GitHub 自动化描述。真正的构建、打包、上传规则写在工作流中。
+  "automation": {
+    # 自动化平台，固定为 github-actions。
+    "provider": "github-actions",
+    # .github/workflows 目录里的实际文件名，用于定位工作流。
+    "workflow": "release.yml",
+    # 触发方式，固定为 tag；工作流需配置 on.push.tags，例如 web/v*。
+    "trigger": "tag",
+    # 云端发布使用的分支，请与仓库和工作流保持一致。
+    "releaseBranch": "main",
+    # 工作流是否创建 GitHub Release；该值只描述行为，不会自动增加发布步骤。
+    "publishesRelease": true
+  }
+}

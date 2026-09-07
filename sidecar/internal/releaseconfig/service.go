@@ -109,6 +109,11 @@ func (s *Service) Put(ctx context.Context, appID string, cfg *Config) (*Config, 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return writeManifest(root, manifest, raw)
+}
+
+// Caller serializes saves. A temporary file prevents partial configuration writes.
+func writeManifest(root string, manifest *Config, raw []byte) (*Config, error) {
 	dir := filepath.Join(root, ".launcher")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, &Error{Code: "config_write_failed", Message: "无法创建发布配置目录：" + err.Error()}
@@ -197,6 +202,15 @@ func resolveRoot(ctx context.Context, cwd string) (string, bool, error) {
 }
 
 func decode(raw []byte) (*Config, error) {
+	// Keep the existing JSON-compatible YAML format, with optional full-line
+	// YAML comments as used by the documented example. Preserve line numbers.
+	lines := bytes.Split(raw, []byte("\n"))
+	for i, line := range lines {
+		if bytes.HasPrefix(bytes.TrimSpace(line), []byte("#")) {
+			lines[i] = nil
+		}
+	}
+	raw = bytes.Join(lines, []byte("\n"))
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	cfg := &Config{}

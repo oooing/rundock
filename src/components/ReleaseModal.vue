@@ -3,6 +3,7 @@ import { tr } from '@/i18n'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/http'
+import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { releaseContentState } from '@/utils/releaseContent'
 import type {
@@ -81,6 +82,7 @@ const targetChoices = ref<Record<string, TargetChoice>>({})
 const configEndpointAvailable = ref(true)
 const configNotice = ref('')
 const configEditorOpen = ref(false)
+const configFileOpen = ref(false)
 const configScanning = ref(false)
 const configSaving = ref(false)
 const configValidationError = ref('')
@@ -96,6 +98,8 @@ const runTargets = ref<ReleaseTargetRun[]>([])
 const runArtifacts = ref<ReleaseArtifact[]>([])
 const runAutomation = ref<ReleaseAutomationStatus | null>(null)
 const retrying = ref(false)
+const openingAutomation = ref(false)
+const automationOpenError = ref('')
 const retryMetadataLoaded = ref(false)
 const retryConfirmationRequired = ref<boolean | undefined>()
 const retryConfirmationTargets = ref<string[]>([])
@@ -266,6 +270,7 @@ const localChecksPassed = computed(() => !!preflight.value && !blockingIssues.va
   && (preflight.value.canRelease || preflight.value.blockingIssues.length > 0))
 const remoteMissing = computed(() => pushRemote.value && !!preflight.value && !preflight.value.remotes.includes(remoteName.value))
 const canPublish = computed(() => {
+  if (configFileOpen.value || configSaving.value) return false
   if (!localChecksPassed.value || remoteMissing.value || savingProfile.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
   if (createTag.value && (!versionValid.value || releaseNotesLoading.value || (releaseNotesStale.value && !releaseNotesDirty.value) || !releaseNotes.value.trim())) return false
   if (newContentState.value !== 'new') return false
@@ -301,6 +306,20 @@ const remoteDestination = computed(() => /github\.com/i.test(preflight.value?.re
 const automationPageUrl = computed(() => runAutomation.value?.url
   || activeRun.value?.automationUrl
   || githubActionsUrl(preflight.value?.remoteUrl || '', configuredAutomation.value?.workflow || ''))
+
+async function openAutomationPage() {
+  const url = automationPageUrl.value
+  if (!url || openingAutomation.value) return
+  openingAutomation.value = true
+  automationOpenError.value = ''
+  try {
+    await api.openURL(props.app.id, url)
+  } catch (reason) {
+    automationOpenError.value = tr('未能打开浏览器：{0}', [messageOf(reason)])
+  } finally {
+    openingAutomation.value = false
+  }
+}
 const automationHandedOff = computed(() => !!activeRun.value?.pushRemote
   && (runTargets.value.some((target) => ['triggered', 'remote_pending', 'handed_off'].includes(target.status))
     || activeRun.value.selectedTargets.some((selection) => selection.publish
@@ -404,6 +423,8 @@ const productPlatforms = computed<ProductPlatform[]>(() => {
   }
   const cards: ProductPlatform[] = standardPlatforms.value.map((platform) => ({
     ...platform,
+    // Keep configured combined targets (e.g. Web + backend) visible by name.
+    name: grouped.get(platform.id)?.length === 1 ? grouped.get(platform.id)![0].name || platform.name : platform.name,
     targets: grouped.get(platform.id) || [],
     configured: !!grouped.get(platform.id)?.length,
   }))
@@ -411,9 +432,11 @@ const productPlatforms = computed<ProductPlatform[]>(() => {
     if (!id.startsWith('custom:')) continue
     const target = targets[0]
     const isDesktop = target?.kind.trim().toLowerCase() === 'desktop'
-    cards.push({ id, name: isDesktop ? tr("桌面端") : target?.name || tr("自定义目标"), icon: isDesktop ? '💻' : '🧩', description: tr("自定义发布目标"), targets, configured: true })
+    cards.push({ id, name: target?.name || (isDesktop ? tr("桌面端") : tr("自定义目标")), icon: isDesktop ? '💻' : '🧩', description: tr("自定义发布目标"), targets, configured: true })
   }
-  return cards
+  // Unconfigured placeholders are not selectable build targets. Keep configured
+  // but unavailable targets so their mode/environment explanation remains visible.
+  return cards.filter((platform) => platform.configured)
 })
 
 function phaseAllowed(phase: ExecutionPhase) {
@@ -1050,6 +1073,22 @@ function onAdvancedToggle(event: Event) {
   advancedOpen.value = (event.target as HTMLDetailsElement).open
 }
 
+async function onConfigFileSaved(config: ReleaseConfig) {
+  if (!configEndpointAvailable.value && config.targets.length) gitOnly.value = false
+  configEndpointAvailable.value = true
+  applyReleaseConfig(config)
+  configBeforeEdit.value = null
+  configNotice.value = ''
+  preflightStale.value = true
+  configSaving.value = true
+  try {
+    applyPreflight(await api.releasePreflight(props.app.id, false))
+    error.value = ''
+  } catch (reason) {
+    error.value = tr('配置已保存，但重新检查 Git 失败：{0}', [messageOf(reason)])
+  } finally { configSaving.value = false }
+}
+
 function newId(prefix: string, existing: string[]) {
   let index = existing.length + 1
   while (existing.includes(`${prefix}-${index}`)) index += 1
@@ -1274,6 +1313,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  if (activeRun.value?.status === 'succeeded') rememberReleaseSession({ appId: props.app.id })
   if (pollTimer) clearTimeout(pollTimer)
   if (preferenceTimer) {
     clearTimeout(preferenceTimer)
@@ -1295,6 +1335,7 @@ onBeforeUnmount(() => {
       <div ref="bodyRef" class="m-body" :inert="publishing">
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
         <div v-if="error" class="alert error" role="alert">{{ error }}</div>
+        <ReleaseConfigFileEditor v-if="!loading && !preflight && !activeRun" :app-id="app.id" @saved="onConfigFileSaved" @editing="configFileOpen = $event" />
         <div v-if="versionPlanNotice" class="alert warn" role="status">{{ versionPlanNotice }}</div>
         <div v-if="preflightStale" class="alert warn">{{ tr("配置或 Git 已变化，请重新检查。") }}<button :disabled="savingProfile" @click="saveAndRecheck">{{ tr("重新检查") }}</button></div>
         <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
@@ -1307,7 +1348,8 @@ onBeforeUnmount(() => {
               <p>{{ completionDescription }}</p>
               <template v-if="automationHandedOff">
                 <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span class="cloud-result-pending">{{ tr("云端结果尚未确认，请到 GitHub 查看最终发布结果。") }}</span></div>
-                <a v-if="automationPageUrl" class="actions-link" :href="automationPageUrl" target="_blank" rel="noreferrer">{{ tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></a>
+                <button v-if="automationPageUrl" type="button" class="actions-link" :disabled="openingAutomation" :aria-busy="openingAutomation" @click="openAutomationPage">{{ openingAutomation ? tr('正在打开浏览器…') : tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></button>
+                <p v-if="automationOpenError" class="field-error" role="alert">{{ automationOpenError }}</p>
               </template>
             </section>
             <div v-else-if="activeRun.status !== 'failed' && cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
@@ -1320,7 +1362,7 @@ onBeforeUnmount(() => {
             <details v-if="runFailureDetails" class="execution-details"><summary>{{ tr('查看技术详情') }}</summary><pre class="log-box">{{ runFailureDetails }}</pre></details>
             <div v-if="retryable && !customRetryConfirmation" class="alert info" role="note">{{ retryGuidance }}</div>
             <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
-            <div class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'succeeded' || activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
+            <div v-if="activeRun.status !== 'succeeded'" class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
             <p v-if="uploadPaused" class="muted">{{ tr('关闭后会保留本次记录，下次打开“发布”可以继续上传。') }}</p>
           </section>
         </template>
@@ -1336,14 +1378,6 @@ onBeforeUnmount(() => {
           <section v-if="blockingIssues.length" class="issues"><div v-for="issue in blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
           <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
 
-          <section class="block build-mode-section">
-            <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
-            <div class="build-mode-picker" role="group" :aria-label="tr('构建位置')">
-              <button type="button" :aria-pressed="buildMode === 'github'" :class="{ selected: buildMode === 'github' }" @click="changeBuildMode('github')"><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></button>
-              <button type="button" :aria-pressed="buildMode === 'local'" :class="{ selected: buildMode === 'local' }" @click="changeBuildMode('local')"><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，不上传或部署') }}</small></button>
-            </div>
-            <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地模式只执行检查、构建和打包，需要本机已安装项目依赖。') }}</p>
-          </section>
           <section class="platform-section">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
             <div class="platform-grid">
@@ -1375,9 +1409,8 @@ onBeforeUnmount(() => {
 
           <template v-if="preflight">
           <section class="block version-quick">
-            <div class="tag-switch-row"><div><h3>{{ tr("创建版本 Tag") }}</h3><p>{{ tr("每个版本组独立递增；同批 Tag 指向同一个提交。") }}</p></div><label class="switch"><input v-model="createTag" type="checkbox" @change="onCreateTagChange" /><span></span></label></div>
+            <h3>{{ tr("发布版本") }}</h3>
             <template v-if="createTag">
-              <div class="mode-picker"><label :class="{ active: versionMode === 'auto' }"><input v-model="versionMode" type="radio" value="auto" @change="onVersionModeChange" />{{ tr("自动递增") }}</label><label :class="{ active: versionMode === 'manual' }"><input v-model="versionMode" type="radio" value="manual" @change="onVersionModeChange" />{{ tr("手动设置") }}</label></div>
               <div class="version-list">
                 <div v-for="version in plannedVersions" :key="version.versionGroupId" class="version-row">
                   <span class="version-name"><strong>{{ version.versionGroupName }}</strong><small>{{ tr("当前") }} {{ version.currentVersion }}</small></span>
@@ -1392,8 +1425,33 @@ onBeforeUnmount(() => {
           </section>
 
           <details class="advanced-settings" :open="advancedOpen" @toggle="onAdvancedToggle">
-            <summary><span>{{ tr("高级设置") }}</span><small>{{ tr("Git、命令和发布配置") }}</small></summary>
+            <summary><span>{{ tr("高级设置") }}</span><small>{{ gitOnly ? tr("仅提交代码") : buildMode === 'github' ? tr("GitHub 云端构建") : tr("本地构建") }}</small></summary>
             <div class="advanced-body">
+          <section class="block build-mode-section">
+            <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
+            <div class="build-mode-picker" role="group" :aria-label="tr('构建位置')">
+              <button type="button" :aria-pressed="buildMode === 'github'" :class="{ selected: buildMode === 'github' }" @click="changeBuildMode('github')"><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></button>
+              <button type="button" :aria-pressed="buildMode === 'local'" :class="{ selected: buildMode === 'local' }" @click="changeBuildMode('local')"><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，不上传或部署') }}</small></button>
+            </div>
+            <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地模式只执行检查、构建和打包，需要本机已安装项目依赖。') }}</p>
+          </section>
+
+          <section class="block release-rules">
+            <div class="tag-switch-row"><div><h3>{{ tr("创建版本 Tag") }}</h3><p>{{ tr("每个版本组独立递增；同批 Tag 指向同一个提交。") }}</p></div><label class="switch"><input :aria-label="tr('创建版本 Tag')" v-model="createTag" type="checkbox" @change="onCreateTagChange" /><span></span></label></div>
+            <template v-if="createTag">
+              <div class="mode-picker"><label :class="{ active: versionMode === 'auto' }"><input v-model="versionMode" type="radio" value="auto" @change="onVersionModeChange" />{{ tr("自动递增") }}</label><label :class="{ active: versionMode === 'manual' }"><input v-model="versionMode" type="radio" value="manual" @change="onVersionModeChange" />{{ tr("手动设置") }}</label></div>
+            </template>
+          </section>
+          <section class="block upload-settings">
+            <h3>{{ tr('提交与上传') }}</h3>
+            <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
+              <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" />
+              <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
+            </label>
+            <div class="button-row">
+              <button v-if="pushRemote || !gitOnly || createTag" :disabled="publishing" @click="prepareLocalCommit">{{ tr('仅提交到本机') }}</button>
+            </div>
+          </section>
           <section class="repo-card">
             <div class="kv"><span>{{ tr("代码仓库") }}</span><code>{{ preflight.repoRoot }}</code></div><div class="kv"><span>{{ tr("当前分支") }}</span><code>{{ preflight.branch || tr("未绑定分支") }}</code></div>
             <div class="kv"><span>{{ tr("远程地址") }}</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>{{ tr("仓库通用 Tag（不含平台 Tag）") }}</span><code>{{ preflight.latestTag || tr("还没有版本 Tag") }}</code></div>
@@ -1402,10 +1460,11 @@ onBeforeUnmount(() => {
           <section class="block config-section">
             <div class="section-head">
               <div><h3>{{ tr("发布目标") }}</h3><div class="section-help">{{ tr("自动识别项目；日常发布只需勾选本次要处理的平台。") }}</div></div>
-              <div v-if="configEndpointAvailable" class="toolbar"><button @click="scanReleaseConfig" :disabled="configScanning || configSaving || configEditorOpen">{{ configScanning ? tr("识别中…") : tr("重新自动识别") }}</button><button @click="openConfigEditor" :disabled="configSaving || configEditorOpen">{{ configEditorOpen ? tr("正在配置") : tr("修改配置") }}</button></div>
+              <div v-if="configEndpointAvailable" class="toolbar"><button @click="scanReleaseConfig" :disabled="configScanning || configSaving || configEditorOpen || configFileOpen">{{ configScanning ? tr("识别中…") : tr("重新自动识别") }}</button><button @click="openConfigEditor" :disabled="configSaving || configEditorOpen || configFileOpen">{{ configEditorOpen ? tr("正在配置") : tr("修改配置") }}</button></div>
             </div>
             <div v-if="configNotice" class="alert info">{{ configNotice }}</div>
             <div v-if="releaseConfig" class="config-meta"><span>{{ releaseConfig.source === 'file' ? tr("已保存配置") : tr("自动识别建议") }}</span><span>{{ tr("识别可信度") }} {{ configConfidence }}%</span><code>{{ releaseConfig.configPath || '.launcher/release.yaml' }}</code></div>
+            <ReleaseConfigFileEditor :app-id="app.id" :disabled="configScanning || configSaving || configEditorOpen" @saved="onConfigFileSaved" @editing="configFileOpen = $event" />
             <div v-for="warning in releaseConfig?.warnings || []" :key="warning" class="alert warn">{{ warning }}</div>
 
             <template v-if="configEditorOpen && configDraft">
@@ -1514,7 +1573,6 @@ onBeforeUnmount(() => {
 
           <section class="summary-card">
             <h3>{{ tr("本次操作") }}</h3>
-            <div v-if="cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
             <p class="file-count">{{ tr('已选文件：{0} 个', [selectedPaths.length]) }}</p>
             <ul><li v-for="line in summaryLines" :key="line">{{ line }}</li></ul>
             <div v-if="hasOnlineAction" class="alert warn">{{ tr("包含上传或上线，请确认目标环境。") }}</div>
@@ -1533,12 +1591,7 @@ onBeforeUnmount(() => {
       <footer v-if="preflight && !activeRun" class="m-foot" :inert="publishing">
         <span v-if="releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
-        <button v-if="pushRemote || !gitOnly || createTag" :disabled="publishing" @click="prepareLocalCommit">{{ tr('仅提交到本机') }}</button>
         <div class="publish-control">
-          <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-            <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" />
-            <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
-          </label>
           <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
       </footer>

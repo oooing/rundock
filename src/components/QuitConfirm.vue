@@ -2,7 +2,7 @@
 import { tr } from '@/i18n'
 import { onMounted, ref } from 'vue'
 
-// 每次完全退出都明确选择；默认焦点在取消，避免误停项目。
+// 有活动项目或状态无法确认时选择退出方式；默认焦点在取消，避免误停项目。
 const cancelButton = ref<HTMLButtonElement | null>(null)
 onMounted(() => cancelButton.value?.focus())
 

@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue';
+import ReleaseModal from '/src/components/ReleaseModal.vue';
+import '/src/styles.css';
+// Browser acceptance intercepts every API request; no real sidecar is used.
+window.__LAUNCHER_BASE__ = window.location.origin;
+createApp({render: () => h(ReleaseModal, {app: {id: 'platform-fixture', name: 'ingLocalPlay', cwd: 'D:/fixture'}})}).mount('#app');
+</script></body></html>

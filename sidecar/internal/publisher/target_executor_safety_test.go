@@ -193,7 +193,7 @@ func TestSelectedVersionGroupDrivesAutoVersion(t *testing.T) {
 	assertFileContains(t, filepath.Join(repo, "mobile/package.json"), `"version":"5.0.1"`)
 }
 
-func TestNamespacedVersionIncludesHigherRemoteTag(t *testing.T) {
+func TestNamespacedReleaseUsesLocalVersionWithoutRemotePrecheck(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
 	writePublisherFixture(t, repo, "mobile/package.json", `{"name":"mobile","version":"5.0.0"}`)
@@ -224,12 +224,20 @@ func TestNamespacedVersionIncludesHigherRemoteTag(t *testing.T) {
 		t.Fatalf("remote tag was not reflected: tags=%v suggestions=%v", pf.LatestGroupTags, pf.SuggestedVersions)
 	}
 
-	// Only an uploading release checks the current remote version history.
-	// A deliberately local release must remain independent of remote tags.
+	// Explicit remote inspection still reports remote history, but normal release
+	// preparation uses local versions. Git rejects actual ref collisions on push.
+	runner := &networkTraceRunner{forbidTags: true}
+	svc.runner = runner
+	svc.targetRunner = &recordingTargetRunner{}
+	pf, err = svc.PreflightLocal(context.Background(), "app1")
+	if err != nil || !pf.CanRelease || pf.SuggestedVersions["mobile"] != "5.0.1" {
+		t.Fatalf("local version suggestion: %+v err=%v", pf, err)
+	}
+	// Removing the network precheck does not allow downgrading the local version.
 	createTag, pushRemote := true, true
 	_, err = svc.Start(context.Background(), "app1", CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "manual",
-		Versions:          []ReleaseVersionInput{{VersionGroupID: "mobile", TargetVersion: "5.1.0"}},
+		Versions:          []ReleaseVersionInput{{VersionGroupID: "mobile", TargetVersion: "4.9.0"}},
 		SelectedPaths:     []string{"tracked.txt"},
 		SelectedTargets:   []store.ReleaseTargetSelection{{TargetID: "mobile", Build: true}},
 		StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
@@ -238,7 +246,6 @@ func TestNamespacedVersionIncludesHigherRemoteTag(t *testing.T) {
 		t.Fatalf("lower manual version error = %#v", err)
 	}
 
-	svc.targetRunner = &recordingTargetRunner{}
 	run, err := svc.Start(context.Background(), "app1", CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths:     []string{"tracked.txt"},
@@ -249,8 +256,15 @@ func TestNamespacedVersionIncludesHigherRemoteTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = waitRelease(t, svc, run.ID)
-	if run.Status != "succeeded" || run.TagName != "mobile/v5.2.1" || run.TargetVersion != "5.2.1" {
-		t.Fatalf("auto version ignored remote namespaced tag: %+v", run)
+	if run.Status != "succeeded" || run.TagName != "mobile/v5.0.1" || run.TargetVersion != "5.0.1" {
+		t.Fatalf("auto version did not use local namespaced version: %+v", run)
+	}
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 {
+		t.Fatalf("release preparation queried the remote: %+v", runner.calls)
+	}
+	remoteTag := strings.TrimSpace(runGit(t, repo, "ls-remote", "origin", "refs/tags/mobile/v5.2.0"))
+	if !strings.HasPrefix(remoteTag, pf.HeadSHA+"\t") {
+		t.Fatalf("unrelated remote tag changed: %s", remoteTag)
 	}
 }
 

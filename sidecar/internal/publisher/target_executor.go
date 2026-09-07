@@ -30,6 +30,7 @@ const executionPlanSchemaVersion = 1
 // manifest.
 type executionPlan struct {
 	SchemaVersion         int                       `json:"schemaVersion"`
+	BuildMode             string                    `json:"buildMode,omitempty"`
 	ConfigPath            string                    `json:"configPath"`
 	RemoteURL             string                    `json:"remoteUrl,omitempty"`
 	PushRemote            *bool                     `json:"pushRemote,omitempty"`

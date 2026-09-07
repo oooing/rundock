@@ -69,6 +69,7 @@ type CreateRequest struct {
 	CreateTag                *bool                          `json:"createTag"`
 	PushRemote               *bool                          `json:"pushRemote"`
 	VersionMode              string                         `json:"versionMode"`
+	BuildMode                string                         `json:"buildMode"`
 	SelectedTargets          []store.ReleaseTargetSelection `json:"selectedTargets"`
 	ExternalActionsConfirmed bool                           `json:"externalActionsConfirmed"`
 	ReleaseNotes             string                         `json:"releaseNotes"`

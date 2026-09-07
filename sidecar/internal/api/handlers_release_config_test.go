@@ -166,7 +166,7 @@ func TestReleaseProfileAPIRemembersOptionalTagChoice(t *testing.T) {
 		t.Fatalf("default profile: %d %s", res.Code, res.Body.String())
 	}
 	var profile store.ReleaseProfile
-	if err := json.Unmarshal(res.Body.Bytes(), &profile); err != nil || !profile.CreateTag || profile.VersionMode != "auto" {
+	if err := json.Unmarshal(res.Body.Bytes(), &profile); err != nil || !profile.CreateTag || profile.VersionMode != "auto" || profile.BuildMode != "github" {
 		t.Fatalf("default profile = %+v, err=%v", profile, err)
 	}
 
@@ -174,14 +174,23 @@ func TestReleaseProfileAPIRemembersOptionalTagChoice(t *testing.T) {
   "remoteName": "origin",
   "versionStrategy": "auto",
   "createTag": false,
+  "buildMode": "local",
   "versionMode": "manual"
 }`))
 	if res.Code != http.StatusOK {
 		t.Fatalf("save profile: %d %s", res.Code, res.Body.String())
 	}
 	res = requestAPI(t, router, http.MethodGet, "/api/apps/app1/release-profile", nil)
-	if err := json.Unmarshal(res.Body.Bytes(), &profile); err != nil || profile.CreateTag || profile.VersionMode != "manual" {
+	if err := json.Unmarshal(res.Body.Bytes(), &profile); err != nil || profile.CreateTag || profile.VersionMode != "manual" || profile.BuildMode != "local" {
 		t.Fatalf("remembered profile = %+v, err=%v", profile, err)
+	}
+	res = requestAPI(t, router, http.MethodPatch, "/api/apps/app1/release-profile", []byte(`{"remoteName":"origin"}`))
+	if err := json.Unmarshal(res.Body.Bytes(), &profile); err != nil || profile.BuildMode != "local" {
+		t.Fatalf("partial patch reset build mode: %+v %v", profile, err)
+	}
+	res = requestAPI(t, router, http.MethodPatch, "/api/apps/app1/release-profile", []byte(`{"buildMode":"unknown"}`))
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"code":"invalid_build_mode"`) {
+		t.Fatalf("invalid mode: %d %s", res.Code, res.Body.String())
 	}
 
 	res = requestAPI(t, router, http.MethodPatch, "/api/apps/app1/release-profile", []byte(`{"versionMode":"calendar"}`))

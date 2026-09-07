@@ -70,6 +70,7 @@ const versionStrategy = ref<VersionStrategy>('auto')
 const preReleaseCommand = ref('')
 const createTag = ref(true)
 const pushRemote = ref(true)
+const buildMode = ref<'github' | 'local'>('github')
 const versionMode = ref<ReleaseVersionMode>('auto')
 const profileReady = ref(false)
 
@@ -122,10 +123,10 @@ const selectedTargets = computed<SelectedReleaseTarget[]>(() => gitOnly.value ? 
   .map(({ target, choice }) => {
     return {
       targetId: target.id,
-      build: !!target.steps.build && !!choice.build,
-      package: !!target.steps.package && !!choice.package,
-      publish: !!target.steps.publish && !!choice.publish,
-      deploy: !!target.steps.deploy && !!choice.deploy,
+      build: phaseAllowed('build') && !!target.steps.build && !!choice.build,
+      package: phaseAllowed('package') && !!target.steps.package && !!choice.package,
+      publish: phaseAllowed('publish') && !!target.steps.publish && !!choice.publish,
+      deploy: phaseAllowed('deploy') && !!target.steps.deploy && !!choice.deploy,
     }
   }))
 const invalidChosenTargetIds = computed(() => selectedTargets.value
@@ -134,6 +135,17 @@ const invalidChosenTargetIds = computed(() => selectedTargets.value
 const selectedVersionGroupIds = computed(() => [...new Set(chosenTargets.value.map(({ target }) => target.versionGroup))])
 const selectedVersionGroups = computed(() => (releaseConfig.value?.versionGroups || [])
   .filter((group) => selectedVersionGroupIds.value.includes(group.id)))
+const releaseTagSummary = computed(() => {
+  const pf = preflight.value
+  if (!pf) return ''
+  if ((releaseConfig.value?.versionGroups.length || 0) > 1) {
+    if (gitOnly.value || !selectedVersionGroups.value.length) return tr('各平台版本独立管理')
+    const tags = selectedVersionGroups.value.map(group => pf.latestGroupTags[group.id]
+      || tr('{0}：未创建 Tag', [versionGroupDisplayName(group)]))
+    return tr('所选平台 Tag：{0}', [[...new Set(tags)].join(' · ')])
+  }
+  return pf.latestTag ? tr('本地 Tag：{0}', [pf.latestTag]) : tr('暂无 Tag')
+})
 const selectedVersionFiles = computed(() => {
   if (gitOnly.value || !selectedVersionGroups.value.length) return preflight.value?.versionFiles || []
   return [...new Set(selectedVersionGroups.value.flatMap((group) => group.versionFiles.map((file) => file.path)))]
@@ -219,7 +231,7 @@ const willTriggerAutomation = computed(() => (selectedHasTagPushTarget.value
 const automationBranchMismatch = computed(() => !!willTriggerAutomation.value
   && !!configuredAutomation.value?.releaseBranch
   && configuredAutomation.value.releaseBranch !== preflight.value?.branch)
-const willBuildWindowsInAutomation = computed(() => productPlatforms.value.some((platform) => platform.id === 'pc' && platformHasSelection(platform)))
+const willBuildWindowsInAutomation = computed(() => buildMode.value === 'github' && productPlatforms.value.some((platform) => platform.id === 'pc' && platformHasSelection(platform)))
 const willBuildTargetsInAutomation = computed(() => selectedHasTagPushTarget.value || willBuildWindowsInAutomation.value)
 const releaseNotesOptionsSignature = computed(() => JSON.stringify({
   statusFingerprint: preflight.value?.statusFingerprint || '',
@@ -404,8 +416,23 @@ const productPlatforms = computed<ProductPlatform[]>(() => {
   return cards
 })
 
+function phaseAllowed(phase: ExecutionPhase) {
+  return buildMode.value === 'github' ? phase === 'publish' : phase === 'build' || phase === 'package'
+}
+
+function changeBuildMode(mode: 'github' | 'local') {
+  if (buildMode.value === mode) return
+  const platforms = new Set(productPlatforms.value.filter(platformHasSelection).map(platform => platform.id))
+  buildMode.value = mode
+  pushRemote.value = mode === 'github'
+  for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
+  if (!gitOnly.value) for (const platform of productPlatforms.value) {
+    if (platforms.has(platform.id)) togglePlatform(platform, true)
+  }
+}
+
 function configuredActions(target: ReleaseTarget) {
-  return phaseOptions.value.filter((phase) => !!target.steps[phase.key])
+  return phaseOptions.value.filter((phase) => phaseAllowed(phase.key) && !!target.steps[phase.key])
 }
 
 function platformRunnableTargets(platform: ProductPlatform) {
@@ -436,18 +463,18 @@ function platformSelectionCount(platform: ProductPlatform) {
   return {
     selected: runnable.filter((target) => targetChoices.value[target.id]?.selected).length,
     runnable: runnable.length,
-    total: platform.targets.length,
+    total: platform.targets.filter(target => target.runner.type.trim().toLowerCase() === (buildMode.value === 'github' ? 'git-push' : 'local')).length,
   }
 }
 
 function platformUnavailableReason(platform: ProductPlatform) {
   if (!platform.configured) {
-    if (platform.id === 'mac') return currentOS() === 'darwin' ? tr("未配置 Mac 构建") : tr("未配置，且需在 macOS 电脑运行")
+    if (buildMode.value === 'local' && platform.id === 'mac') return currentOS() === 'darwin' ? tr("未配置 Mac 构建") : tr("未配置，且需在 macOS 电脑运行")
     return tr("未识别到此平台")
   }
   const runnable = platformRunnableTargets(platform)
   if (runnable.length) return ''
-  if (platform.id === 'mac') {
+  if (buildMode.value === 'local' && platform.id === 'mac') {
     const needsMac = platform.targets.some((target) => {
       const systems = target.runner.os.map((value) => value.trim().toLowerCase())
       return target.runner.type.trim().toLowerCase() === 'local' && systems.includes('darwin') && !systems.includes('any')
@@ -464,7 +491,7 @@ function platformActionLabels(platform: ProductPlatform, selectedOnly = false) {
   return phaseOptions.value
     .filter((phase) => selectedOnly
       ? selectedTargets.value.some((target) => targetIds.has(target.targetId) && target[phase.key])
-      : platformRunnableTargets(platform).some((target) => !!target.steps[phase.key]))
+      : platformRunnableTargets(platform).some((target) => phaseAllowed(phase.key) && !!target.steps[phase.key]))
     .map((phase) => phase.label)
 }
 
@@ -480,8 +507,8 @@ function platformCardDetail(platform: ProductPlatform) {
 
   const actionLabels = platformActionLabels(platform, platformHasSelection(platform))
     .filter((label) => label !== tr("构建"))
-  if (platform.targets.some(isTagPushTarget)) parts.push(tr("Tag 上传后由 GitHub 自动构建"))
-  else if (platform.targets.some((target) => target.runner.type.trim().toLowerCase() === 'git-push')) parts.push(tr("推送后云端构建"))
+  if (platformRunnableTargets(platform).some(isTagPushTarget)) parts.push(tr("Tag 上传后由 GitHub 自动构建"))
+  else if (platformRunnableTargets(platform).some((target) => target.runner.type.trim().toLowerCase() === 'git-push')) parts.push(tr("推送后云端构建"))
   else if (actionLabels.length) parts.push(actionLabels.join('、'))
   if (platformPartiallyAvailable(platform)) parts.push(tr("部分步骤不可用"))
   return parts.join(' · ')
@@ -494,7 +521,7 @@ function togglePlatform(platform: ProductPlatform, checked: boolean) {
     if (!choice) continue
     choice.selected = checked
     if (checked) {
-      for (const phase of phaseOptions.value) choice[phase.key] = !!target.steps[phase.key]
+      for (const phase of phaseOptions.value) choice[phase.key] = phaseAllowed(phase.key) && !!target.steps[phase.key]
     }
   }
 }
@@ -669,6 +696,9 @@ function osLabel(os: string) {
 function targetUnavailableReason(target: ReleaseTarget) {
   if (!target.enabled) return tr("此目标已在配置中停用")
   const runnerType = target.runner.type.trim().toLowerCase()
+  if (buildMode.value === 'github' && runnerType !== 'git-push') return tr('未配置 GitHub 云端构建，请配置工作流或切换本地构建')
+  if (buildMode.value === 'local' && runnerType !== 'local') return tr('未配置本地构建步骤')
+  if (buildMode.value === 'local' && !target.steps.build && !target.steps.package) return tr('未配置本地构建步骤')
   if (runnerType === 'git-push') return ''
   if (runnerType !== 'local') return tr("当前版本不支持此执行方式")
   if (!target.runner.os.length) return ''
@@ -688,7 +718,7 @@ function targetAvailable(target: ReleaseTarget) {
 }
 
 function defaultTargetChoice(target: ReleaseTarget): TargetChoice {
-  return { selected: false, build: !!target.steps.build, package: !!target.steps.package, publish: !!target.steps.publish, deploy: !!target.steps.deploy }
+  return { selected: false, build: phaseAllowed('build') && !!target.steps.build, package: phaseAllowed('package') && !!target.steps.package, publish: phaseAllowed('publish') && !!target.steps.publish, deploy: phaseAllowed('deploy') && !!target.steps.deploy }
 }
 
 function applyReleaseConfig(raw: ReleaseConfig, editing = false) {
@@ -731,21 +761,25 @@ function preferenceKey() {
   return `launcher.release-preferences.${props.app.id}`
 }
 
-function readLocalPreferences(): { createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } {
-  try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') as { createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } }
+function readLocalPreferences(): { buildMode?: 'github' | 'local'; createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } {
+  try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') as { buildMode?: 'github' | 'local'; createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } }
   catch { return {} }
 }
 
 function rememberPreferences() {
   if (!profileReady.value) return
-  localStorage.setItem(preferenceKey(), JSON.stringify({ createTag: createTag.value, versionMode: versionMode.value, pushRemote: pushRemote.value }))
+  localStorage.setItem(preferenceKey(), JSON.stringify({ buildMode: buildMode.value, createTag: createTag.value, versionMode: versionMode.value, pushRemote: pushRemote.value }))
   if (preferenceTimer) clearTimeout(preferenceTimer)
-  preferenceTimer = setTimeout(() => {
-    const body = profileBody()
-    preferenceSave = preferenceSave.catch(() => undefined).then(async () => {
-      await api.saveReleaseProfile(props.app.id, body)
-    })
-  }, 250)
+  preferenceTimer = setTimeout(saveRememberedPreferences, 250)
+}
+
+function saveRememberedPreferences() {
+  preferenceTimer = null
+  const body = profileBody()
+  const appId = props.app.id
+  preferenceSave = preferenceSave.catch(() => undefined).then(async () => {
+    await api.saveReleaseProfile(appId, body)
+  }).catch(reason => { if (!disposed) error.value = messageOf(reason) })
 }
 
 function setDefaultCommitMessage(force = false) {
@@ -833,7 +867,9 @@ function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = tru
   preReleaseCommand.value = pf.profile?.preReleaseCommand || ''
   if (initial) {
     const remembered = readLocalPreferences()
-    pushRemote.value = typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true
+    buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github'
+    for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
+    pushRemote.value = buildMode.value === 'local' && !gitOnly.value ? false : (typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true)
     createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true)
     versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto')
   }
@@ -887,7 +923,7 @@ async function load(resumeFailedRun = true) {
 }
 
 function profileBody() {
-  return { remoteName: remoteName.value, versionStrategy: versionStrategy.value, preReleaseCommand: preReleaseCommand.value, createTag: createTag.value, versionMode: versionMode.value }
+  return { buildMode: buildMode.value, remoteName: remoteName.value, versionStrategy: versionStrategy.value, preReleaseCommand: preReleaseCommand.value, createTag: createTag.value, versionMode: versionMode.value }
 }
 
 async function saveAndRecheck() {
@@ -927,7 +963,7 @@ function setTargetSelected(targetId: string, checked: boolean) {
   choice.selected = checked
   if (checked) {
     gitOnly.value = false
-    for (const phase of phaseOptions.value) choice[phase.key] = !!target.steps[phase.key]
+    for (const phase of phaseOptions.value) choice[phase.key] = phaseAllowed(phase.key) && !!target.steps[phase.key]
   }
 }
 function setTargetPhase(targetId: string, phase: ExecutionPhase, checked: boolean) {
@@ -1060,7 +1096,7 @@ async function publish() {
       targetVersion: createTag.value ? primaryTargetVersion.value : '',
       versions: createTag.value ? plannedVersions.value.map((version) => ({ versionGroupId: version.versionGroupId, targetVersion: version.targetVersion })) : [],
       createTag: createTag.value, versionMode: versionMode.value,
-      pushRemote: pushRemote.value,
+      buildMode: buildMode.value, pushRemote: pushRemote.value,
       selectedTargets: selectedTargets.value, selectedPaths: selectedPaths.value, commitMessage: commitMessage.value, statusFingerprint: pf.statusFingerprint,
       releaseNotes: createTag.value ? releaseNotes.value.trim() : '',
       releaseNotesConfirmed: createTag.value,
@@ -1209,7 +1245,8 @@ function startNew() {
   void load(false)
 }
 
-watch([createTag, versionMode, pushRemote], rememberPreferences)
+watch([buildMode, createTag, versionMode, pushRemote], rememberPreferences)
+watch(gitOnly, value => { if (!value && buildMode.value === 'local') pushRemote.value = false })
 watch(pushRemote, () => {
   if (errorCode.value.startsWith('remote_') || errorCode.value === 'fetch_failed') { error.value = ''; errorCode.value = '' }
 })
@@ -1238,7 +1275,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true
   if (pollTimer) clearTimeout(pollTimer)
-  if (preferenceTimer) clearTimeout(preferenceTimer)
+  if (preferenceTimer) {
+    clearTimeout(preferenceTimer)
+    saveRememberedPreferences()
+  }
   if (releaseNotesTimer) clearTimeout(releaseNotesTimer)
   releaseNotesRequest += 1
 })
@@ -1289,13 +1329,21 @@ onBeforeUnmount(() => {
           <section v-if="preflight" class="repo-glance" :class="{ problem: !localChecksPassed }">
             <span class="ready-dot"></span>
             <strong>{{ preflight.branch || tr("未绑定分支") }}</strong>
-            <span>{{ preflight.latestTag ? (preflight.remoteChecked ? tr("最新 Tag：{0}", [preflight.latestTag]) : tr("本地 Tag：{0}", [preflight.latestTag])) : tr("暂无 Tag") }}</span>
+            <span class="repo-tag-summary" :title="tr('Tag 是版本记录，不代表云端构建已完成')">{{ releaseTagSummary }}</span>
             <span class="repo-glance-status" :title="localChecksPassed ? tr('已检查本地 Git 状态；上传时由 Git 拒绝冲突，不提前查询远端。') : tr('请按下方提示处理仓库问题')">{{ localChecksPassed ? tr("本地检查通过") : tr("本地仓库需要处理") }}</span>
           </section>
           <section v-else class="repo-glance checking"><span class="ready-dot"></span><strong>{{ tr("正在读取本地仓库…") }}</strong><span class="repo-glance-status">{{ tr("构建端可以先选择") }}</span></section>
           <section v-if="blockingIssues.length" class="issues"><div v-for="issue in blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
           <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
 
+          <section class="block build-mode-section">
+            <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
+            <div class="build-mode-picker" role="group" :aria-label="tr('构建位置')">
+              <button type="button" :aria-pressed="buildMode === 'github'" :class="{ selected: buildMode === 'github' }" @click="changeBuildMode('github')"><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></button>
+              <button type="button" :aria-pressed="buildMode === 'local'" :class="{ selected: buildMode === 'local' }" @click="changeBuildMode('local')"><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，不上传或部署') }}</small></button>
+            </div>
+            <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地模式只执行检查、构建和打包，需要本机已安装项目依赖。') }}</p>
+          </section>
           <section class="platform-section">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
             <div class="platform-grid">
@@ -1304,6 +1352,7 @@ onBeforeUnmount(() => {
                 :key="platform.id"
                 type="button"
                 class="platform-card"
+                :aria-pressed="platformSelected(platform)"
                 :class="{ selected: platformSelected(platform), partial: platformPartiallySelected(platform), limited: platformPartiallyAvailable(platform), unavailable: !!platformUnavailableReason(platform) }"
                 :disabled="!!platformUnavailableReason(platform)"
                 @click="togglePlatform(platform, !platformSelected(platform))"
@@ -1347,7 +1396,7 @@ onBeforeUnmount(() => {
             <div class="advanced-body">
           <section class="repo-card">
             <div class="kv"><span>{{ tr("代码仓库") }}</span><code>{{ preflight.repoRoot }}</code></div><div class="kv"><span>{{ tr("当前分支") }}</span><code>{{ preflight.branch || tr("未绑定分支") }}</code></div>
-            <div class="kv"><span>{{ tr("远程地址") }}</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>{{ tr("最新版本") }}</span><code>{{ preflight.latestTag || tr("还没有版本 Tag") }}</code></div>
+            <div class="kv"><span>{{ tr("远程地址") }}</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>{{ tr("仓库通用 Tag（不含平台 Tag）") }}</span><code>{{ preflight.latestTag || tr("还没有版本 Tag") }}</code></div>
           </section>
 
           <section class="block config-section">
@@ -1388,7 +1437,7 @@ onBeforeUnmount(() => {
                 <article v-for="target in releaseConfig.targets" :key="target.id" class="target-card" :class="{ disabled: !targetAvailable(target) || gitOnly, selected: !gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected, invalid: invalidChosenTargetIds.includes(target.id) }">
                   <header class="target-head"><label class="target-select"><input type="checkbox" :checked="!gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected" :disabled="gitOnly || !targetAvailable(target)" @change="setTargetSelected(target.id, ($event.target as HTMLInputElement).checked)" /><span><strong>{{ target.name }}</strong><small>{{ target.kind }} · {{ versionGroupName(target) }}</small></span></label><span v-if="target.detected" class="detected-badge">{{ tr("自动识别") }}</span></header>
                   <div v-if="targetUnavailableReason(target)" class="unavailable">{{ targetUnavailableReason(target) }}</div>
-                  <div v-else class="phase-grid"><label v-for="phase in phaseOptions" :key="phase.key" class="phase-choice" :class="{ unavailable: !target.steps[phase.key], risky: phase.risky && targetChoices[target.id]?.[phase.key] }"><input type="checkbox" :checked="targetChoices[target.id]?.[phase.key]" :disabled="gitOnly || !targetChoices[target.id]?.selected || !target.steps[phase.key]" @change="setTargetPhase(target.id, phase.key, ($event.target as HTMLInputElement).checked)" /><span>{{ phase.label }}<small>{{ targetPhaseHint(target, phase) }}</small></span></label></div>
+                  <div v-else class="phase-grid"><label v-for="phase in phaseOptions.filter(item => phaseAllowed(item.key))" :key="phase.key" class="phase-choice" :class="{ unavailable: !target.steps[phase.key], risky: phase.risky && targetChoices[target.id]?.[phase.key] }"><input type="checkbox" :checked="targetChoices[target.id]?.[phase.key]" :disabled="gitOnly || !targetChoices[target.id]?.selected || !target.steps[phase.key]" @change="setTargetPhase(target.id, phase.key, ($event.target as HTMLInputElement).checked)" /><span>{{ phase.label }}<small>{{ targetPhaseHint(target, phase) }}</small></span></label></div>
                   <div v-if="!gitOnly && invalidChosenTargetIds.includes(target.id)" class="target-error">{{ tr("请至少选择一个有命令的动作；也可以修改配置或选择“仅 Git”。") }}</div>
                   <div v-if="target.steps.check" class="target-check">{{ tr("发布前会先自动检查") }}</div>
                 </article>
@@ -1397,7 +1446,7 @@ onBeforeUnmount(() => {
             <div v-else-if="configEndpointAvailable" class="empty-config"><p>{{ tr("还没有配置 PC、Web、Android 或服务端等发布目标。") }}</p><button class="primary" :disabled="configScanning" @click="scanReleaseConfig">{{ configScanning ? tr("正在分析项目…") : tr("一键自动识别项目") }}</button></div>
           </section>
 
-          <section class="block"><h3>{{ tr("Git 与检查设置") }}</h3><div class="form-grid"><label>{{ tr("远程仓库") }}<select v-model="remoteName"><option v-for="remote in preflight.remotes" :key="remote" :value="remote">{{ remote }}</option></select></label><label>{{ tr("版本文件识别") }}<select v-model="versionStrategy"><option value="auto">{{ tr("自动识别") }}</option><option value="tauri">Tauri</option><option value="node">Node</option><option value="manual">{{ tr("不自动修改") }}</option></select></label></div><details class="advanced compact"><summary>{{ tr("高级：通用发布前检查命令") }}</summary><label class="full-label">{{ tr("命令（可选）") }}<input v-model="preReleaseCommand" :placeholder="tr('例如 npm test')" /></label></details><button @click="saveAndRecheck" :disabled="savingProfile">{{ savingProfile ? tr("检查中…") : tr("保存并重新检查 Git") }}</button></section>
+          <section class="block"><h3>{{ tr("Git 与检查设置") }}</h3><div class="form-grid"><label>{{ tr("远程仓库") }}<select v-model="remoteName"><option v-for="remote in preflight.remotes" :key="remote" :value="remote">{{ remote }}</option></select></label><label>{{ tr("版本文件识别") }}<select v-model="versionStrategy"><option value="auto">{{ tr("自动识别") }}</option><option value="tauri">Tauri</option><option value="node">Node</option><option value="manual">{{ tr("不自动修改") }}</option></select></label></div><details class="advanced compact"><summary>{{ tr("高级：通用发布前检查命令") }}</summary><label class="full-label">{{ tr("命令（可选）") }}<small v-if="buildMode === 'github'">{{ tr('此命令只在本地模式执行') }}</small><input :disabled="buildMode === 'github'" v-model="preReleaseCommand" :placeholder="tr('例如 npm test')" /></label></details><button @click="saveAndRecheck" :disabled="savingProfile">{{ savingProfile ? tr("检查中…") : tr("保存并重新检查 Git") }}</button></section>
 
           <section class="block">
             <h3>{{ tr("版本与提交详情") }}</h3>
@@ -1487,7 +1536,7 @@ onBeforeUnmount(() => {
         <button v-if="pushRemote || !gitOnly || createTag" :disabled="publishing" @click="prepareLocalCommit">{{ tr('仅提交到本机') }}</button>
         <div class="publish-control">
           <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-            <input v-model="pushRemote" type="checkbox" :disabled="publishing" />
+            <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" />
             <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
           </label>
           <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
@@ -1507,6 +1556,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.repo-tag-summary { min-width: 0; overflow-wrap: anywhere; }
 .alert.error { white-space: pre-line; overflow-wrap: anywhere; }
 .completion-banner.pending { border-color: color-mix(in srgb, var(--amber) 35%, transparent); background: color-mix(in srgb, var(--amber) 5%, var(--bg-elev)); }
 .completion-banner.pending .completion-icon { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
@@ -1516,6 +1566,11 @@ onBeforeUnmount(() => {
 .release-content-hint { margin-right: auto; flex: 1 1 180px; font-size: 12px; color: var(--text-dim); }
 .overlay { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.58); display: flex; align-items: center; justify-content: center; padding: 20px; }.modal { width: min(920px,100%); max-height: 94vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }.m-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border); }.m-head h2 { margin: 0; font-size: 17px; }.m-body { padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }.m-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }.state,.muted { color: var(--text-faint); font-size: 12px; }.alert { padding: 9px 11px; border-radius: 7px; font-size: 12px; line-height: 1.5; }.alert.error { color: var(--red); background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.3); }.alert.warn { color: var(--amber); background: rgba(251,191,36,.08); }.alert.info { color: var(--accent); background: rgba(79,140,255,.08); border: 1px solid rgba(79,140,255,.2); }
 .repo-glance { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 12px; border: 1px solid rgba(52,211,153,.22); border-radius: 9px; color: var(--text-dim); background: rgba(52,211,153,.05); font-size: 12px; }.repo-glance strong { color: var(--text); }.repo-glance-status { margin-left: auto; color: var(--green); }.ready-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }.repo-glance.checking { border-color: rgba(79,140,255,.3); background: rgba(79,140,255,.06); }.repo-glance.checking .ready-dot { background: var(--accent); animation: checking-pulse 1s ease-in-out infinite alternate; }.repo-glance.checking .repo-glance-status { color: var(--accent); }.repo-glance.problem { border-color: rgba(248,113,113,.25); background: rgba(248,113,113,.05); }.repo-glance.problem .ready-dot { background: var(--red); }.repo-glance.problem .repo-glance-status { color: var(--red); } @keyframes checking-pulse { to { opacity: .35; transform: scale(.75); } }
+.build-mode-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.build-mode-picker button { display: flex; flex-direction: column; gap: 7px; padding: 15px; text-align: left; white-space: normal; }
+.build-mode-picker button.selected { border-color: var(--accent); background: rgba(79,140,255,.12); }
+.build-mode-picker small { color: var(--text-dim); line-height: 1.5; }
+@media (max-width: 600px) { .build-mode-picker { grid-template-columns: 1fr; } }
 .platform-section { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.platform-section h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.basic-section-head { align-items: center; }.platform-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-top: 12px; }.platform-card { position: relative; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; min-height: 76px; padding: 12px; overflow: hidden; text-align: left; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--bg); }.platform-card:not(:disabled):hover { border-color: rgba(79,140,255,.65); }.platform-card.selected { border-color: var(--accent); background: rgba(79,140,255,.1); box-shadow: inset 0 0 0 1px rgba(79,140,255,.16); }.platform-card.partial { border-color: var(--amber); border-style: dashed; }.platform-card.limited:not(.selected):not(.partial) { border-style: dashed; }.platform-card.unavailable { cursor: not-allowed; opacity: .62; }.platform-icon { font-size: 22px; line-height: 1; }.platform-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding-right: 14px; }.platform-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.platform-copy small { color: var(--text-faint); font-size: 10px; line-height: 1.35; }.chosen-mark { position: absolute; top: 8px; right: 9px; color: var(--accent); font-weight: 700; }.risk-badge { position: absolute; right: 8px; bottom: 6px; padding: 1px 5px; border-radius: 8px; color: var(--amber); background: rgba(251,191,36,.12); font-size: 9px; }.git-card .platform-icon { color: var(--accent); font-size: 26px; }
 .file-picker { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.file-picker h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.file-picker-head { align-items: center; }.file-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--text-faint); font-size: 11px; }.file-actions button { padding: 5px 8px; }.file-warning { margin-bottom: 9px; }.file-list { max-height: 230px; overflow: auto; padding: 3px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }.file-footnote { margin-top: 8px; color: var(--text-faint); font-size: 10px; }
 .release-notes { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.release-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }.release-notes h3 { margin: 0; color: var(--text); font-size: 15px; }.release-notes-head button { flex: 0 0 auto; padding: 6px 9px; }.release-notes textarea { width: 100%; min-height: 132px; resize: vertical; line-height: 1.55; }.release-notes-meta { display: flex; min-height: 17px; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; color: var(--text-faint); font-size: 10px; }.release-notes-alert { margin-top: 8px; }.release-notes-alert button { margin-left: 6px; padding: 3px 7px; }.automation-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 9px; }.automation-result a { flex: 0 0 auto; color: var(--accent); }

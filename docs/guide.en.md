@@ -29,9 +29,12 @@ The desktop app currently targets **Windows 10/11 x64**. Installers are unsigned
 
 Click the release button on a project card, select targets and files, then review versions and release notes before submitting.
 
+- **Build location**: each project defaults to GitHub cloud build. RunDock pushes code and versions for the configured GitHub workflow to build and package, without running local build commands.
+- **Local build**: runs checks, builds, and packaging on this computer without uploading or deploying. The choice is saved per project. Missing steps are shown as unavailable; RunDock never silently switches build locations.
+
 - **Files**: tracked changes are selected by default; untracked files are not. Check that required new files are included.
 - **Version tags**: optional, with automatic increments or manually entered versions. The tag toggle remembers its previous setting.
-- **Remote upload**: the dropdown beside the submit button controls uploading to GitHub. A local commit and a remote push are separate steps.
+- **Remote upload**: “Upload after committing” controls remote push. Cloud builds require it; local builds disable it. Code-only submissions can choose independently.
 - **Safety checks**: existing staged changes, conflicts, a behind branch, duplicate tags, and other blocking issues stop the operation. Stage logs are available after failures.
 
 Each project's targets, commands, version files, and automation settings live in [`.launcher/release.yaml`](../.launcher/release.yaml), written as JSON compatible with YAML 1.2. **Detecting a target does not mean its build, upload, or deployment steps are configured.**

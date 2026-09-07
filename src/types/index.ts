@@ -200,6 +200,7 @@ export interface SelectedReleaseTarget {
 }
 
 export interface ReleaseProfile {
+  buildMode?: 'github' | 'local'
   appId: string
   remoteName: string
   versionStrategy: VersionStrategy
@@ -435,6 +436,7 @@ export interface ReleaseRunView {
 }
 
 export interface CreateReleaseBody {
+  buildMode: 'github' | 'local'
   targetVersion: string
   versions: Array<{ versionGroupId: string; targetVersion: string }>
   createTag: boolean

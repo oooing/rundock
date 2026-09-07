@@ -21,12 +21,13 @@ func TestReleaseProfileRemembersTagAndVersionMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !defaults.CreateTag || defaults.VersionMode != "auto" {
+	if !defaults.CreateTag || defaults.VersionMode != "auto" || defaults.BuildMode != "github" {
 		t.Fatalf("default profile = %+v, want createTag=true/versionMode=auto", defaults)
 	}
 
 	defaults.CreateTag = false
 	defaults.VersionMode = "manual"
+	defaults.BuildMode = "local"
 	if err := s.UpsertReleaseProfile(defaults); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +46,13 @@ func TestReleaseProfileRemembersTagAndVersionMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remembered.CreateTag || remembered.VersionMode != "manual" {
+	if remembered.CreateTag || remembered.VersionMode != "manual" || remembered.BuildMode != "local" {
 		t.Fatalf("remembered profile = %+v, want createTag=false/versionMode=manual", remembered)
+	}
+	createReleaseTestApp(t, s, "app2")
+	other, err := s.GetReleaseProfile("app2")
+	if err != nil || other.BuildMode != "github" {
+		t.Fatalf("mode leaked between projects: %+v %v", other, err)
 	}
 }
 
@@ -205,7 +211,7 @@ func TestUpgradeReleaseOptionsUsesSafeDefaults(t *testing.T) {
 	}
 	defer s.Close()
 	profile, err := s.GetReleaseProfile("app1")
-	if err != nil || profile == nil || !profile.CreateTag || profile.VersionMode != "auto" {
+	if err != nil || profile == nil || !profile.CreateTag || profile.VersionMode != "auto" || profile.BuildMode != "github" {
 		t.Fatalf("upgraded profile = %+v, err=%v", profile, err)
 	}
 	run, err := s.GetReleaseRun("run1")

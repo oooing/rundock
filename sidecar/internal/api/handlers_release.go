@@ -92,7 +92,11 @@ func (s *Server) handleReleaseProfile(w http.ResponseWriter, r *http.Request, ap
 		}
 		writeJSON(w, http.StatusOK, p)
 	case http.MethodPatch:
-		p := store.DefaultReleaseProfile(appID)
+		p, profileErr := s.Store.GetReleaseProfile(appID)
+		if profileErr != nil {
+			writePublisherError(w, profileErr)
+			return
+		}
 		if err := readJSON(r, p); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 			return
@@ -128,6 +132,17 @@ func (s *Server) handleAppReleases(w http.ResponseWriter, r *http.Request, appID
 		if err := readJSON(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 			return
+		}
+		if body.BuildMode == "" {
+			profile, err := s.Store.GetReleaseProfile(appID)
+			if err != nil {
+				writePublisherError(w, err)
+				return
+			}
+			body.BuildMode = profile.BuildMode
+			if body.BuildMode == "" {
+				body.BuildMode = "github"
+			}
 		}
 		run, err := s.Publisher.Start(r.Context(), appID, body)
 		if err != nil {

@@ -144,6 +144,11 @@ func TestGitPushTargetTriggersCloudBuildWithoutLocalCommand(t *testing.T) {
 func TestGitPushReleasePushesTagAndHandsOffWithoutLocalBuild(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
+	profile := store.DefaultReleaseProfile("app1")
+	profile.PreReleaseCommand = "exit 97"
+	if err := svc.SaveProfile(profile); err != nil {
+		t.Fatal(err)
+	}
 
 	target := validExecutorTarget()
 	target.Runner = releaseconfig.Runner{Type: releaseconfig.RunnerGitPush, OS: []string{}}
@@ -166,6 +171,7 @@ func TestGitPushReleasePushesTagAndHandsOffWithoutLocalBuild(t *testing.T) {
 	createTag, pushRemote := true, true
 	selection := store.ReleaseTargetSelection{TargetID: target.ID, Publish: true}
 	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+		BuildMode: "github",
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths: []string{"tracked.txt"}, SelectedTargets: []store.ReleaseTargetSelection{selection},
 		StatusFingerprint: pf.StatusFingerprint, ExternalActionsConfirmed: true,

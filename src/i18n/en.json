@@ -651,5 +651,21 @@
   "先保存本地提交，再上传": "Save the local commit, then upload",
   "正在根据代码变更生成简短说明…": "Generating brief notes from code changes…",
   "已根据代码变更生成初稿，可直接修改": "Drafted from code changes. You can edit these notes.",
-  "文件、构建端或版本已变化。你修改过的说明已保留，可直接修改或重新生成。": "Files, targets, or versions have changed. Your edited notes have been preserved; edit them or regenerate."
+  "文件、构建端或版本已变化。你修改过的说明已保留，可直接修改或重新生成。": "Files, targets, or versions have changed. Your edited notes have been preserved; edit them or regenerate.",
+  "构建位置": "Build location",
+  "按项目记住选择": "Remembered for this project",
+  "GitHub 云端构建": "GitHub cloud build",
+  "本地构建": "Local build",
+  "默认 · 上传代码和版本，由 GitHub 构建和打包": "Default · Upload code and versions for GitHub to build and package",
+  "在本机生成产物，不上传或部署": "Generate artifacts on this computer without uploading or deploying",
+  "云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。": "Cloud mode does not build locally. Configure a missing workflow or switch to local build.",
+  "本地模式只执行检查、构建和打包，需要本机已安装项目依赖。": "Local mode runs checks, builds, and packaging. Project dependencies must be installed locally.",
+  "未配置 GitHub 云端构建，请配置工作流或切换本地构建": "No GitHub cloud build configured. Configure a workflow or switch to local build.",
+  "未配置本地构建步骤": "No local build steps configured",
+  "此命令只在本地模式执行": "This command only runs in local mode",
+  "各平台版本独立管理": "Versions are managed separately for each platform",
+  "{0}：未创建 Tag": "{0}: no tag created",
+  "所选平台 Tag：{0}": "Selected platform tags: {0}",
+  "Tag 是版本记录，不代表云端构建已完成": "A tag records a version; it does not confirm a completed cloud build",
+  "仓库通用 Tag（不含平台 Tag）": "General repository tag (excluding platform tags)"
 }

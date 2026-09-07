@@ -340,6 +340,10 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	}
 	plan.RemoteURL = pf.RemoteURL
 	plan.PushRemote = &pushRemote
+	if err := validateBuildMode(req.BuildMode, plan, pushRemote); err != nil {
+		return nil, err
+	}
+	plan.BuildMode = req.BuildMode
 	if plan.requiresTagPush() && !createTag {
 		return nil, &Error{Code: "cloud_tag_required", Message: "所选云端构建由 Tag 触发，请开启“创建版本 Tag”"}
 	}
@@ -654,7 +658,7 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		fail("checking", "git_status_failed", "无法记录发布前检查的仓库状态")
 		return
 	}
-	if strings.TrimSpace(checkCommand) != "" {
+	if plan.BuildMode != "github" && strings.TrimSpace(checkCommand) != "" {
 		checkCtx, cancel := commandContext(ctx, 10*time.Minute)
 		out, checkErr := runCheckCommand(checkCtx, s.runner, run.RepoRoot, checkCommand)
 		cancel()
@@ -1148,6 +1152,12 @@ func requiresExternalActionsConfirmation(values []store.ReleaseTargetSelection) 
 }
 
 func (s *Service) SaveProfile(p *store.ReleaseProfile) error {
+	if p.BuildMode == "" {
+		p.BuildMode = "github"
+	}
+	if p.BuildMode != "github" && p.BuildMode != "local" {
+		return &Error{Code: "invalid_build_mode", Message: "请选择 GitHub 云端构建或本地构建"}
+	}
 	if p.RemoteName == "" {
 		p.RemoteName = "origin"
 	}

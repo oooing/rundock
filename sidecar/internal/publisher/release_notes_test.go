@@ -96,7 +96,7 @@ func TestDraftReleaseNotesIsDeterministicAndRejectsStaleStatus(t *testing.T) {
 	}
 }
 
-func TestDraftReleaseNotesKeepsEmptySectionsWithoutSemanticCommits(t *testing.T) {
+func TestDraftReleaseNotesSummarizesUnknownChangesWithoutSemanticCommits(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
 	runGit(t, repo, "tag", "v1.0.0")
@@ -114,10 +114,8 @@ func TestDraftReleaseNotesKeepsEmptySectionsWithoutSemanticCommits(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, heading := range []string{"## 功能", "## 问题修复", "## 性能优化"} {
-		if !strings.Contains(draft.Text, heading) {
-			t.Fatalf("draft did not reserve %q: %s", heading, draft.Text)
-		}
+	if !strings.Contains(draft.Text, "- 调整应用内部功能实现") || strings.Contains(draft.Text, "## 问题修复") || strings.Contains(draft.Text, "## 性能优化") {
+		t.Fatalf("expected a conservative nonempty draft: %s", draft.Text)
 	}
 	for _, unwanted := range []string{"private-file-name.ts", "新增文件", "更新文件", "chore(release)", "777", "请补充"} {
 		if strings.Contains(draft.Text, unwanted) {
@@ -138,7 +136,7 @@ func TestReleaseNoteSubjectClassificationAndNoiseFiltering(t *testing.T) {
 		{subject: "解决问题：重复任务会被创建", category: releaseNoteFix, contains: "重复任务会被创建", ok: true},
 		{subject: "提升搜索性能并降低内存占用", category: releaseNotePerformance, contains: "提升搜索性能", ok: true},
 		{subject: "refactor: reorganize services", ok: false},
-		{subject: "优化页面排版", ok: false},
+		{subject: "优化页面排版", category: releaseNoteAdjustment, contains: "优化页面排版", ok: true},
 		{subject: "chore(release): v2.0.4", ok: false},
 		{subject: "v2.0.4", ok: false},
 		{subject: "888", ok: false},
@@ -163,12 +161,12 @@ func TestRenderReleaseNotesIsConcise(t *testing.T) {
 		releaseNotePerformance: {},
 	}
 	text := renderReleaseNotes("Web", categories)
-	if strings.Count(text, "\n- ") != 6 || !strings.Contains(text, "另有 2 项同类更新") || strings.Contains(text, "功能 6\n") {
+	if strings.Count(text, "\n- ") != 5 || strings.Contains(text, "功能 6\n") {
 		t.Fatalf("release notes are not concise: %s", text)
 	}
-	for _, heading := range []string{"## 功能", "## 问题修复", "## 性能优化"} {
-		if !strings.Contains(text, heading) {
-			t.Fatalf("release notes did not reserve %q: %s", heading, text)
+	for _, heading := range []string{"## 问题修复", "## 性能优化"} {
+		if strings.Contains(text, heading) {
+			t.Fatalf("release notes contain empty category %q: %s", heading, text)
 		}
 	}
 }

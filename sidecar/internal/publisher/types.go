@@ -99,11 +99,13 @@ type RetryRequest struct {
 }
 
 type RunView struct {
-	Run        *store.ReleaseRun         `json:"run"`
-	Targets    []*store.ReleaseTargetRun `json:"targets"`
-	Artifacts  []*store.ReleaseArtifact  `json:"artifacts"`
-	Logs       []*store.ReleaseLog       `json:"logs"`
-	Automation *AutomationHandoff        `json:"automation,omitempty"`
+	Run                       *store.ReleaseRun         `json:"run"`
+	Targets                   []*store.ReleaseTargetRun `json:"targets"`
+	Artifacts                 []*store.ReleaseArtifact  `json:"artifacts"`
+	Logs                      []*store.ReleaseLog       `json:"logs"`
+	Automation                *AutomationHandoff        `json:"automation,omitempty"`
+	RetryConfirmationRequired bool                      `json:"retryConfirmationRequired"`
+	RetryConfirmationTargets  []string                  `json:"retryConfirmationTargets,omitempty"`
 }
 
 type AutomationHandoff struct {

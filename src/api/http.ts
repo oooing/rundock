@@ -124,8 +124,8 @@ export const api = {
   openDir: (id: string) => req<{ opened: string }>(`/api/apps/${id}/open-dir`, { method: 'POST' }),
 
   // Git 版本发布
-  releasePreflight: (id: string, checkRemote = true) =>
-    req<ReleasePreflight>(`/api/apps/${id}/release/preflight${checkRemote ? '' : '?remote=false'}`, { method: 'POST' }),
+  releasePreflight: (id: string, checkRemote = false) =>
+    req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, { method: 'POST' }),
   createReleaseNotesDraft: (id: string, body: ReleaseNotesDraftRequest) =>
     req<ReleaseNotesDraft>(`/api/apps/${id}/release/notes-draft`, { method: 'POST', body: JSON.stringify(body) }),
   getReleaseProfile: (id: string) => req<ReleaseProfile>(`/api/apps/${id}/release-profile`),

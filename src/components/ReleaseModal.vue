@@ -46,7 +46,6 @@ const phaseOptions = computed<Array<{ key: ExecutionPhase; label: string; hint: 
 ]))
 
 const loading = ref(true)
-const checkingRemote = ref(false)
 const savingProfile = ref(false)
 const publishing = ref(false)
 const error = ref('')
@@ -95,6 +94,10 @@ const logs = ref<ReleaseLog[]>([])
 const runTargets = ref<ReleaseTargetRun[]>([])
 const runArtifacts = ref<ReleaseArtifact[]>([])
 const runAutomation = ref<ReleaseAutomationStatus | null>(null)
+const retrying = ref(false)
+const retryMetadataLoaded = ref(false)
+const retryConfirmationRequired = ref<boolean | undefined>()
+const retryConfirmationTargets = ref<string[]>([])
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let preferenceTimer: ReturnType<typeof setTimeout> | null = null
 let releaseNotesTimer: ReturnType<typeof setTimeout> | null = null
@@ -243,7 +246,7 @@ const releaseContentHint = computed(() => newContentState.value === 'none'
   : newContentState.value === 'unknown' && preflight.value && !loading.value
     ? tr('无法确认版本后的改动，请刷新发布检查；旧版后端需先更新') : '')
 const blockingIssues = computed(() => (preflight.value?.blockingIssues || []).filter(issue => {
-  if (issue.code === 'remote_missing' && !pushRemote.value) return false
+  if (!pushRemote.value && (issue.code.startsWith('remote_') || ['fetch_failed', 'branch_behind'].includes(issue.code))) return false
   if (gitOnly.value && !createTag.value && ['release_config_invalid', 'version_file_invalid', 'version_file_ignored', 'diagnostics_version_file_untracked'].includes(issue.code)) return false
   return true
 }))
@@ -252,21 +255,34 @@ const localChecksPassed = computed(() => !!preflight.value && !blockingIssues.va
 const remoteMissing = computed(() => pushRemote.value && !!preflight.value && !preflight.value.remotes.includes(remoteName.value))
 const canPublish = computed(() => {
   if (!localChecksPassed.value || remoteMissing.value || savingProfile.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
-  if (createTag.value && (!versionValid.value || releaseNotesLoading.value || !releaseNotes.value.trim())) return false
+  if (createTag.value && (!versionValid.value || releaseNotesLoading.value || (releaseNotesStale.value && !releaseNotesDirty.value) || !releaseNotes.value.trim())) return false
   if (newContentState.value !== 'new') return false
   return targetSelectionValid.value
 })
 function canRetryRun(run: ReleaseRun | null | undefined) {
   return !!run && run.status === 'failed' && !!run.commitSha && run.errorCode !== 'build_changed_tree' && [
     'tagging', 'pushing_branch', 'pushing_tag', 'building_targets', 'publishing_targets',
-    'target_build', 'target_package', 'target_publish', 'target_deploy',
+    'target_check', 'target_build', 'target_package', 'target_publish', 'target_deploy',
   ].includes(run.stage)
 }
 const retryable = computed(() => canRetryRun(activeRun.value))
-const externalRetryRisk = computed(() => !!activeRun.value && (
-  activeRun.value.pushRemote
-  || activeRun.value.selectedTargets.some((target) => target.publish || target.deploy)
-))
+const customRetryConfirmation = computed(() => retryConfirmationRequired.value ?? (!!activeRun.value
+  && ['publishing_targets', 'target_publish', 'target_deploy'].includes(activeRun.value.stage)))
+const retryUpload = computed(() => !!activeRun.value?.pushRemote
+  && ['pushing_branch', 'pushing_tag'].includes(activeRun.value.stage))
+const uploadPaused = computed(() => retryUpload.value && activeRun.value?.status === 'failed' && !!activeRun.value.commitSha)
+const runFailureSummary = computed(() => activeRun.value?.errorMessage?.split('\n')[0] || '')
+const runFailureDetails = computed(() => activeRun.value?.errorMessage?.split('\n').slice(1).join('\n').trim() || '')
+const retryButtonLabel = computed(() => retrying.value ? tr('正在重试…')
+  : retryUpload.value ? tr('重试上传')
+    : activeRun.value?.stage === 'target_deploy' ? tr('重试部署')
+      : ['building_targets', 'target_check', 'target_build', 'target_package'].includes(activeRun.value?.stage || '') ? tr('重试构建')
+        : tr('继续发布'))
+const retryGuidance = computed(() => retryUpload.value
+  ? tr('本地提交和版本已保留。重试时会自动检查上传结果，跳过已上传的内容，继续未完成的步骤。')
+  : tr('使用本次发布记录继续处理未完成的步骤。'))
+const retryTargetNames = computed(() => retryConfirmationTargets.value.length
+  ? retryConfirmationTargets.value.join('、') : tr('本次选择的发布目标'))
 const hasOnlineAction = computed(() => selectedTargets.value.some((target) => target.publish || target.deploy))
 const hasExternalAction = computed(() => hasOnlineAction.value || willTriggerAutomation.value)
 const remoteDestination = computed(() => /github\.com/i.test(preflight.value?.remoteUrl || '') ? 'GitHub' : tr("远程仓库"))
@@ -313,13 +329,13 @@ const completionDescription = computed(() => {
 })
 const confirmDialogTitle = computed(() => {
   if (confirmAction.value === 'regenerate-notes') return tr("重新生成更新说明？")
-  return tr("确认重试远端操作？")
+  return tr('重新执行发布或部署命令？')
 })
 const confirmDialogMessage = computed(() => {
   if (confirmAction.value === 'regenerate-notes') return tr("重新生成会覆盖你手动修改的内容。")
-  return tr("请先确认远端没有成功；继续可能造成重复上传或重复上线。")
+  return tr('这会重新执行“{0}”的发布或部署命令，可能再次更新线上服务。程序无法自动判断自定义命令上次是否已完成。', [retryTargetNames.value])
 })
-const confirmDialogButton = computed(() => confirmAction.value === 'regenerate-notes' ? tr("覆盖并生成") : tr("继续重试"))
+const confirmDialogButton = computed(() => confirmAction.value === 'regenerate-notes' ? tr("覆盖并生成") : tr('重新执行'))
 const configConfidence = computed(() => Math.round((releaseConfig.value?.confidence || 0) * 100))
 const standardPlatforms = computed<Array<{ id: Exclude<ProductPlatformId, `custom:${string}`>; name: string; icon: string; description: string }>>(() => ([
   { id: 'web', name: tr("Web 前端"), icon: '🌐', description: tr("网页界面") },
@@ -751,16 +767,16 @@ function syncVersionInputs() {
 }
 
 function scheduleReleaseNotesDraft(delay = 80) {
-  if (!createTag.value || !preflight.value || releaseNotes.value || releaseNotesDirty.value || disposed) return
+  if (!createTag.value || !preflight.value || releaseNotesDirty.value || activeRun.value || disposed) return
   if (releaseNotesTimer) clearTimeout(releaseNotesTimer)
-  releaseNotesTimer = setTimeout(() => void generateReleaseNotesDraft(), delay)
+  releaseNotesTimer = setTimeout(() => { releaseNotesTimer = null; void generateReleaseNotesDraft() }, delay)
 }
 
 async function generateReleaseNotesDraft(force = false, overwriteConfirmed = false) {
   const pf = preflight.value
   if (!pf || !createTag.value || releaseNotesLoading.value) return
   // A scheduled draft may start after the user has begun typing.
-  if (!force && (releaseNotes.value || releaseNotesDirty.value)) return
+  if (!force && releaseNotesDirty.value) return
   if (force && releaseNotesDirty.value && !overwriteConfirmed) {
     confirmAction.value = 'regenerate-notes'
     return
@@ -779,7 +795,6 @@ async function generateReleaseNotesDraft(force = false, overwriteConfirmed = fal
     if (disposed || requestId !== releaseNotesRequest) return
     if (sourceSignature !== releaseNotesOptionsSignature.value) {
       releaseNotesStale.value = true
-      scheduleReleaseNotesDraft(120)
       return
     }
     releaseNotes.value = draft.text
@@ -791,7 +806,10 @@ async function generateReleaseNotesDraft(force = false, overwriteConfirmed = fal
   } catch (reason) {
     if (requestId === releaseNotesRequest) releaseNotesError.value = messageOf(reason)
   } finally {
-    if (requestId === releaseNotesRequest) releaseNotesLoading.value = false
+    if (requestId === releaseNotesRequest) {
+      releaseNotesLoading.value = false
+      if (sourceSignature !== releaseNotesOptionsSignature.value) scheduleReleaseNotesDraft(120)
+    }
   }
 }
 
@@ -828,7 +846,6 @@ function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = tru
 
 async function load(resumeFailedRun = true) {
   loading.value = true
-  checkingRemote.value = false
   error.value = ''
   errorCode.value = ''
   versionPlanNotice.value = ''
@@ -1038,7 +1055,6 @@ async function publish() {
   versionPlanNotice.value = ''
   try {
     await api.saveReleaseProfile(props.app.id, profileBody())
-    checkingRemote.value = pushRemote.value
     rememberReleaseSession({ appId: props.app.id, submittedAt: Date.now() })
     const run = await api.createRelease(props.app.id, {
       targetVersion: createTag.value ? primaryTargetVersion.value : '',
@@ -1065,7 +1081,16 @@ async function publish() {
     await nextTick()
     bodyRef.value?.scrollTo({ top: 0 })
   }
-  finally { publishing.value = false; checkingRemote.value = false }
+  finally { publishing.value = false }
+}
+
+function prepareLocalCommit() {
+  // Change the visible plan only. The normal submit button remains the final action.
+  gitOnly.value = true
+  createTag.value = false
+  pushRemote.value = false
+  if (errorCode.value.startsWith('remote_') || errorCode.value === 'fetch_failed') { error.value = ''; errorCode.value = '' }
+  if (!commitMessageDirty.value) setDefaultCommitMessage()
 }
 
 function releaseErrorMessage(reason: unknown) {
@@ -1092,6 +1117,9 @@ function showRun(run: ReleaseRun) {
   runTargets.value = []
   runArtifacts.value = []
   runAutomation.value = null
+  retryMetadataLoaded.value = false
+  retryConfirmationRequired.value = undefined
+  retryConfirmationTargets.value = []
   error.value = ''
   rememberReleaseSession({ appId: props.app.id, runId: run.id })
   schedulePoll(0)
@@ -1118,6 +1146,9 @@ async function poll() {
     runTargets.value = view.targets || []
     runArtifacts.value = view.artifacts || []
     runAutomation.value = view.automation || null
+    retryConfirmationRequired.value = view.retryConfirmationRequired
+    retryConfirmationTargets.value = view.retryConfirmationTargets || []
+    retryMetadataLoaded.value = true
     logs.value = [...logs.value, ...(view.logs || [])]
     if (view.run.status === 'queued' || view.run.status === 'running') schedulePoll()
     else history.value = await api.listReleases(props.app.id)
@@ -1128,14 +1159,28 @@ async function poll() {
   }
 }
 async function retry(externalActionsConfirmed = false) {
-  if (!activeRun.value || !retryable.value) return
-  if (externalRetryRisk.value && !externalActionsConfirmed) {
+  if (!activeRun.value || !retryable.value || retrying.value || !retryMetadataLoaded.value) return
+  if (customRetryConfirmation.value && !externalActionsConfirmed) {
     confirmAction.value = 'retry'
     return
   }
+  const runId = activeRun.value.id
+  retrying.value = true
   error.value = ''
-  try { activeRun.value = await api.retryRelease(activeRun.value.id, externalRetryRisk.value && externalActionsConfirmed); schedulePoll(0) }
-  catch (reason) { error.value = messageOf(reason) }
+  try {
+    // Clicking retry authorizes resuming this same upload. Older sidecars also
+    // require the flag for Git uploads; custom commands retain explicit consent.
+    const run = await api.retryRelease(runId, !customRetryConfirmation.value || externalActionsConfirmed)
+    if (!disposed && activeRun.value?.id === runId) { activeRun.value = run; schedulePoll(0) }
+  } catch (reason) {
+    if (!disposed && activeRun.value?.id === runId) {
+      error.value = releaseErrorMessage(reason)
+      if (reason instanceof ApiError && reason.code === 'external_actions_confirmation_required') {
+        retryConfirmationRequired.value = true
+        schedulePoll(0)
+      }
+    }
+  } finally { retrying.value = false }
 }
 async function confirmSensitiveAction() {
   const action = confirmAction.value
@@ -1152,6 +1197,9 @@ function startNew() {
   runTargets.value = []
   runArtifacts.value = []
   runAutomation.value = null
+  retryMetadataLoaded.value = false
+  retryConfirmationRequired.value = undefined
+  retryConfirmationTargets.value = []
   releaseNotes.value = ''
   releaseNotesDirty.value = false
   releaseNotesStale.value = false
@@ -1172,8 +1220,10 @@ watch([() => activeRun.value?.id, () => activeRun.value?.status], async () => {
 watch(releaseNotesOptionsSignature, (signature) => {
   if (!createTag.value) return
   if (releaseNotesGeneratedFor.value && signature === releaseNotesGeneratedFor.value) releaseNotesStale.value = false
-  else if (releaseNotesGeneratedFor.value) releaseNotesStale.value = true
-  else if (!releaseNotes.value && !releaseNotesDirty.value) scheduleReleaseNotesDraft()
+  else {
+    releaseNotesStale.value = !!releaseNotesGeneratedFor.value
+    if (!releaseNotesDirty.value) scheduleReleaseNotesDraft()
+  }
 })
 watch(plannedTagNames, (tags) => {
   if (profileReady.value && createTag.value && versionMode.value === 'auto' && tags.length) {
@@ -1220,16 +1270,18 @@ onBeforeUnmount(() => {
                 <a v-if="automationPageUrl" class="actions-link" :href="automationPageUrl" target="_blank" rel="noreferrer">{{ tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></a>
               </template>
             </section>
-            <div v-else-if="cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
+            <div v-else-if="activeRun.status !== 'failed' && cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
             <div class="progress-title"><strong>{{ activeRun.createTag === false ? tr("代码更新") : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</strong><span v-if="activeRun.status !== 'succeeded'" class="status" :class="activeRun.status">{{ activeRunStatusLabel }}</span></div>
             <div v-if="activeRun.status !== 'succeeded'" class="current-stage">{{ activeStageLabel }}</div>
             <div v-if="runTargets.length" class="run-targets"><div v-for="target in runTargets" :key="target.targetId" class="run-target"><strong>{{ configuredTargets.find((item) => item.id === target.targetId)?.name || target.targetId }}</strong><span>{{ targetStageLabel[target.stage] || stageLabel[target.stage] || tr("等待执行") }}</span><em :class="target.status">{{ target.status === 'succeeded' ? tr("完成") : target.status === 'failed' ? tr("失败") : target.status === 'running' ? tr("执行中") : ['triggered', 'remote_pending', 'handed_off'].includes(target.status) ? tr("已交接") : tr("等待") }}</em></div></div>
             <details class="execution-details" :open="activeRun.status !== 'succeeded'"><summary>{{ tr("执行日志") }}</summary><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">{{ tr("等待发布日志…") }}</div></div></details>
             <details v-if="runArtifacts.length" class="artifacts"><summary>{{ tr('已生成产物（{0}）', [runArtifacts.length]) }}</summary><div v-for="artifact in runArtifacts" :key="`${artifact.targetId}-${artifact.path}`" class="artifact-row"><code>{{ artifact.path }}</code><span>{{ Math.max(1, Math.round(artifact.sizeBytes / 1024)) }} KB</span><code>{{ artifact.sha256.slice(0, 12) }}</code></div></details>
-            <div v-if="activeRun.errorMessage" class="alert error">{{ tr(activeRun.errorMessage) }}</div>
-            <div v-if="activeRun.status === 'failed' && externalRetryRisk" class="alert warn">{{ tr("上传或部署的远端结果可能已经生效。重试前请先检查目标平台，避免重复上传或重复上线。") }}</div>
+            <div v-if="runFailureSummary" class="alert error">{{ tr(runFailureSummary) }}</div>
+            <details v-if="runFailureDetails" class="execution-details"><summary>{{ tr('查看技术详情') }}</summary><pre class="log-box">{{ runFailureDetails }}</pre></details>
+            <div v-if="retryable && !customRetryConfirmation" class="alert info" role="note">{{ retryGuidance }}</div>
             <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
-            <div class="button-row"><button v-if="retryable" class="primary" @click="retry()">{{ externalRetryRisk ? tr("确认远端未成功后重试") : tr("从失败阶段重试") }}</button><button v-if="activeRun.status === 'succeeded' || activeRun.status === 'failed'" @click="startNew">{{ tr("返回发布检查") }}</button></div>
+            <div class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'succeeded' || activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
+            <p v-if="uploadPaused" class="muted">{{ tr('关闭后会保留本次记录，下次打开“发布”可以继续上传。') }}</p>
           </section>
         </template>
 
@@ -1238,7 +1290,7 @@ onBeforeUnmount(() => {
             <span class="ready-dot"></span>
             <strong>{{ preflight.branch || tr("未绑定分支") }}</strong>
             <span>{{ preflight.latestTag ? (preflight.remoteChecked ? tr("最新 Tag：{0}", [preflight.latestTag]) : tr("本地 Tag：{0}", [preflight.latestTag])) : tr("暂无 Tag") }}</span>
-            <span class="repo-glance-status" :title="localChecksPassed ? tr('已检查本地 Git 状态；需要上传时，将在确认后检查远端。') : tr('请按下方提示处理仓库问题')">{{ localChecksPassed ? tr("本地检查通过") : tr("本地仓库需要处理") }}</span>
+            <span class="repo-glance-status" :title="localChecksPassed ? tr('已检查本地 Git 状态；上传时由 Git 拒绝冲突，不提前查询远端。') : tr('请按下方提示处理仓库问题')">{{ localChecksPassed ? tr("本地检查通过") : tr("本地仓库需要处理") }}</span>
           </section>
           <section v-else class="repo-glance checking"><span class="ready-dot"></span><strong>{{ tr("正在读取本地仓库…") }}</strong><span class="repo-glance-status">{{ tr("构建端可以先选择") }}</span></section>
           <section v-if="blockingIssues.length" class="issues"><div v-for="issue in blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
@@ -1401,12 +1453,12 @@ onBeforeUnmount(() => {
               @input="onReleaseNotesInput"
             ></textarea>
             <div class="release-notes-meta">
-              <span v-if="releaseNotesLoading">{{ tr("正在根据提交记录生成初稿…") }}</span>
+              <span v-if="releaseNotesLoading">{{ tr("正在根据代码变更生成简短说明…") }}</span>
               <span v-else-if="releaseNotesDirty">{{ tr("已人工修改") }}</span>
-              <span v-else-if="releaseNotes">{{ tr("已预留功能、修复和性能分类，可直接发布或修改") }}</span>
+              <span v-else-if="releaseNotes">{{ tr("已根据代码变更生成初稿，可直接修改") }}</span>
               <span v-if="releaseNotesBaseTag" :title="tr('基于 {0} 之后的变更生成', [releaseNotesBaseTag])">{{ tr("基于") }} {{ releaseNotesBaseTag }}</span>
             </div>
-            <div v-if="releaseNotesStale" class="alert warn release-notes-alert">{{ tr("文件、构建端或版本已变化。现有内容不会被覆盖，可直接修改或重新生成。") }}</div>
+            <div v-if="releaseNotesStale && releaseNotesDirty" class="alert warn release-notes-alert">{{ tr("文件、构建端或版本已变化。你修改过的说明已保留，可直接修改或重新生成。") }}</div>
             <div v-if="releaseNotesError" class="alert error release-notes-alert">{{ tr("生成失败：") }}{{ releaseNotesError }} <button type="button" @click="generateReleaseNotesDraft(true)">{{ tr("重试") }}</button></div>
             <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">{{ tr("创建 Tag 前请填写更新说明。") }}</div>
           </section>
@@ -1432,16 +1484,17 @@ onBeforeUnmount(() => {
       <footer v-if="preflight && !activeRun" class="m-foot" :inert="publishing">
         <span v-if="releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
+        <button v-if="pushRemote || !gitOnly || createTag" :disabled="publishing" @click="prepareLocalCommit">{{ tr('仅提交到本机') }}</button>
         <div class="publish-control">
           <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
             <input v-model="pushRemote" type="checkbox" :disabled="publishing" />
-            <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('确认后检查远端并上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
+            <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
           </label>
-          <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ checkingRemote ? tr("正在检查远端…") : publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
+          <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
       </footer>
       <datalist id="target-kinds"><option value="desktop" /><option value="web" /><option value="android" /><option value="server" /><option value="custom" /></datalist><datalist id="runner-types"><option value="local" /><option value="git-push" /></datalist><datalist id="version-formats"><option value="json" /><option value="npm-lock" /><option value="cargo" /><option value="cargo-lock" /><option value="toml" /><option value="gradle" /></datalist>
-      <div v-if="publishing" class="submitting-lock" role="status"><div class="submitting-message"><span class="submitting-spinner"></span><strong>{{ checkingRemote ? tr('正在检查远端并准备发布…') : tr('正在准备本地操作…') }}</strong><p v-if="cloudExecutionNotice">{{ cloudExecutionNotice.text }}</p></div></div>
+      <div v-if="publishing" class="submitting-lock" role="status"><div class="submitting-message"><span class="submitting-spinner"></span><strong>{{ tr('正在准备本地操作…') }}</strong><p v-if="cloudExecutionNotice">{{ cloudExecutionNotice.text }}</p></div></div>
     </div>
     <div v-if="confirmAction" class="action-confirm-overlay" role="dialog" aria-modal="true" :aria-label="confirmDialogTitle" @click.self="confirmAction = null">
       <section class="action-confirm">

@@ -118,9 +118,23 @@ func TestReleaseProfileHistoryAndExportAPI(t *testing.T) {
 	retryExternal := &store.ReleaseRun{ID: "retry-external", AppID: "app1", RepoRoot: `C:\demo`, Branch: "main", RemoteName: "upstream",
 		CreateTag: false, Status: "failed", Stage: "target_deploy", CommitSHA: "abc", ErrorCode: "target_step_failed",
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Deploy: true}},
-		ExecutionPlan:   json.RawMessage(`{"schemaVersion":1,"pushRemote":false,"versionGroups":[],"targets":[{"id":"web","selection":{"targetId":"web","deploy":true}}]}`)}
+		ExecutionPlan:   json.RawMessage(`{"schemaVersion":1,"pushRemote":false,"versionGroups":[],"targets":[{"id":"web","name":"Web","runner":{"type":"local"},"steps":{"deploy":"deploy-web"},"selection":{"targetId":"web","deploy":true}}]}`)}
 	if err := st.CreateReleaseRun(retryExternal); err != nil {
 		t.Fatal(err)
+	}
+	if err := st.CreateReleaseTargetRuns(retryExternal.ID, retryExternal.SelectedTargets); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateReleaseTargetRun(retryExternal.ID, "web", "failed", "deploy", "target_step_failed", "deploy failed", true, true); err != nil {
+		t.Fatal(err)
+	}
+	res = requestAPI(t, router, http.MethodGet, "/api/releases/retry-external", nil)
+	var retryView struct {
+		Required bool     `json:"retryConfirmationRequired"`
+		Targets  []string `json:"retryConfirmationTargets"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &retryView); err != nil || !retryView.Required || len(retryView.Targets) != 1 || retryView.Targets[0] != "Web：部署" {
+		t.Fatalf("custom retry wire contract: %s, err=%v", res.Body.String(), err)
 	}
 	res = requestAPI(t, router, http.MethodPost, "/api/releases/retry-external/retry", []byte(`{}`))
 	if res.Code != http.StatusBadRequest || !bytes.Contains(res.Body.Bytes(), []byte(`"code":"external_actions_confirmation_required"`)) {

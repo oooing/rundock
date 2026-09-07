@@ -38,10 +38,10 @@ func (s *Server) handleReleasePreflight(w http.ResponseWriter, r *http.Request, 
 	started := time.Now()
 	var pf *publisher.Preflight
 	var err error
-	if r.URL.Query().Get("remote") == "false" {
-		pf, err = s.Publisher.PreflightLocal(r.Context(), appID)
-	} else {
+	if r.URL.Query().Get("remote") == "true" {
 		pf, err = s.Publisher.Preflight(r.Context(), appID)
+	} else {
+		pf, err = s.Publisher.PreflightLocal(r.Context(), appID)
 	}
 	if err != nil {
 		s.recordPublisherFailure(appID, "release.preflight", err, time.Since(started))

@@ -297,9 +297,14 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 		pushRemote = *req.PushRemote
 	}
 	checkConfig := createTag || len(req.SelectedTargets) > 0
-	pf, err := s.preflight(ctx, appID, pushRemote, createTag, checkConfig)
+	// Preparing a release is local-only. Normal (non-force) pushes enforce
+	// branch and tag conflicts when uploading, without a blocking fetch/query.
+	pf, err := s.preflight(ctx, appID, false, createTag, checkConfig)
 	if err != nil {
 		return nil, err
+	}
+	if pushRemote && !contains(pf.Remotes, pf.RemoteName) {
+		return nil, &Error{Code: "remote_missing", Message: "尚未配置上传位置。可以选择“仅提交到本机”先保存代码"}
 	}
 	if !pf.CanRelease {
 		issue := pf.BlockingIssues[0]
@@ -746,7 +751,7 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		out, err := s.git(pushCtx, run.RepoRoot, "push", run.RemoteName, run.CommitSHA+":refs/heads/"+run.Branch)
 		cancelPush()
 		if err != nil {
-			fail("pushing_branch", "push_branch_failed", redact(out))
+			fail("pushing_branch", "push_branch_failed", uploadFailureMessage(out, err))
 			return
 		}
 		if run.CreateTag {
@@ -764,7 +769,7 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 				out, err = s.git(pushTagCtx, run.RepoRoot, "push", run.RemoteName, "refs/tags/"+version.TagName)
 				cancelTag()
 				if err != nil {
-					fail("pushing_tag", "push_tag_failed", redact(out))
+					fail("pushing_tag", "push_tag_failed", uploadFailureMessage(out, err))
 					return
 				}
 			}
@@ -819,13 +824,17 @@ func (s *Service) Retry(runID string, requests ...RetryRequest) (*store.ReleaseR
 	if planErr != nil || (strings.HasPrefix(run.Stage, "target_") && len(plan.Targets) == 0) {
 		return nil, &Error{Code: "execution_plan_invalid", Message: "冻结的发布执行计划无法用于重试"}
 	}
-	if run.CreateTag && (preTargetRetryStage(run.Stage) || run.Stage == "tagging" || run.Stage == "pushing_branch" || run.Stage == "pushing_tag") {
+	if run.CreateTag && (preTargetRetryStage(run.Stage) || run.Stage == "tagging" || retryNeedsGitUpload(run, plan)) {
 		if err := validateFrozenTagPlan(plan); err != nil {
 			return nil, err
 		}
 	}
-	if (run.PushRemote || requiresExternalActionsConfirmation(run.SelectedTargets)) && !confirmed {
-		return nil, &Error{Code: "external_actions_confirmation_required", Message: "重试会再次操作远程仓库或发布目标，请确认远端状态后继续"}
+	states, err := s.store.ReleaseTargetRuns(run.ID)
+	if err != nil {
+		return nil, err
+	}
+	if targets := retryCustomExternalTargets(run, plan, states); len(targets) > 0 && !confirmed {
+		return nil, &Error{Code: "external_actions_confirmation_required", Message: "重试将重新执行这些操作，可能再次更新线上服务：" + strings.Join(targets, "、")}
 	}
 	commitCtx, cancelCommit := commandContext(context.Background(), 10*time.Second)
 	commitErr := s.ensureFrozenCommit(commitCtx, run)
@@ -925,7 +934,8 @@ func (s *Service) retry(run *store.ReleaseRun) {
 			}
 		}
 	}
-	if run.CreateTag && run.PushRemote && originalStage == "pushing_branch" {
+	resumeGit := retryNeedsGitUpload(run, plan)
+	if run.CreateTag && resumeGit {
 		// Validate the frozen Tag before retrying any remote mutation. It is
 		// validated again immediately before the eventual Tag push.
 		for _, version := range releaseVersionsForRun(run, plan) {
@@ -939,21 +949,56 @@ func (s *Service) retry(run *store.ReleaseRun) {
 			}
 		}
 	}
-	pushBranch := run.PushRemote && (preTargets || originalStage == "tagging" || originalStage == "pushing_branch")
-	if pushBranch {
-		set("pushing_branch")
-		pushCtx, cancelPush := commandContext(ctx, releasePushTimeout)
-		out, err := s.git(pushCtx, run.RepoRoot, "push", run.RemoteName, run.CommitSHA+":refs/heads/"+run.Branch)
-		cancelPush()
-		if err != nil {
-			fail("pushing_branch", "push_branch_failed", redact(out))
+	remoteState := &retryRemoteState{uploadedTags: map[string]bool{}}
+	if resumeGit {
+		set(originalStage)
+		s.log(run.ID, "event", "正在自动核对上传结果，已上传的内容会跳过")
+		var checkErr error
+		remoteState, checkErr = s.inspectRetryRemote(ctx, run, plan)
+		if checkErr != nil {
+			if typed, ok := checkErr.(*Error); ok {
+				fail(originalStage, typed.Code, typed.Message)
+			} else {
+				fail(originalStage, "remote_check_failed", checkErr.Error())
+			}
 			return
 		}
+		if err := s.ensureFrozenCommit(ctx, run); err != nil {
+			fail(originalStage, "release_commit_changed", err.Error())
+			return
+		}
+		if run.CreateTag {
+			for _, version := range releaseVersionsForRun(run, plan) {
+				if err := s.ensureFrozenTag(ctx, run, plan, version, true); err != nil {
+					fail(originalStage, "tag_collision", err.Error())
+					return
+				}
+			}
+		}
 	}
-	pushTag := run.PushRemote && run.CreateTag && (pushBranch || originalStage == "pushing_tag")
+	pushBranch := resumeGit
+	if pushBranch {
+		set("pushing_branch")
+		if remoteState.branchUploaded {
+			s.log(run.ID, "event", "远端分支已包含本次提交，跳过重复上传")
+		} else {
+			pushCtx, cancelPush := commandContext(ctx, releasePushTimeout)
+			out, err := s.git(pushCtx, run.RepoRoot, "push", run.RemoteName, run.CommitSHA+":refs/heads/"+run.Branch)
+			cancelPush()
+			if err != nil {
+				fail("pushing_branch", "push_branch_failed", uploadFailureMessage(out, err))
+				return
+			}
+		}
+	}
+	pushTag := resumeGit && run.CreateTag
 	if pushTag {
 		set("pushing_tag")
 		for _, version := range releaseVersionsForRun(run, plan) {
+			if remoteState.uploadedTags[version.TagName] {
+				s.log(run.ID, "event", "版本 "+version.TagName+" 已上传且内容一致，跳过重复上传")
+				continue
+			}
 			if err := s.ensureFrozenTag(ctx, run, plan, version, true); err != nil {
 				if tagErr, ok := err.(*tagOperationError); ok {
 					fail("pushing_tag", tagErr.Code, tagErr.Message)
@@ -966,7 +1011,7 @@ func (s *Service) retry(run *store.ReleaseRun) {
 			out, err := s.git(pushTagCtx, run.RepoRoot, "push", run.RemoteName, "refs/tags/"+version.TagName)
 			cancelTag()
 			if err != nil {
-				fail("pushing_tag", "push_tag_failed", redact(out))
+				fail("pushing_tag", "push_tag_failed", uploadFailureMessage(out, err))
 				return
 			}
 		}
@@ -1142,7 +1187,9 @@ func (s *Service) GetRun(runID string, since int64) (*RunView, error) {
 		return nil, err
 	}
 	plan, _ := parseExecutionPlan(run.ExecutionPlan)
-	return &RunView{Run: run, Targets: targets, Artifacts: artifacts, Logs: logs, Automation: automationHandoffView(run, plan)}, nil
+	confirmationTargets := retryCustomExternalTargets(run, plan, targets)
+	return &RunView{Run: run, Targets: targets, Artifacts: artifacts, Logs: logs, Automation: automationHandoffView(run, plan),
+		RetryConfirmationRequired: len(confirmationTargets) > 0, RetryConfirmationTargets: confirmationTargets}, nil
 }
 
 func nonEmptyLines(raw string) []string {

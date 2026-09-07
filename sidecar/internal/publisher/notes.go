@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -79,6 +78,20 @@ func (s *Service) DraftReleaseNotes(ctx context.Context, appID string, req Notes
 		if ok {
 			categories[category] = appendUniqueFold(categories[category], line)
 		}
+	}
+	changeNotes, err := s.releaseChangeNotes(ctx, pf.RepoRoot, baseTags, paths)
+	if err != nil {
+		return nil, &Error{Code: "release_notes_failed", Message: "无法读取本次代码变更，请重新检查后再生成"}
+	}
+	hasCommitNotes := false
+	for _, items := range categories {
+		hasCommitNotes = hasCommitNotes || len(items) > 0
+	}
+	for _, item := range changeNotes {
+		if hasCommitNotes && (item == "调整内部实现与项目维护内容" || item == "本次未检测到代码变化" || item == "调整应用内部功能实现") {
+			continue
+		}
+		categories[releaseNoteAdjustment] = appendUniqueFold(categories[releaseNoteAdjustment], item)
 	}
 
 	targetNames := make([]string, 0, len(plan.Targets))
@@ -181,6 +194,8 @@ func releaseNoteFromSubject(subject string) (category, line string, ok bool) {
 			category = releaseNotePerformance
 		case startsWithAnyFold(line, "新增", "增加", "支持", "实现", "功能", "add ", "support ", "implement "):
 			category = releaseNoteFeature
+		case startsWithAnyFold(line, "优化", "调整", "改善", "改进", "improve ", "adjust "):
+			category = releaseNoteAdjustment
 		default:
 			return "", "", false
 		}
@@ -248,23 +263,25 @@ func renderReleaseNotes(scope string, categories map[string][]string) string {
 	out.WriteString("**发布范围：** ")
 	out.WriteString(scope)
 	out.WriteString("\n")
-	for _, category := range []string{releaseNoteFeature, releaseNoteFix, releaseNotePerformance} {
+	remaining := 5
+	for _, category := range []string{releaseNoteFeature, releaseNoteFix, releaseNotePerformance, releaseNoteAdjustment} {
 		items := categories[category]
+		if len(items) == 0 || remaining == 0 {
+			continue
+		}
 		out.WriteString("\n## ")
 		out.WriteString(category)
 		out.WriteString("\n")
 		limit := len(items)
-		if limit > 5 {
-			limit = 5
+		if limit > remaining {
+			limit = remaining
 		}
 		for _, item := range items[:limit] {
 			out.WriteString("- ")
 			out.WriteString(item)
 			out.WriteString("\n")
 		}
-		if len(items) > limit {
-			fmt.Fprintf(&out, "- 另有 %d 项同类更新\n", len(items)-limit)
-		}
+		remaining -= limit
 	}
 	return strings.TrimSpace(out.String())
 }

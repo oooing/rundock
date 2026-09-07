@@ -144,12 +144,12 @@ func TestPushingPlainCommitDoesNotCheckTags(t *testing.T) {
 	if completed := waitRelease(t, svc, run.ID); completed.Status != "succeeded" {
 		t.Fatalf("plain push failed: %+v", completed)
 	}
-	if runner.count("fetch") != 1 || runner.count("ls-remote") != 0 || runner.count("push") != 1 {
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 || runner.count("push") != 1 {
 		t.Fatalf("wrong network actions: %#v", runner.calls)
 	}
 }
 
-func TestRemoteVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
+func TestLocalVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
 	writeTestFile(t, filepath.Join(repo, "tracked.txt"), "keep pending\n")
@@ -157,8 +157,7 @@ func TestRemoteVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
-	runGit(t, remote, "tag", "v1.0.2", "main")
+	runGit(t, repo, "tag", "v1.0.2", "main")
 	head := runGit(t, repo, "rev-parse", "HEAD")
 	runner := &networkTraceRunner{}
 	svc.runner = runner
@@ -171,17 +170,14 @@ func TestRemoteVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 	if !ok || pe.Code != "version_plan_changed" || pe.Preflight == nil || pe.Preflight.SuggestedVersion != "1.0.3" {
 		t.Fatalf("version drift error: %#v", err)
 	}
-	if runGit(t, repo, "rev-parse", "HEAD") != head || strings.TrimSpace(runGit(t, repo, "tag", "--list")) != "" {
+	if runGit(t, repo, "rev-parse", "HEAD") != head || strings.TrimSpace(runGit(t, repo, "tag", "--list")) != "v1.0.2" {
 		t.Fatal("unconfirmed version changed repository")
 	}
 	if runs, _ := svc.store.ListReleaseRuns("app1", 10); len(runs) != 0 {
 		t.Fatalf("created run before confirmation: %+v", runs)
 	}
-	if runner.count("fetch") != 1 || runner.count("ls-remote") != 1 {
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 {
 		t.Fatalf("duplicate network check: %#v", runner.calls)
-	}
-	if len(runner.deadlines) != 2 || !runner.deadlines[0].Equal(runner.deadlines[1]) || time.Until(runner.deadlines[0]) > remotePreflightTimeout {
-		t.Fatalf("network commands do not share bounded budget: %+v", runner.deadlines)
 	}
 	req.TargetVersion = pe.Preflight.SuggestedVersion
 	run, err := svc.Start(context.Background(), "app1", req)
@@ -191,7 +187,7 @@ func TestRemoteVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 	if completed := waitRelease(t, svc, run.ID); completed.Status != "succeeded" || completed.TagName != "v1.0.3" {
 		t.Fatalf("confirmed version failed: %+v", completed)
 	}
-	if runner.count("fetch") != 2 || runner.count("ls-remote") != 2 {
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 {
 		t.Fatalf("extra per-version network check: %#v", runner.calls)
 	}
 }
@@ -293,7 +289,7 @@ func TestLocalPreflightShowsCachedUnpushedChanges(t *testing.T) {
 	}
 }
 
-func TestRemoteNamespacedVersionChangeKeepsRequestedGroupUnmodified(t *testing.T) {
+func TestLocalNamespacedVersionChangeKeepsRequestedGroupUnmodified(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
 	cfg := validExecutorConfig(validExecutorTarget())
@@ -310,8 +306,7 @@ func TestRemoteNamespacedVersionChangeKeepsRequestedGroupUnmodified(t *testing.T
 	if err != nil || !pf.CanRelease {
 		t.Fatalf("local preflight: %+v %v", pf, err)
 	}
-	remote := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
-	runGit(t, remote, "tag", "web/v1.0.2", "main")
+	runGit(t, repo, "tag", "web/v1.0.2", "main")
 	yes := true
 	_, err = svc.Start(context.Background(), "app1", CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto",
 		Versions:      []ReleaseVersionInput{{VersionGroupID: "product", TargetVersion: pf.SuggestedVersions["product"]}},

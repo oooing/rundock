@@ -11,8 +11,8 @@ import (
 )
 
 // One shared budget covers branch fetch and (only when creating tags) the tag
-// query. Start reuses these tags for collision checks instead of contacting the
-// remote a second time for every planned version.
+// query. Used for explicitly requested remote checks and retry reconciliation;
+// preparing a new release does not require this network round trip.
 const remotePreflightTimeout = 20 * time.Second
 
 func (s *Service) checkRemote(parent context.Context, pf *Preflight, checkTags bool) {
@@ -122,4 +122,24 @@ func containsAny(value string, candidates ...string) bool {
 		}
 	}
 	return false
+}
+
+func uploadFailureMessage(output string, err error) string {
+	issue := remoteFailure(context.Background(), "上传", output, err)
+	lower := strings.ToLower(output)
+	message := "上传未完成。本地提交和版本记录已保留，可以重试上传，也可以稍后再上传。"
+	switch {
+	case containsAny(lower, "already exists", "would clobber existing tag"):
+		message = "这个版本号在远端已存在，没有覆盖它。本地提交已保留；请返回发布页面，换一个新版本号再发布。"
+	case containsAny(lower, "non-fast-forward", "fetch first", "stale info"):
+		message = "远端有尚未同步的代码，没有覆盖它。本地提交已保留；请用 Git 工具拉取并合并远端更新，再重新发布。"
+	case issue.Code == "remote_auth_failed":
+		message = "上传账号没有通过验证。本地提交和版本记录已保留；请在 Git 工具中登录有仓库权限的账号，再重试上传。"
+	case issue.Code == "remote_network_failed" || issue.Code == "remote_timeout":
+		message = "连接上传服务器失败。本地提交和版本记录已保留；网络恢复后点击“重试上传”，或选择“稍后再上传”退出。"
+	}
+	if detail := strings.SplitN(issue.Message, "\n", 2); len(detail) == 2 {
+		message += "\n" + detail[1]
+	}
+	return message
 }

@@ -503,6 +503,10 @@ func TestReleaseRetryAfterDeployFailureDoesNotRepeatPublish(t *testing.T) {
 	if err != nil || len(states) != 1 || !states[0].PublishDone || states[0].DeployDone {
 		t.Fatalf("failed target state = %#v, err=%v", states, err)
 	}
+	view, viewErr := svc.GetRun(run.ID, 0)
+	if viewErr != nil || !view.RetryConfirmationRequired || len(view.RetryConfirmationTargets) != 1 || !strings.Contains(view.RetryConfirmationTargets[0], "部署") || strings.Contains(view.RetryConfirmationTargets[0], "发布") {
+		t.Fatalf("custom deployment retry explanation = %+v, error=%v", view, viewErr)
+	}
 
 	runner.Reset()
 	if _, err := svc.Retry(run.ID); err == nil {

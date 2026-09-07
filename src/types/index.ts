@@ -424,6 +424,9 @@ export interface ReleaseAutomationStatus {
 }
 
 export interface ReleaseRunView {
+  /** 根据冻结计划及已完成步骤判断是否会重复执行自定义外部命令。 */
+  retryConfirmationRequired?: boolean
+  retryConfirmationTargets?: string[]
   run: ReleaseRun
   targets: ReleaseTargetRun[]
   artifacts: ReleaseArtifact[]

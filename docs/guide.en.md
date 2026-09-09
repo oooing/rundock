@@ -15,11 +15,19 @@ A Windows project manager for script-based start/stop control, live logs, and Gi
 - **Build and release configuration**: configure local commands or cloud workflows for each target. RunDock itself uses GitHub Actions to build Windows installers.
 - **Local diagnostics**: save errors and stage timings in the project folder for developers or AI tools to investigate.
 
+## In-app updates
+
+Windows production builds check for updates about 8 seconds after launch and download available updates in the background. The sidebar shows progress and an **Update ready** prompt. Click it to open Settings, review the version and available notes, and confirm installation. The automatic check runs once per launch; no-update and network-failure results do not interrupt your work. Manual checks and download retries remain available in Settings. Closing Settings does not interrupt downloads. Web and development builds do not check or download automatically.
+
+After verification, **Quit and install** stops all projects and the background service, opens the Windows installer, and exits RunDock. Follow the installer to upgrade while retaining project and group configuration. Finish ongoing work before installation. The web version links to release downloads instead.
+
+Install a version containing this feature manually once. Subsequent updates use official stable x64 assets from `oooing/rundock`, verified against the published SHA-256 after downloading and again before installation. Public Release pages provide a fallback when the API is rate-limited. SHA-256 checks integrity; it is not an independent code signature. No user token or update-server configuration is required. Development builds cannot run the installer.
+
 ## Getting started
 
 1. Download a published Windows `.exe` or `.msi` installer from [Releases](https://github.com/oooing/rundock/releases).
 2. Click **Add project**, then drop a startup script or an entire project folder into the drop zone. Alternatively, enter its full path. Both use the same startup discovery flow.
-3. Review the name and entry, confirm the card, then click **Start**. Advanced details are collapsed; adding a project does not run it.
+3. Select a startup option and edit the name on the same page, then click **Confirm addition** to create the card without a second confirmation. Advanced details are collapsed; adding a project does not run it. Click **Start** on the card when ready.
 
 The installed app accepts dropped folders and `.bat`, `.cmd`, or `.ps1` scripts. If the web version cannot obtain the dropped item's disk location, it asks you to paste the **absolute path** below.
 
@@ -39,7 +47,7 @@ Click the release button on a project card. The panel has **Release** and **Sett
 4. **Review notes**: edit the short draft generated from code changes, or regenerate it.
 5. Review and submit. The app tracks GitHub Actions for the released tags; you can also follow the progress link.
 
-Failed cloud builds leave a notification at the bottom right with the project, version, available failed job and step, and a GitHub logs button. Tracking continues after the release panel closes. Successful builds stay quiet. Dismissing a failure prevents duplicate alerts; a failed rerun creates a new alert. Connection problems are shown separately from build failures.
+Failed cloud builds show a red **Build failed** badge beside the corresponding project name, with a count for multiple alerts. Click it to see that project's versions, GitHub run numbers, available failed jobs and steps, and log links. Closing the details keeps the badge; **Mark as read** clears only that alert. A failed rerun creates a new alert. Unconfirmed status uses an amber **Build unconfirmed** badge. Tracking continues after the release panel closes, and successful builds stay quiet.
 
 Tracking covers releases from the last seven days and requires the RunDock backend and GitHub connectivity. No system notification is sent while the app is shut down; reopening resumes checks and restores unread alerts. Public repositories can be read anonymously. Private repositories require an authenticated local GitHub CLI with Actions read access.
 

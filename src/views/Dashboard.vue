@@ -4,7 +4,7 @@ import { tr } from '@/i18n'
 import { onBeforeUnmount, ref } from 'vue'
 import AppCard from '@/components/AppCard.vue'
 import UiIcon from '@/components/UiIcon.vue'
-import type { AppView, Group, ServiceRole } from '@/types'
+import type { AppView, CloudBuildStatus, Group, ServiceRole } from '@/types'
 
 const props = defineProps<{
   apps: AppView[]
@@ -16,6 +16,7 @@ const props = defineProps<{
   moving: Record<string, boolean>
   groupView?: boolean
   nativeDrop?: boolean
+  cloudAlerts?: CloudBuildStatus[]
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   (e: 'open-url', id: string, url?: string): void
   (e: 'open-dir', id: string): void
   (e: 'release', id: string): void
+  (e: 'cloud-details', id: string): void
   (e: 'delete', id: string): void
   (e: 'import', path: string): void
   (e: 'rename', id: string, name: string): void
@@ -156,6 +158,8 @@ onBeforeUnmount(resetCardDrag)
       >
         <AppCard
           :app="a"
+          :cloud-alerts="cloudAlerts?.filter(alert => alert.appId === a.id)"
+          @cloud-details="emit('cloud-details', $event)"
           :groups="groups"
           :moving="moving[a.id]"
           @move-group="(id, groupId) => emit('move-group', id, groupId)"

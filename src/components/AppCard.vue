@@ -2,13 +2,13 @@
 import { tr } from '@/i18n'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AppView, Group, ServiceRole, StartupIssue } from '@/types'
+import type { AppView, CloudBuildStatus, Group, ServiceRole, StartupIssue } from '@/types'
 import { api } from '@/api/http'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
 import { CARD_COLOR_PALETTE, getReadableTextColor, normalizeHexColor } from '@/utils/cardColors'
 
-const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean }>()
+const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
 const emit = defineEmits<{
   (e: 'start' | 'stop' | 'restart' | 'log' | 'open-dir' | 'release' | 'delete', id: string): void
   (e: 'open-url', id: string, url?: string): void
@@ -18,9 +18,12 @@ const emit = defineEmits<{
   (e: 'set-color', id: string, color: string): void
   (e: 'drag-start', event: PointerEvent, id: string): void
   (e: 'move-group', id: string, groupId: string): void
+  (e: 'cloud-details', id: string): void
 }>()
 
 const a = computed(() => props.app)
+const buildFailures = computed(() => (props.cloudAlerts || []).filter(alert => alert.state === 'failed'))
+const buildBadge = computed(() => buildFailures.value.length ? tr('构建失败') : tr('构建待确认'))
 const startupIssue = ref<StartupIssue | null>(null)
 const checkingIssue = ref(false)
 const recovering = ref(false)
@@ -324,6 +327,7 @@ const cardStyle = computed(() => {
         </button>
         <h3 v-if="!editingName" :title="a.name" @dblclick="startRename">{{ a.name }}</h3>
         <input v-else ref="nameInput" v-model="nameDraft" class="name-edit" :aria-label="tr('项目名称')" @keydown.enter.prevent="commitRename(true)" @keydown.esc.stop.prevent="cancelRename" @blur="commitRename()" />
+        <button v-if="cloudAlerts?.length" class="build-alert-badge" :class="{ failed: buildFailures.length }" :aria-label="tr('查看 {0} 的构建提醒（{1}）', [a.name, cloudAlerts.length])" :title="tr('点击查看失败版本和构建详情')" aria-haspopup="dialog" @click.stop="emit('cloud-details', a.id)"><UiIcon name="alert-circle" :size="13" /><span>{{ buildBadge }}</span><span v-if="cloudAlerts.length > 1" class="build-alert-count">{{ cloudAlerts.length }}</span></button>
       </div>
       <div class="identity-row">
         <span class="badge" :class="a.restarting ? 'starting' : a.status"><span class="dot"></span>{{ statusLabel }}</span>
@@ -450,6 +454,11 @@ const cardStyle = computed(() => {
 .head { display: flex; flex-direction: column; gap: 8px; }
 .name-row { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
 .name-row h3 { margin: 2px 0 0; font-size: 15px; line-height: 1.45; font-weight: 600; overflow-wrap: anywhere; color: var(--card-fg, var(--text)); }
+.name-row h3, .name-row .name-edit { flex: 1; min-width: 0; }
+.card .build-alert-badge { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--card-status-amber, var(--amber)); background: var(--card-panel, var(--bg)); color: var(--card-status-amber, var(--amber)); font-size: 11px; line-height: 16px; white-space: nowrap; }
+.card .build-alert-badge.failed { color: var(--card-status-red, var(--red)); border-color: var(--card-status-red, var(--red)); }
+.card .build-alert-badge:hover { background: var(--card-panel, var(--bg-elev)); text-decoration: underline; }
+.build-alert-count { font-weight: 700; }
 .drag-handle { flex: 0 0 auto; cursor: grab; user-select: none; touch-action: none; color: var(--card-muted, var(--text-faint)); }
 .card .drag-handle { padding: 3px 0; border: 0; }
 .drag-handle:active { cursor: grabbing; }

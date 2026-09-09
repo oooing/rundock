@@ -1,8 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RunDock",
-  "version": "2.0.13",
+  "version": "2.0.14",
   "identifier": "com.launcher.platform",
+  "plugins": {
+    "shell": { "open": "^https://github\\.com/oooing/rundock(/releases)?$" }
+  },
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1421",

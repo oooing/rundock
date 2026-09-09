@@ -9,6 +9,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import pkg from '../../package.json'
+import { open } from '@tauri-apps/plugin-shell'
 import type { Locale } from '@/i18n'
 
 export type FileDragDropEvent =
@@ -45,6 +46,15 @@ export async function quitApp(keepProjects: boolean): Promise<void> {
 /** 应用版本号。Tauri 中读取打包版本；开发浏览器中回退到 package.json。 */
 export async function getAppVersion(): Promise<string> {
   return getVersion().catch(() => pkg.version)
+}
+
+/** Open the project repository in the desktop's default browser. */
+export async function openProjectGitHub(): Promise<void> {
+  await open('https://github.com/oooing/rundock')
+}
+
+export async function openProjectReleases(): Promise<void> {
+  await open('https://github.com/oooing/rundock/releases')
 }
 
 /** Native path chooser returns a real path, unlike a browser file input. */

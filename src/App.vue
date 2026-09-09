@@ -17,6 +17,7 @@ import CloseDialog from '@/components/CloseDialog.vue'
 import QuitConfirm from '@/components/QuitConfirm.vue'
 import ReleaseModal from '@/components/ReleaseModal.vue'
 import CloudBuildAlerts from '@/components/CloudBuildAlerts.vue'
+import { prepareStartupUpdate } from '@/stores/appUpdate'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { api } from '@/api/http'
 import {
@@ -27,7 +28,7 @@ import {
   quitApp,
   showMainWindow,
 } from '@/tauri/window'
-import type { ImportCandidate, PendingOp } from '@/types'
+import type { CloudBuildStatus, ImportCandidate, PendingOp } from '@/types'
 
 const conn = useConnectionStore()
 const apps = useAppsStore()
@@ -45,6 +46,9 @@ const selectedGroupName = computed(() => groups.groups.find(g => g.id === select
 const availableGroupApps = computed(() => apps.apps.filter(a => (a.groupId || '') !== selectedGroupId.value))
 const showSettings = ref(false)
 const showHelp = ref(false)
+const cloudAlerts = ref<CloudBuildStatus[]>([])
+const cloudDetailsAppId = ref<string | null>(null)
+const cloudDetailsApp = computed(() => apps.apps.find(app => app.id === cloudDetailsAppId.value) || null)
 const initialImportPath = ref('')
 const logAppId = ref<string | null>(null)
 const releaseAppId = ref<string | null>(readReleaseSession()?.appId || null)
@@ -311,7 +315,11 @@ function cancelPending() {
   pending.value = null
 }
 
+let startupUpdateTimer: ReturnType<typeof setTimeout> | undefined
 onMounted(async () => {
+  if (isTauriShell && import.meta.env.PROD) {
+    startupUpdateTimer = setTimeout(() => { void prepareStartupUpdate() }, 8000)
+  }
   conn.startPolling()
   apps.bindWS()
   // 监听 Tauri 壳事件：点 X 关闭、托盘右键退出
@@ -353,6 +361,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  clearTimeout(startupUpdateTimer)
   unlistenFileDragDrop?.()
   unlistenFileDragDrop = null
 })
@@ -389,6 +398,8 @@ onUnmounted(() => {
           <button class="add-to-group" @click="groupPickerOpen = true" :disabled="!conn.sidecarReady"><UiIcon name="plus" :size="14" />{{ tr('添加项目') }}</button>
         </div>
         <Dashboard
+          :cloud-alerts="cloudAlerts"
+          @cloud-details="cloudDetailsAppId = $event"
           :groups="groups.groups"
           :moving="movingGroups"
           :group-view="selectedGroupId !== null"
@@ -466,7 +477,7 @@ onUnmounted(() => {
       </section>
     </div>
     <!-- 置顶通知栏：成功/失败/提示 集中显示在顶部中央，可堆叠、可手动关闭 -->
-    <CloudBuildAlerts />
+    <CloudBuildAlerts :app="cloudDetailsApp" @update="cloudAlerts = $event" @close="cloudDetailsAppId = null" />
     <div class="toast-stack">
       <transition-group name="toast">
         <div

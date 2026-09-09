@@ -5,6 +5,7 @@ import { onMounted, ref } from 'vue'
 import { api } from '@/api/http'
 import type { ExportSnapshot } from '@/types'
 import { getAppVersion } from '@/tauri/window'
+import AppUpdatePanel from './AppUpdatePanel.vue'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
@@ -91,12 +92,7 @@ onMounted(() => {
       </header>
 
       <div class="m-body">
-        <section class="block">
-          <div class="version-row">
-            <span>{{ tr("当前版本") }}</span>
-            <code>v{{ appVersion }}</code>
-          </div>
-        </section>
+        <AppUpdatePanel :current-version="appVersion" />
 
         <section class="block">
           <div class="row">

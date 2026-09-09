@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,11 @@ func fixtureFile(t *testing.T, root, path, body string) string {
 }
 func TestDiscoverProjectEntriesWithoutExecuting(t *testing.T) {
 	root := t.TempDir()
+	if runtime.GOOS == "windows" {
+		// Exercise a valid alternative spelling of the same directory. GitHub's
+		// TEMP can also use an 8.3 alias that Discover expands to a long path.
+		root = strings.ToLower(root)
+	}
 	start := fixtureFile(t, root, "start-brickmuse.cmd", "@echo off\r\ncd /d code\r\ncall npm run dev\r\necho never > SHOULD_NOT_EXIST")
 	fixtureFile(t, root, "code/package.json", `{"name":"brickmuse","scripts":{"dev":"vite"}}`)
 	for _, path := range []string{"node_modules/pkg/start.cmd", ".git/run.cmd", "dist/start.bat", ".venv/run.ps1", "release.cmd", "scripts/install.bat", "scripts/deploy.ps1", "a/b/c/d/start.cmd"} {
@@ -30,8 +36,21 @@ func TestDiscoverProjectEntriesWithoutExecuting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Options) != 2 || result.Options[0].Path != start || !result.Options[0].Recommended || result.Options[1].Command != "npm run dev" {
+	if len(result.Options) != 2 || !result.Options[0].Recommended || result.Options[1].Command != "npm run dev" {
 		t.Fatalf("%+v", result)
+	}
+	// Compare file identity, not path spelling: discovery resolves Windows
+	// casing, short names and links before returning startup entries.
+	want, err := os.Stat(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Stat(result.Options[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(want, got) {
+		t.Fatalf("recommended entry %q is not the startup script %q", result.Options[0].Path, start)
 	}
 	if _, err = os.Stat(filepath.Join(root, "SHOULD_NOT_EXIST")); !os.IsNotExist(err) {
 		t.Fatal("discovery executed a script")

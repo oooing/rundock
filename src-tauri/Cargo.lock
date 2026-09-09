@@ -1848,7 +1848,7 @@ dependencies = [
 
 [[package]]
 name = "launcher-platform"
-version = "2.0.12"
+version = "2.0.13"
 dependencies = [
  "serde",
  "serde_json",

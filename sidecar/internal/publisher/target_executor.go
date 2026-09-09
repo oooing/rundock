@@ -112,9 +112,21 @@ func (s *Service) freezeExecutionPlan(ctx context.Context, appID, repoRoot strin
 		plan.Automation = &automation
 	}
 	frozenGroups := make(map[string]planVersionGroup, len(cfg.VersionGroups))
+	selectedGroups := map[string]bool{}
+	for _, selection := range selections {
+		for _, target := range cfg.Targets {
+			if target.ID == selection.TargetID {
+				selectedGroups[target.VersionGroup] = true
+			}
+		}
+	}
 	versionFilePaths := []string{}
 	for _, group := range cfg.VersionGroups {
 		for _, file := range group.VersionFiles {
+			// Other targets' files are not part of this selected operation.
+			if len(selections) > 0 && !selectedGroups[group.ID] {
+				continue
+			}
 			if _, err := secureProjectPath(repoRoot, file.Path, false); err != nil {
 				return nil, &Error{Code: "version_file_invalid", Message: "版本文件无效：" + file.Path}
 			}

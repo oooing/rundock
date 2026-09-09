@@ -162,6 +162,8 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handlePorts(w, r, id)
 	case "release/preflight":
 		s.handleReleasePreflight(w, r, id)
+	case "release/unstage":
+		s.handleReleaseUnstage(w, r, id)
 	case "release/notes-draft":
 		s.handleReleaseNotesDraft(w, r, id)
 	case "release-profile":

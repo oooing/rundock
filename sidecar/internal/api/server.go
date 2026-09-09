@@ -36,6 +36,8 @@ type Server struct {
 	Diagnostics       *diagnostics.Service
 	Registry          *adapter.Registry
 	httpSrv           *http.Server
+	cloudCancel       context.CancelFunc
+	cloudDone         chan struct{}
 }
 
 // New 组装 server。Launcher 由外部创建后注入（依赖 store/hub/registry）。
@@ -78,10 +80,12 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/desktop/shutdown", s.handleDesktopShutdown)
 	mux.HandleFunc("/api/import", s.handleImport)
+	mux.HandleFunc("/api/import/discover", s.handleDiscoverImport)
 	mux.HandleFunc("/api/apps", s.handleApps)
 	mux.HandleFunc("/api/apps/reorder", s.handleAppsReorder)
 	mux.HandleFunc("/api/apps/", s.handleAppDetail) // /api/apps/{id}...
 	mux.HandleFunc("/api/releases/", s.handleReleaseDetail)
+	mux.HandleFunc("/api/cloud-builds", s.handleCloudBuilds)
 	mux.HandleFunc("/api/groups", s.handleGroups)
 	mux.HandleFunc("/api/groups/", s.handleGroupDetail)
 	mux.HandleFunc("/api/settings", s.handleSettings)
@@ -100,6 +104,10 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	s.httpSrv = &http.Server{Handler: s.Router()}
+	cloudCtx, cloudCancel := context.WithCancel(context.Background())
+	s.cloudCancel = cloudCancel
+	s.cloudDone = make(chan struct{})
+	go func() { defer close(s.cloudDone); s.Publisher.MonitorCloudBuilds(cloudCtx) }()
 	go func() {
 		if err := s.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("http serve error: %v", err)
@@ -110,6 +118,10 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 
 // Shutdown 优雅关闭 HTTP 服务。
 func (s *Server) Shutdown() error {
+	if s.cloudCancel != nil {
+		s.cloudCancel()
+		<-s.cloudDone
+	}
 	var shutdownErr error
 	if s.httpSrv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

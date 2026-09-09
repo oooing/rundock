@@ -53,23 +53,15 @@ func (s *Server) runPreflight(w http.ResponseWriter, id, confirmedScriptHash str
 	return outcomeAbort, nil
 }
 
-// startResponse 拼装启动/重启成功响应。
-//   - outcomeSynced → configUpdated=true，附最新 appView 供前端刷新
-//   - 其它 → 经典的 { started: true } / { restarted: true }（保持向后兼容）
-//
-// action 由调用方决定（"started" / "restarted"），仅决定哪个布尔键为 true。
+// startResponse always includes runtime state, including PID on ordinary starts.
+// configUpdated only indicates whether script-derived configuration changed.
 func (s *Server) startResponse(id string, outcome preflightOutcome, action string) map[string]any {
 	base := map[string]any{
-		"started":       action == "started",
-		"restarted":     action == "restarted",
-		"configUpdated": false,
+		"started": action == "started", "restarted": action == "restarted",
+		"configUpdated": outcome == outcomeSynced,
 	}
-	if outcome == outcomeSynced {
-		// 同步后回读最新 App，拼成 appView
-		if a, err := s.Store.GetApp(id); err == nil && a != nil {
-			base["configUpdated"] = true
-			base["app"] = appView(a, s)
-		}
+	if a, err := s.Store.GetApp(id); err == nil && a != nil {
+		base["app"] = appView(a, s)
 	}
 	return base
 }

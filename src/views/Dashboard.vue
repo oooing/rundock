@@ -141,8 +141,8 @@ onBeforeUnmount(resetCardDrag)
     <div v-else-if="!apps.length" class="empty welcome">
       <div class="empty-symbol"><UiIcon name="upload" :size="28" /></div>
       <h2>{{ tr('把第一个项目放进启动坞') }}</h2>
-      <p>{{ nativeDrop ? tr('拖入启动脚本，确认后即可在这里启停项目、打开服务和查看日志。') : tr('粘贴启动脚本的完整路径，确认后即可在这里启停项目、打开服务和查看日志。') }}</p>
-      <button class="primary" @click="emit('show-import')"><UiIcon name="plus" />{{ tr('导入脚本') }}</button>
+      <p>{{ tr('选择项目文件夹或启动脚本，添加后即可一键启停。') }}</p>
+      <button class="primary" @click="emit('show-import')"><UiIcon name="plus" />{{ tr('添加项目') }}</button>
       <span class="supported-formats">.bat <span>·</span> .cmd <span>·</span> .ps1</span>
     </div>
     <!-- 卡片网格 -->

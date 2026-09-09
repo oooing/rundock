@@ -30,24 +30,39 @@ AI 让写工具越来越容易，但很多工具仍靠 `start.bat`、`run.bat` �
 
 <br />
 
-## 这次发 Web，下次发 PC。由你决定。
+## 发布更专注，设置单独管理
 
-按需组合发布目标，也可以仅提交代码。**Tag 可选，版本可独立管理。**
+在「发布」中选端、改版本、勾文件、写更新说明；构建方式和项目配置集中在「设置」。
+
+- **端与当前版本放在一起**：选择 Web、Windows、服务端等已配置目标，也可以仅提交代码。
+- **升级到哪个版本，一眼看清**：独立的「发布版本」卡片展示 **当前版本 → 目标版本**，支持自动递增与手动设置；共用版本的端统一修改。
+- **更新说明先生成，再修改**：根据代码变更生成简短初稿，确认后随版本提交。
 
 <p align="center">
-  <a href="./docs/media/release-panel.png"><img src="./docs/media/release-panel.webp" alt="发布面板真实界面：选择 PC 目标、确认版本 Tag、勾选提交文件" width="440" /></a>
+  <a href="./docs/media/release-panel.png"><img src="./docs/media/release-panel.webp" alt="新版发布页：端名称旁显示当前版本，独立卡片管理自动递增及版本升级，下方选择文件并编辑更新说明" width="640" /></a>
 </p>
 <p align="center"><sub>真实界面 · 示例配置；各项目的构建与部署流程需单独配置。</sub></p>
 
-RunDock 自身的 Windows 安装包交给 **GitHub Actions 云端构建**。代码上传后，可跳转查看打包与发布进度。
+每个项目默认使用 **GitHub 云端构建**，在「设置」中可切换为本地构建。云端模式需要项目已配置匹配的 GitHub Actions 工作流；代码和 Tag 上传后，点击进度链接查看实际构建结果。
+
+<details>
+<summary>查看「设置」：构建位置、上传选项与配置文件</summary>
+
+<p align="center">
+  <a href="./docs/media/release-settings.png"><img src="./docs/media/release-settings.webp" alt="新版设置页：统一单选控件选择云端或本地构建，管理上传选项，并打开配置文件或带说明的样例" width="640" /></a>
+</p>
+
+「打开配置样例」查看带说明的示例；「打开配置文件」查看、编辑并校验保存当前项目的配置。[查看操作步骤](./docs/guide.zh-CN.md#git-发布怎么用)。
+
+</details>
 
 <br />
 
 ## 三步，开始管理
 
-**① 安装 RunDock　→　② 拖入项目脚本　→　③ 点击启动**
+**① 安装 RunDock　→　② 添加项目　→　③ 点击启动**
 
-支持 `.bat` · `.cmd` · `.ps1`。不需要改变项目现有的启动方式。
+选择 `.bat` · `.cmd` · `.ps1` 启动脚本，或选择整个项目文件夹，让 RunDock 识别启动方式。确认后生成项目卡片。[查看添加步骤](./docs/guide.zh-CN.md#开始使用)。
 
 > Windows 10/11 x64 · 安装包未签名，可能触发 SmartScreen 提示；请核对下载来源与校验和。
 

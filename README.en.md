@@ -30,24 +30,39 @@ AI makes building tools easier. But many still start with `start.bat` or `run.ba
 
 <br />
 
-## Web today. Desktop tomorrow. Your call.
+## Focus on the release. Keep settings separate.
 
-Mix configured targets or just commit code. **Tags are optional. Version groups can advance independently.**
+Choose targets, versions, files, and notes in **Release**. Build methods and project configuration live in **Settings**.
+
+- **Targets with their current versions**: select configured Web, Windows, server, and other targets, or just commit code.
+- **See the version change clearly**: a separate version card shows **current → target**, with automatic increments or manual input. Targets sharing a version are edited together.
+- **Draft notes, then review**: generate a short draft from code changes and edit it before submitting.
 
 <p align="center">
-  <a href="./docs/media/release-panel.png"><img src="./docs/media/release-panel.webp" alt="Actual release panel with a selected PC target, version tag, and file selection" width="440" /></a>
+  <a href="./docs/media/release-panel.png"><img src="./docs/media/release-panel.webp" alt="Updated Release tab with versions beside target names, separate version management, file selection, and release notes" width="640" /></a>
 </p>
 <p align="center"><sub>Actual interface · Demo configuration; each project needs its own build and deployment setup.</sub></p>
 
-RunDock's Windows installers are built in the cloud with **GitHub Actions**. After pushing, follow the progress link to check the build and release.
+Projects default to **GitHub cloud builds**, with a local build option in **Settings**. Cloud builds require a matching GitHub Actions workflow in the project. After code and tags are uploaded, follow the progress link to check the actual build result.
+
+<details>
+<summary>View Settings: build location, uploads, and configuration files</summary>
+
+<p align="center">
+  <a href="./docs/media/release-settings.png"><img src="./docs/media/release-settings.webp" alt="Updated Settings tab with consistent cloud/local radio controls, upload options, and configuration file and example buttons" width="640" /></a>
+</p>
+
+Open the configuration example for an annotated reference, or open the current project's file to edit, validate, and save it. [See the steps](./docs/guide.en.md#releasing-a-project).
+
+</details>
 
 <br />
 
 ## Three steps to get going
 
-**① Install RunDock　→　② Drop in a script　→　③ Hit Start**
+**① Install RunDock　→　② Add project　→　③ Hit Start**
 
-Works with `.bat` · `.cmd` · `.ps1`. Keep the startup scripts you already use.
+Choose a `.bat`, `.cmd`, or `.ps1` startup script, or select a project folder and let RunDock discover its startup method. Confirm to create a project card. [Adding a project](./docs/guide.en.md#getting-started).
 
 > Windows 10/11 x64 · Installers are unsigned and may trigger SmartScreen warnings. Verify the download source and checksums.
 

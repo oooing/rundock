@@ -105,6 +105,7 @@ type RunView struct {
 	Artifacts                 []*store.ReleaseArtifact  `json:"artifacts"`
 	Logs                      []*store.ReleaseLog       `json:"logs"`
 	Automation                *AutomationHandoff        `json:"automation,omitempty"`
+	CloudBuild                *store.CloudBuild         `json:"cloudBuild,omitempty"`
 	RetryConfirmationRequired bool                      `json:"retryConfirmationRequired"`
 	RetryConfirmationTargets  []string                  `json:"retryConfirmationTargets,omitempty"`
 }

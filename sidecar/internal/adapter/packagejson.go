@@ -35,7 +35,7 @@ func packageJSONScripts(projectRoot string) (name string, scripts map[string]str
 // 优先级：dev > start > serve。返回空串表示无可用脚本。
 func pickStartScript(scripts map[string]string) string {
 	for _, key := range []string{"dev", "start", "serve"} {
-		if _, ok := scripts[key]; ok {
+		if strings.TrimSpace(scripts[key]) != "" {
 			return key
 		}
 	}
@@ -48,7 +48,12 @@ type NPMAdapter struct{ runner string }
 // NewNPMAdapter 创建 npm 适配器。
 func NewNPMAdapter() NPMAdapter { return NPMAdapter{runner: "npm"} }
 
-func (a NPMAdapter) Type() string { return "npm" }
+func (a NPMAdapter) Type() string {
+	if a.runner != "" {
+		return a.runner
+	}
+	return "npm"
+}
 
 // Detect：项目根有 package.json，且入口脚本是 .bat/.cmd 或 package.json 本身，给较高分。
 func (a NPMAdapter) Detect(projectRoot, entryFile string) int {

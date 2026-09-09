@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { api } from '@/api/http'
 import { tr } from '@/i18n'
 import type { ReleaseConfig } from '@/types'
 
 const props = defineProps<{ appId: string; disabled?: boolean }>()
-const emit = defineEmits<{ (e: 'saved', config: ReleaseConfig): void; (e: 'editing', value: boolean): void }>()
+const emit = defineEmits<{ (e: 'saved', config: ReleaseConfig): void; (e: 'editing', value: boolean): void; (e: 'dirty', value: boolean): void }>()
 const file = ref<Awaited<ReturnType<typeof api.getReleaseConfigFile>> | null>(null)
 const content = ref('')
 const open = ref(false)
@@ -15,6 +15,7 @@ const error = ref('')
 const saved = ref(false)
 const editor = ref<HTMLElement | null>(null)
 const dirty = computed(() => file.value !== null && content.value !== file.value.content)
+watch(() => open.value && dirty.value, value => emit('dirty', value))
 
 async function show(which: 'current' | 'example') {
   error.value = ''

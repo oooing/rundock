@@ -30,8 +30,10 @@ func TestConPTYStopClosesOnce(t *testing.T) {
 	h.jobCloser = assignJob(pid)
 
 	waitDone := make(chan struct{})
+	var waitCode int
+	var waitErr error
 	go func() {
-		_, _ = h.Wait()
+		waitCode, waitErr = h.Wait()
 		_ = h.Close() // 与强制终止并发收尾，复现真实 watchExit 路径。
 		close(waitDone)
 	}()
@@ -53,6 +55,12 @@ func TestConPTYStopClosesOnce(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("%s did not finish", item.name)
 		}
+	}
+	if waitErr != nil || waitCode == 259 {
+		t.Fatalf("Wait raced with closed process handle: code=%d err=%v", waitCode, waitErr)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("repeated resource close: %v", err)
 	}
 }
 

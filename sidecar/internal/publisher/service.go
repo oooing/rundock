@@ -138,7 +138,11 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 	} else {
 		configuredVersionGroups = append(configuredVersionGroups, cfg.VersionGroups...)
 		configuredFiles := []releaseconfig.VersionFile{}
+		inactive := disabledOnlyVersionGroups(cfg)
 		for _, group := range cfg.VersionGroups {
+			if inactive[group.ID] {
+				continue
+			}
 			configuredFiles = append(configuredFiles, group.VersionFiles...)
 			for _, file := range group.VersionFiles {
 				versionFilePaths = append(versionFilePaths, file.Path)
@@ -1198,7 +1202,9 @@ func (s *Service) GetRun(runID string, since int64) (*RunView, error) {
 	}
 	plan, _ := parseExecutionPlan(run.ExecutionPlan)
 	confirmationTargets := retryCustomExternalTargets(run, plan, targets)
+	cloudBuild, _ := s.store.GetCloudBuild(runID)
 	return &RunView{Run: run, Targets: targets, Artifacts: artifacts, Logs: logs, Automation: automationHandoffView(run, plan),
+		CloudBuild:                cloudBuild,
 		RetryConfirmationRequired: len(confirmationTargets) > 0, RetryConfirmationTargets: confirmationTargets}, nil
 }
 

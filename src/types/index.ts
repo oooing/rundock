@@ -44,6 +44,12 @@ export interface ImportCandidate {
   markers: string[] | null
 }
 
+export interface StartupDiscovery {
+  root: string
+  options: { path: string; relativePath: string; kind: 'script' | 'package'; command?: string; recommended: boolean }[]
+  truncated: boolean
+}
+
 /** App 视图（GET /api/apps 返回，含运行态） */
 export interface AppView {
   id: string
@@ -69,7 +75,7 @@ export interface AppView {
   runId: string
   pid: number
   sortOrder: number
-  services: AppService[] // 项目下所有服务（前端/后端/DB 各一个端口）
+  services: AppService[] // 当前运行的服务；停止或失败后为空
   cardColor: string
 }
 
@@ -425,6 +431,7 @@ export interface ReleaseAutomationStatus {
 }
 
 export interface ReleaseRunView {
+  cloudBuild?: CloudBuildStatus
   /** 根据冻结计划及已完成步骤判断是否会重复执行自定义外部命令。 */
   retryConfirmationRequired?: boolean
   retryConfirmationTargets?: string[]
@@ -433,6 +440,18 @@ export interface ReleaseRunView {
   artifacts: ReleaseArtifact[]
   logs: ReleaseLog[]
   automation?: ReleaseAutomationStatus
+}
+
+export interface CloudBuildStatus {
+  releaseRunId: string
+  appId: string
+  appName: string
+  version: string
+  state: 'pending' | 'running' | 'failed' | 'succeeded' | 'unavailable' | 'not_started'
+  summary: string
+  url: string
+  alertKey: string
+  checkedAt: string
 }
 
 export interface CreateReleaseBody {

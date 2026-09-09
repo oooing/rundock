@@ -47,6 +47,11 @@ export async function getAppVersion(): Promise<string> {
   return getVersion().catch(() => pkg.version)
 }
 
+/** Native path chooser returns a real path, unlike a browser file input. */
+export async function selectProjectPath(kind: 'script' | 'folder'): Promise<string | null> {
+  return invoke('select_project_path', { kind })
+}
+
 /** Sync native window/tray labels without restarting the app or its projects. */
 export async function setNativeLanguage(locale: Locale): Promise<void> {
   if (!isTauri) return

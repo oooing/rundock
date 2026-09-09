@@ -14,6 +14,10 @@ const props = defineProps<{
   mode?: 'import' | 'script-change'
   /** script-change 模式下展示的待执行操作文案，如 "启动" / "重启" */
   action?: string
+  busy?: boolean
+  blocked?: boolean
+  error?: string
+  cancelLabel?: string
 }>()
 const emit = defineEmits<{ (e: 'confirm' | 'cancel'): void }>()
 
@@ -53,32 +57,36 @@ const confirmText = computed(() => {
 
 <template>
   <div class="overlay">
-    <div class="modal">
+    <div class="modal" role="dialog" aria-modal="true" :aria-label="title" @keydown.esc="!busy && emit('cancel')">
       <header class="m-head">
         <h2>{{ title }}</h2>
-        <button class="ghost icon" @click="emit('cancel')">✕</button>
+        <button class="ghost icon" :disabled="busy" :aria-label="tr('关闭')" @click="emit('cancel')">✕</button>
       </header>
 
       <div class="m-body">
-        <p class="hint">
+        <p v-if="isScriptChange || hasDanger || hasWarn" class="hint">
           {{ hint }}
         </p>
 
         <section class="block" v-if="!isScriptChange">
           <h4>{{ tr("应用名称") }}</h4>
-          <input v-model="c.name" class="name-input" />
+          <input v-model="c.name" class="name-input" :aria-label="tr('应用名称')" :disabled="busy" />
         </section>
 
         <section class="block">
-          <h4>{{ tr("检测信息") }}</h4>
+          <h4>{{ tr("启动方式") }}</h4>
           <div class="kv"><span>{{ tr("入口脚本") }}</span><code>{{ c.entryScript }}</code></div>
+        </section>
+
+        <details class="block" :open="isScriptChange || undefined">
+          <summary>{{ tr('高级设置') }}</summary>
           <div class="kv"><span>{{ tr("工作目录") }}</span><code>{{ c.cwd }}</code></div>
           <div class="kv"><span>{{ tr("适配器") }}</span><code>{{ c.adapterType }}</code></div>
           <div class="kv"><span>{{ tr("启动命令") }}</span><code>{{ c.cmd }} {{ c.args.join(' ') }}</code></div>
           <div class="kv" v-if="markers.length">
             <span>{{ tr("项目标志") }}</span><code>{{ markers.join(', ') }}</code></div>
           <div class="kv"><span>{{ tr("端口提示") }}</span><code>{{ c.portHints.join(', ') || tr("无") }}</code></div>
-        </section>
+        </details>
 
         <section class="block" v-if="envEntries.length">
           <h4>{{ tr("将注入的环境变量") }}</h4>
@@ -104,16 +112,19 @@ const confirmText = computed(() => {
             </div>
           </div>
         </section>
+        <p v-if="error" class="import-error" role="alert">{{ error }}</p>
+        <p v-if="!isScriptChange" class="muted">{{ tr('添加后生成项目卡片，点击“启动”才会运行。') }}</p>
       </div>
 
       <footer class="m-foot">
-        <button @click="emit('cancel')">{{ tr("取消") }}</button>
+        <button :disabled="busy" @click="emit('cancel')">{{ cancelLabel || tr("取消") }}</button>
         <button
           class="primary"
           :class="{ danger: hasDanger }"
+          :disabled="busy || blocked || !c.name.trim()"
           @click="emit('confirm')"
         >
-          {{ confirmText }}
+          {{ busy ? tr('正在添加…') : confirmText }}
         </button>
       </footer>
     </div>
@@ -121,6 +132,8 @@ const confirmText = computed(() => {
 </template>
 
 <style scoped>
+summary { cursor: pointer; color: var(--text-dim); font-size: 13px; margin-bottom: 10px; }
+.import-error { color: var(--red); font-size: 13px; }.muted { color: var(--text-dim); font-size: 12px; margin: 0; }
 .overlay {
   position: fixed;
   inset: 0;

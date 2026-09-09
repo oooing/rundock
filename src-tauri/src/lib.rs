@@ -24,6 +24,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 
 mod window_layout;
 mod desktop_exit;
+mod project_picker;
 
 #[cfg(not(debug_assertions))]
 const SIDECAR_PORT: &str = "17654";
@@ -342,7 +343,7 @@ pub fn run() {
                 let _ = window.emit("close-requested", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, set_ui_language])
+        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, set_ui_language, project_picker::select_project_path])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

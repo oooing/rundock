@@ -83,10 +83,7 @@ export const useAppsStore = defineStore('apps', () => {
         // 409：脚本风险变化需确认，不动本地状态
         return { confirmation: r.confirmation }
       }
-      if (r.data.configUpdated && r.data.app) {
-        patchFull(r.data.app)
-      }
-      patch(id, { status: 'starting' })
+      await refreshRuntime(id)
       return { configUpdatedToast: !!r.data.configUpdated }
     } catch (e: any) {
       error.value = e?.message || String(e)
@@ -98,13 +95,10 @@ export const useAppsStore = defineStore('apps', () => {
     patch(id, { status: 'stopping' })
     try {
       await api.stop(id)
-      // 兜底：API 成功但 WS 未推送 stopped（应用已停止的幂等情况），直接收敛状态
-      const cur = apps.value.find(a => a.id === id)?.status
-      if (cur === 'stopping') {
-        patch(id, { status: 'stopped' })
-      }
+      await refreshRuntime(id)
     } catch (e: any) {
       if (prev) patch(id, { status: prev })
+      void refreshRuntime(id).catch(() => {})
       error.value = e?.message || String(e)
       throw e
     }
@@ -123,9 +117,7 @@ export const useAppsStore = defineStore('apps', () => {
         patch(id, { ...(prev ? { status: prev } : {}), restarting: false })
         return { confirmation: r.confirmation }
       }
-      if (r.data.configUpdated && r.data.app) {
-        patchFull(r.data.app)
-      }
+      await refreshRuntime(id)
       return { configUpdatedToast: !!r.data.configUpdated }
     } catch (e: any) {
       patch(id, { ...(prev ? { status: prev } : {}), restarting: false })
@@ -228,36 +220,44 @@ export const useAppsStore = defineStore('apps', () => {
     if (idx >= 0) apps.value[idx] = a
   }
 
-  /** 接收 WS 消息，更新本地状态 */
+  // Serialize per-project refreshes. If an event arrives while HTTP is in flight,
+  // discard that snapshot and fetch again; old-run WS payloads never become state.
+  const refreshes = new Map<string, { dirty: boolean; promise: Promise<void> }>()
+  function refreshRuntime(id: string): Promise<void> {
+    const pending = refreshes.get(id)
+    if (pending) { pending.dirty = true; return pending.promise }
+    const state = { dirty: false, promise: Promise.resolve() }
+    refreshes.set(id, state)
+    state.promise = (async () => {
+      try {
+        do {
+          state.dirty = false
+          const updated = await api.getApp(id)
+          if (state.dirty) continue
+          const current = apps.value.find(a => a.id === id)
+          if (!current) return
+          const restartFinished = ['running', 'degraded', 'failed'].includes(updated.status)
+          patchFull({ ...updated, restarting: current.restarting && !restartFinished })
+        } while (state.dirty)
+      } finally { refreshes.delete(id) }
+    })()
+    return state.promise
+  }
+
+  /** Status/URL/service events invalidate one authoritative runtime snapshot. */
   function handleWS(msg: WSMessage) {
-    if (!msg.appId) return
-    const a = apps.value.find((x) => x.id === msg.appId)
-    if (!a && msg.type !== 'app:log') {
-      // 未知 app 的非日志消息：可能是新增，刷新一次
-      void load()
+    if (msg.type === 'hello') {
+      for (const a of apps.value) void refreshRuntime(a.id).catch(() => {})
       return
     }
+    if (!msg.appId) return
+    const a = apps.value.find((x) => x.id === msg.appId)
+    if (!a && msg.type !== 'app:log') { void load(); return }
     switch (msg.type) {
       case 'app:status':
-        if (a) {
-          const status = (msg.status as AppView['status']) || a.status
-          const restartFinished = ['running', 'degraded', 'failed'].includes(status)
-          patch(a.id, {
-            status,
-            ...(a.restarting && restartFinished ? { restarting: false } : {}),
-          })
-        }
-        break
       case 'app:url':
-        if (a) patch(a.id, { lastUrl: msg.url || a.lastUrl })
-        break
       case 'app:services':
-        // 多服务状态更新：替换该 app 的 services 数组
-        if (a && msg.services) {
-          apps.value = apps.value.map((x) =>
-            x.id === a.id ? { ...x, services: msg.services! } : x
-          )
-        }
+        if (a) void refreshRuntime(a.id).catch(() => {})
         break
       case 'app:log':
         if (msg.log) {

@@ -1,6 +1,7 @@
 package releaseconfig
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,7 +33,7 @@ type discoveryBuilder struct {
 	warnings         []string
 }
 
-func (s *Service) scanRoot(root string, repoFound bool) *Config {
+func (s *Service) scanRoot(ctx context.Context, root string, repoFound bool) *Config {
 	b := &discoveryBuilder{
 		root: root,
 		config: &Config{
@@ -47,7 +48,7 @@ func (s *Service) scanRoot(root string, repoFound bool) *Config {
 	}
 
 	var packageFiles, gradleWrappers, dockerfiles, goMods, pythonFiles []string
-	b.warnings = append(b.warnings, safeWalk(root, func(path string, entry os.DirEntry) error {
+	b.warnings = append(b.warnings, discoveryWalk(ctx, root, repoFound, func(path string, entry os.DirEntry) error {
 		if entry.IsDir() {
 			return nil
 		}

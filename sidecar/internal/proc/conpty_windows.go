@@ -115,6 +115,7 @@ func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line 
 		return nil, err
 	}
 	h := &Handle{
+		exited:  make(chan struct{}),
 		rootPID: pid,
 		cancel:  cancel,
 		pty:     sess,
@@ -122,8 +123,18 @@ func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line 
 	// 把根进程加入 Job Object，sidecar 退出时整棵进程树仍会被回收。
 	h.jobCloser = assignJob(pid)
 	go func() {
-		<-innerCtx.Done()
-		_ = sess.close()
+		select {
+		case <-h.exited:
+			return
+		case <-innerCtx.Done():
+			select {
+			case <-h.exited:
+				return
+			default:
+			}
+			// Do not close a handle concurrently with Wait.
+			_ = h.Terminate()
+		}
 	}()
 	return h, nil
 }

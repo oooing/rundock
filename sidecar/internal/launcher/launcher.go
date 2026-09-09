@@ -40,6 +40,8 @@ type Launcher struct {
 
 // runState 一个 app 当前启动的运行态（进程句柄 + collector + cancel）。
 type runState struct {
+	exitDone      chan struct{}
+	stopPIDs      []int
 	handle        *proc.Handle
 	collector     *logbus.Collector
 	cancel        context.CancelFunc
@@ -100,6 +102,11 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	}
 	if l.Manager.Registry.IsRunning(appID) {
 		return fmt.Errorf("app already running: %s", appID)
+	}
+
+	readiness, err := readStartupReadiness(a.EntryScript, l.urlTimeout)
+	if err != nil {
+		return fmt.Errorf("启动就绪配置: %w", err)
 	}
 
 	// prepare：优先用 App 自存的 cmd/args（已确认的配置），否则走适配器重新 prepare
@@ -176,7 +183,7 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		len(beforePorts), l.urlTimeout, l.graceSeconds))
 
 	// 先占位 runState：日志回调可能在 spawn 返回前就打出 URL，不能丢。
-	rs := &runState{collector: collector, cancel: cancel}
+	rs := &runState{collector: collector, cancel: cancel, exitDone: make(chan struct{})}
 	l.mu.Lock()
 	l.runs[appID] = rs
 	l.mu.Unlock()
@@ -261,14 +268,14 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	}
 
 	// 后台监听进程退出
-	go l.watchExit(appID, rt, handle, cancel, collector)
+	go func() { defer close(rs.exitDone); l.watchExit(appID, rt, handle, cancel, collector) }()
 
 	// 后台：多服务发现 + 健康检查 + 综合状态（替代旧的单服务 watchHealth/observePorts）
 	hintedPorts := map[int]bool{}
 	for _, port := range a.PortHints {
 		hintedPorts[port] = true
 	}
-	go l.watchServices(appID, rt, beforePorts, manualRoles, probe.DeclaredRoles(a.EntryScript), hintedPorts, collector)
+	go l.watchServices(appID, rt, beforePorts, manualRoles, probe.DeclaredRoles(a.EntryScript), hintedPorts, collector, readiness)
 
 	return nil
 }
@@ -278,16 +285,24 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 // 项目状态按木桶原则综合：所有 service healthy => running；任一 unhealthy => degraded。
 //
 // 与旧逻辑区别：不再只盯第一个端口，而是发现全部端口，每个独立判定，综合出项目状态。
-func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, col *logbus.Collector) {
-	deadline := time.NewTimer(l.urlTimeout) // 发现窗口：超过这个时间仍无任何端口则标 degraded
+func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, col *logbus.Collector, readiness *startupReadiness) {
+	readiness.deadline = rt.StartedAt.Add(readiness.timeout)
+	deadline := time.NewTimer(time.Until(readiness.deadline)) // 显式就绪声明的等待时限
 	defer deadline.Stop()
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
-	rejectedPorts := map[int]int{} // port -> PID；同一进程的非服务端口不重复探测
+	rejectedPorts := map[int]int{}             // port -> PID；同一进程的非服务端口不重复探测
+	checks := map[string]*serviceHealthCheck{} // 仅由本次运行的监测循环使用
 	scanRound := 0
+	for port, url := range readiness.urls {
+		hintedPorts[port] = true
+		if col != nil {
+			col.Info("[就绪] 必须就绪: " + url)
+		}
+	}
 
 	if col != nil {
-		col.Info(fmt.Sprintf("[监测] 开始服务发现 tick=3s discoverTimeout=%s", l.urlTimeout))
+		col.Info(fmt.Sprintf("[监测] 开始服务发现 tick=3s discoverTimeout=%s", readiness.timeout))
 		if len(declaredRoles) > 0 {
 			parts := make([]string, 0, len(declaredRoles))
 			for p, r := range declaredRoles {
@@ -305,29 +320,19 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 		select {
 		case <-ticker.C:
 			cur := rt.GetStatus()
-			if cur == app.StatusStopped || cur == app.StatusFailed {
+			if cur == app.StatusStopped || cur == app.StatusFailed || cur == app.StatusStopping {
 				return
 			}
 			scanRound++
 			// 扫描新增端口，登记为 service
 			l.discoverServices(appID, rt, before, manualRoles, declaredRoles, hintedPorts, rejectedPorts, col, scanRound)
 			// 对所有 service 做健康检查，并综合出项目状态
-			l.recheckAndAggregate(appID, rt, col)
+			l.recheckAndAggregate(appID, rt, col, checks, time.Now(), readiness)
 		case <-deadline.C:
-			// 发现窗口结束：若仍无任何 service 或全部不健康，按结果定 degraded
-			if rt.GetStatus() == app.StatusStarting {
-				svcs, _ := l.Store.ListServicesByRun(rt.RunID)
-				if col != nil {
-					if len(svcs) == 0 {
-						col.Warn(fmt.Sprintf("[监测] 发现窗口已结束（%s）仍无任何服务端口，status 仍为 starting；将继续后台扫描", l.urlTimeout))
-						col.Debug("[监测] 排查提示: 检查进程是否卡在依赖安装/编译；日志是否打印了 Local URL；端口是否被防火墙/绑定异常；cwd/cmd 是否正确")
-					} else {
-						col.Warn(fmt.Sprintf("[监测] 发现窗口已结束（%s）已登记 %d 个服务但尚未全部健康，保持/重算状态", l.urlTimeout, len(svcs)))
-					}
-				}
-				l.recheckAndAggregate(appID, rt, col)
+			l.recheckAndAggregate(appID, rt, col, checks, time.Now(), readiness)
+			if col != nil && len(readiness.urls) == 0 && rt.GetStatus() == app.StatusStarting {
+				col.Warn("[监测] 尚未发现健康服务，继续后台扫描；可用 rundock:ready 明确就绪条件")
 			}
-			// 窗口结束后仍继续周期性复查（服务可能晚起），直到进程退出
 		}
 	}
 }
@@ -482,25 +487,65 @@ func isServicePort(port int, logEvidence bool, declaredRole probe.Role, hinted b
 	return role == probe.RoleDatabase
 }
 
-// recheckAndAggregate 对所有 service 做健康检查，按木桶原则综合出项目状态。
-func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbus.Collector) {
+const (
+	healthyCheckInterval   = 15 * time.Second
+	healthRetryInterval    = 3 * time.Second
+	healthFailureThreshold = 2
+)
+
+// serviceHealthCheck 的重试计数和时间只属于一次运行，不跨重启或项目共享。
+type serviceHealthCheck struct {
+	nextCheck time.Time
+	failures  int
+}
+
+// recheckAndAggregate 持续复查 service，并按已确认的健康状态综合项目状态。
+func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbus.Collector, checks map[string]*serviceHealthCheck, checkedAt time.Time, readiness *startupReadiness) {
+	if cur := rt.GetStatus(); cur == app.StatusStopped || cur == app.StatusFailed || cur == app.StatusStopping {
+		return
+	}
 	svcs, err := l.Store.ListServicesByRun(rt.RunID)
-	if err != nil || len(svcs) == 0 {
+	if err != nil {
+		return
+	}
+	if len(svcs) == 0 {
+		l.waitForReadiness(rt, readiness, svcs, checkedAt, col)
 		return
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := checkedAt.UTC().Format(time.RFC3339)
 	healthy, unhealthy := 0, 0
 	for _, svc := range svcs {
-		// 已 healthy 的不重复探（省负载）；unhealthy/unknown 的复查
-		if svc.Health == "healthy" {
-			healthy++
+		check := checks[svc.ID]
+		if check == nil {
+			check = &serviceHealthCheck{}
+			checks[svc.ID] = check
+		}
+		if checkedAt.Before(check.nextCheck) {
+			switch svc.Health {
+			case "healthy":
+				healthy++
+			case "unhealthy":
+				unhealthy++
+			}
 			continue
 		}
 		prev := svc.Health
 		probeStarted := time.Now()
-		hr := l.probeService(svc.URL)
+		var hr *probe.HealthResult
+		if readiness != nil && readiness.urls[svc.Port] != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			hr = probe.CheckURL(ctx, readiness.urls[svc.Port])
+			cancel()
+		} else {
+			hr = l.probeService(svc.URL)
+		}
 		probeDuration := time.Since(probeStarted)
+		// 停止期间返回的探测结果不能再改写服务健康状态。
+		if cur := rt.GetStatus(); cur == app.StatusStopped || cur == app.StatusFailed || cur == app.StatusStopping {
+			return
+		}
+		check.nextCheck = checkedAt.Add(probeDuration).Add(healthRetryInterval)
 		ok := hr != nil && hr.Reachable
 		if l.Diagnostics != nil && (probeDuration >= 500*time.Millisecond || !ok) {
 			status := "reachable"
@@ -516,6 +561,9 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 			})
 		}
 		if ok {
+			check.failures = 0
+			check.nextCheck = checkedAt.Add(probeDuration).Add(healthyCheckInterval)
+			svc.Health = "healthy"
 			_ = l.Store.UpdateServiceHealth(svc.ID, "healthy", now)
 			healthy++
 			if col != nil && prev != "healthy" {
@@ -530,10 +578,23 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 				l.tryUpgradeRole(svc)
 			}
 		} else {
-			_ = l.Store.UpdateServiceHealth(svc.ID, "unhealthy", now)
-			unhealthy++
-			if col != nil && prev != "unhealthy" {
-				col.Warn(fmt.Sprintf("[健康] %s port=%d %s → unhealthy（不可达）", svc.URL, svc.Port, prev))
+			if check.failures < healthFailureThreshold {
+				check.failures++
+			}
+			if prev == "healthy" && check.failures < healthFailureThreshold {
+				// 单次失败暂不翻转运行状态，但记录探测时间并快速复查。
+				_ = l.Store.UpdateServiceHealth(svc.ID, prev, now)
+				healthy++
+				if col != nil {
+					col.Warn(fmt.Sprintf("[健康] %s port=%d 首次失败，等待复查确认", svc.URL, svc.Port))
+				}
+			} else {
+				svc.Health = "unhealthy"
+				_ = l.Store.UpdateServiceHealth(svc.ID, "unhealthy", now)
+				unhealthy++
+				if col != nil && prev != "unhealthy" {
+					col.Warn(fmt.Sprintf("[健康] %s port=%d %s → unhealthy（不可达）", svc.URL, svc.Port, prev))
+				}
 			}
 		}
 	}
@@ -547,6 +608,9 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 	// 木桶原则综合项目状态
 	cur := rt.GetStatus()
 	if cur == app.StatusStopped || cur == app.StatusFailed || cur == app.StatusStopping {
+		return
+	}
+	if l.waitForReadiness(rt, readiness, svcs, checkedAt, col) {
 		return
 	}
 	switch {
@@ -661,6 +725,14 @@ func (l *Launcher) watchExit(appID string, rt *app.Runtime, handle *proc.Handle,
 	cancel()
 	_ = handle.Close()
 
+	// Stop owns the final transition: it must also verify observed children.
+	if rt.GetStatus() == app.StatusStopping {
+		if col != nil {
+			col.Info(fmt.Sprintf("[退出] 根进程已退出 exitCode=%d，等待子进程清理确认", exitCode))
+		}
+		return
+	}
+
 	// 清理运行态（先取 col 兜底：参数 col 一般可用；runs 删除后 collectorOf 会空）
 	l.mu.Lock()
 	delete(l.runs, appID)
@@ -750,7 +822,59 @@ func (l *Launcher) Stop(appID string) (err error) {
 		l.Manager.Transition(rt, app.StatusStopping, nil)
 	}
 
-	// 1) 优雅：Ctrl-Break / Ctrl+C
+	// Remember only this run's process tree. Never kill a port's unrelated owner.
+	owned := collectProcessTree(rs.rootPID)
+	l.mu.Lock()
+	seen := map[int]bool{}
+	for _, pid := range rs.stopPIDs {
+		seen[pid] = true
+	}
+	for _, pid := range owned {
+		if !seen[pid] {
+			rs.stopPIDs = append(rs.stopPIDs, pid)
+			seen[pid] = true
+		}
+	}
+	tracked := append([]int(nil), rs.stopPIDs...)
+	l.mu.Unlock()
+
+	finished := func() bool {
+		select {
+		case <-rs.exitDone:
+		default:
+			return false
+		}
+		for _, pid := range tracked {
+			if !isProcessGone(pid) {
+				return false
+			}
+		}
+		return true
+	}
+	wait := func(duration time.Duration) bool {
+		deadline := time.Now().Add(duration)
+		for {
+			if finished() {
+				return true
+			}
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	finish := func() error {
+		if col != nil {
+			col.Info("[停止] 根进程及已跟踪子进程均已退出")
+		}
+		if rt != nil {
+			l.finishStopped(appID, rt, 0)
+		}
+		return nil
+	}
+	if finished() {
+		return finish()
+	}
 	if err := rs.handle.GracefulStop(); err != nil {
 		if col != nil {
 			col.Warn(fmt.Sprintf("[停止] 优雅停止信号发送失败: %v", err))
@@ -758,56 +882,28 @@ func (l *Launcher) Stop(appID string) (err error) {
 	} else if col != nil {
 		col.Debug("[停止] 已发送优雅停止信号（Ctrl+C）")
 	}
-
-	// 2) 等待 grace period
-	grace := time.Duration(l.graceSeconds) * time.Second
-	waitCtx, cancel := context.WithTimeout(context.Background(), grace)
-	defer cancel()
-	deadline := time.Now().Add(grace)
-	for time.Now().Before(deadline) {
-		if exited := isProcessGone(rs.rootPID); exited {
-			if col != nil {
-				col.Info("[停止] 进程在 grace 期内已退出")
-			}
-			if rt != nil {
-				l.finishStopped(appID, rt, 0)
-			}
-			return nil
-		}
-		select {
-		case <-waitCtx.Done():
-		case <-time.After(300 * time.Millisecond):
-		}
+	if wait(time.Duration(l.graceSeconds) * time.Second) {
+		return finish()
 	}
 
-	// 3) 强制：taskkill /t /f（terminateTree 内部）
 	if col != nil {
 		col.Warn("[停止] grace 超时，强制终止进程树")
 	}
-	if err := rs.handle.Terminate(); err != nil {
-		if col != nil {
-			col.Warn(fmt.Sprintf("[停止] 强制终止调用异常: %v（将继续收敛状态）", err))
+	select {
+	case <-rs.exitDone: // Root already reaped; do not taskkill a potentially reused PID.
+	default:
+		if err := rs.handle.Terminate(); err != nil && col != nil {
+			col.Warn(fmt.Sprintf("[停止] 强制终止返回: %v", err))
 		}
 	}
-	// 等待进程彻底退出（最多再等 3 秒）
-	for i := 0; i < 10; i++ {
-		time.Sleep(300 * time.Millisecond)
-		if isProcessGone(rs.rootPID) {
-			break
-		}
+	if wait(3 * time.Second) {
+		return finish()
 	}
-	if col != nil {
-		if isProcessGone(rs.rootPID) {
-			col.Info("[停止] 强制终止后进程已消失")
-		} else {
-			col.Error(fmt.Sprintf("[停止] 强制终止后进程仍存活 pid=%d，仍将状态收敛为 stopped", rs.rootPID))
-		}
-	}
-	// 无论进程是否已退出，都收敛状态，避免卡在 stopping
+	// Keep the run tracked and retryable. Never claim stopped while children live.
 	if rt != nil {
-		l.finishStopped(appID, rt, 0)
+		l.Manager.Transition(rt, app.StatusDegraded, nil)
 	}
-	return nil
+	return fmt.Errorf("停止未完成：仍有进程或资源未退出，请查看日志后重试")
 }
 
 func (l *Launcher) finishStopped(appID string, rt *app.Runtime, exitCode int) {

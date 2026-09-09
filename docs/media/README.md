@@ -6,8 +6,9 @@ These assets support the Chinese-first and English README pages.
 | --- | --- |
 | `hero.zh-CN.png` | AI-generated brand illustration, built-in image generation |
 | `hero.en.png` | English text localization of the Chinese hero, built-in image editing |
-| `dashboard.png` | Actual Launcher UI rendered with isolated demo data |
-| `release-panel.png` | Actual Launcher UI rendered with isolated demo release configuration |
+| `dashboard.png` | Current RunDock dashboard rendered with isolated demo data |
+| `release-panel.png` | Current Release tab: target versions, independent version management, files, and notes |
+| `release-settings.png` | Current Settings tab: cloud/local radio controls, uploads, configuration file and example buttons |
 | `download.zh-CN.svg`, `download.en.svg` | Hand-authored accessible SVG link buttons |
 
 ## Optimized display assets
@@ -18,10 +19,11 @@ The README loads `.webp` previews and links to the unchanged `.png` originals fo
 | --- | --- | --- | --- |
 | `hero.zh-CN.webp` | 1440 × 576, WebP quality 86 | 43,690 bytes | 720 px |
 | `hero.en.webp` | 1440 × 576, WebP quality 86 | 45,704 bytes | 720 px |
-| `dashboard.webp` | Original resolution, lossless WebP | 86,502 bytes | 720 px |
-| `release-panel.webp` | Original resolution, lossless WebP | 50,262 bytes | 440 px |
+| `dashboard.webp` | 2220 × 1125, lossless WebP | 59,120 bytes | 720 px |
+| `release-panel.webp` | 1380 × 2157, lossless WebP | 59,612 bytes | 640 px |
+| `release-settings.webp` | 1380 × 1623, lossless WebP | 42,036 bytes | 640 px, collapsed by default |
 
-Encoded with Sharp 0.35.4, WebP effort 6. Both screenshot previews were decoded and compared pixel-for-pixel with their originals. The Chinese page's images, including the SVG download button, total 180,972 bytes instead of 1,976,995 bytes (about 91% less). Widths are maximum display sizes; images shrink to fit narrower screens.
+UI screenshots recaptured on 2026-09-09 using the actual Vue components. Encoded with Sharp, WebP effort 6. All three screenshot previews were decoded and compared pixel-for-pixel with their PNG originals. Widths are maximum display sizes; images shrink to fit narrower screens. The conceptual hero artwork was kept unchanged.
 
 The heroes are conceptual brand illustrations, not application screenshots. Screenshots use the real Vue components and styles. Only data is substituted: project names, paths, ports, Git status, release targets, and notes are fictional examples. API and WebSocket calls are intercepted in the capture browser; no real repository is submitted or published. The screenshot interface is Chinese in both README languages.
 

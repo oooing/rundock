@@ -58,6 +58,26 @@ func (s *Server) handleReleasePreflight(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, pf)
 }
 
+func (s *Server) handleReleaseUnstage(w http.ResponseWriter, r *http.Request, appID string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		StatusFingerprint string `json:"statusFingerprint"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	pf, err := s.Publisher.Unstage(r.Context(), appID, body.StatusFingerprint)
+	if err != nil {
+		writePublisherError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pf)
+}
+
 func (s *Server) handleReleaseNotesDraft(w http.ResponseWriter, r *http.Request, appID string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

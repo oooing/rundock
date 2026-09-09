@@ -9,12 +9,14 @@ import GroupSidebar from '@/components/GroupSidebar.vue'
 import UiIcon from '@/components/UiIcon.vue'
 import Dashboard from '@/views/Dashboard.vue'
 import ConfirmCard from '@/components/ConfirmCard.vue'
+import AddProjectWizard from '@/components/AddProjectWizard.vue'
 import LogDrawer from '@/components/LogDrawer.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
 import HelpModal from '@/components/HelpModal.vue'
 import CloseDialog from '@/components/CloseDialog.vue'
 import QuitConfirm from '@/components/QuitConfirm.vue'
 import ReleaseModal from '@/components/ReleaseModal.vue'
+import CloudBuildAlerts from '@/components/CloudBuildAlerts.vue'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { api } from '@/api/http'
 import {
@@ -43,8 +45,7 @@ const selectedGroupName = computed(() => groups.groups.find(g => g.id === select
 const availableGroupApps = computed(() => apps.apps.filter(a => (a.groupId || '') !== selectedGroupId.value))
 const showSettings = ref(false)
 const showHelp = ref(false)
-const candidate = ref<ImportCandidate | null>(null)
-const importing = ref(false)
+const initialImportPath = ref('')
 const logAppId = ref<string | null>(null)
 const releaseAppId = ref<string | null>(readReleaseSession()?.appId || null)
 watch(releaseAppId, (appId) => {
@@ -52,13 +53,10 @@ watch(releaseAppId, (appId) => {
   rememberReleaseSession(appId ? (saved?.appId === appId ? saved : { appId }) : null)
 }, { flush: 'sync' })
 const dragOver = ref(false)
-const fileInput = ref<HTMLInputElement | null>(null)
-const pathInput = ref('')
 const importPanelOpen = ref(false)
-const importPathRef = ref<HTMLInputElement | null>(null)
-watch(importPanelOpen, async (open) => {
-  if (open) { await nextTick(); importPathRef.value?.focus() }
-})
+const importWizard = ref<InstanceType<typeof AddProjectWizard> | null>(null)
+function openImport(path = '') { initialImportPath.value = path; importPanelOpen.value = true }
+function imported(name: string) { importPanelOpen.value = false; showToast(tr('「{0}」已导入', [name]), 2500, 'success') }
 let unlistenFileDragDrop: (() => void) | null = null
 
 // 启动/重启时脚本风险变化需确认：记下待执行的 op + appId + 最新候选。
@@ -85,102 +83,23 @@ const runningCount = computed(() => appsInGroup.value.filter(a => ['running', 'd
 const releaseApp = computed(() => apps.apps.find((a) => a.id === releaseAppId.value) || null)
 
 function onDrop(paths: string[]) {
-  const scripts = paths.filter((path) => /\.(bat|cmd|ps1)$/i.test(path))
-  if (scripts.length === 0) {
-    showToast(tr("请拖入 .bat、.cmd 或 .ps1 启动脚本"), 3500, 'warn')
-    return
-  }
-  if (importing.value || candidate.value) {
-    showToast(tr("请先完成当前脚本的导入确认"), 3500, 'warn')
-    return
-  }
-  if (scripts.length > 1) {
-    showToast(tr("一次导入一个脚本，已读取第一个文件"), 3000, 'info')
-  }
-  void importScript(scripts[0])
+  if (!paths.length) return
+  if (importPanelOpen.value) { importWizard.value?.receiveDrop(paths); return }
+  if (paths.length > 1) showToast(tr('一次添加一个项目，已读取第一个路径。'), 3000, 'info')
+  openImport(paths[0])
 }
-
-// 浏览器文件选择：拿不到完整路径，只能用文件名回填到输入框，由用户补全目录。
-// Tauri 下 File.path 有效，直接导入。
-function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const f = input.files?.[0]
-  if (f) {
-    const path = (f as any).path as string | undefined
-    if (path) {
-      // Tauri 环境：直接拿到完整磁盘路径
-      pathInput.value = path
-      importScript(path)
-    } else if (f.name) {
-      // 浏览器：只能拿到文件名，回填并提示补全
-      pathInput.value = f.name
-      pathInputHint.value = tr("请补全完整路径（含盘符，如 D:\\proj\\start.bat），然后回车或点导入")
-    }
-  }
-  input.value = ''
-}
-
 function onContentDrop(e: DragEvent) {
   dragOver.value = false
   if (e.dataTransfer?.types.includes('application/x-projects-start-manager-card')) return
-  const dt = e.dataTransfer
-  if (dt?.files?.length) {
-    const path = (dt.files[0] as any).path as string | undefined
-    if (path) {
-      onDrop([path])
-    } else {
-      // 浏览器拖放拿不到路径：提示改用输入框
-      pathInputHint.value = tr('浏览器无法获取拖入文件的完整路径，请粘贴脚本的完整路径。')
-    }
-  }
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  const path = (file as any).path as string | undefined
+  if (path) onDrop([path])
+  else { openImport(); showToast(tr('浏览器无法获取磁盘路径，请在添加窗口粘贴完整路径。'), 4000, 'info') }
 }
-
 function onContentDragOver(e: DragEvent) {
   if (e.dataTransfer?.types.includes('application/x-projects-start-manager-card')) return
   dragOver.value = true
-}
-
-const pathInputHint = ref('')
-watch(pathInputHint, (hint) => { if (hint) importPanelOpen.value = true })
-
-function importFromInput() {
-  const p = pathInput.value.trim().replace(/^["']|["']$/g, '')
-  if (!p) return
-  if (!isPathComplete(p)) {
-    pathInputHint.value = tr("路径不完整。浏览器模式下「浏览」只能拿到文件名，请补全完整路径（含盘符），或直接粘贴完整路径。")
-    return
-  }
-  pathInputHint.value = ''
-  pathInput.value = ''
-  void importScript(p)
-}
-
-// 路径是否完整（含盘符或为绝对路径）。浏览器 file input 只给文件名，需此校验。
-function isPathComplete(p: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('/')
-}
-const pathComplete = computed(() => isPathComplete(pathInput.value.trim().replace(/^["']|["']$/g, '')))
-
-async function importScript(scriptPath: string) {
-  importing.value = true
-  try {
-    candidate.value = await apps.importRaw(scriptPath)
-  } catch (e: any) {
-    showToast(tr("导入失败：") + (e?.message || e), 5000, 'error')
-  } finally {
-    importing.value = false
-  }
-}
-
-async function confirmCreate() {
-  if (!candidate.value) return
-  try {
-    await apps.createFromCandidate(candidate.value, selectedGroupId.value || undefined)
-    showToast(tr("「{0}」已导入", [candidate.value.name]), 2500, 'success')
-    candidate.value = null
-  } catch (e: any) {
-    showToast(tr("创建失败：") + (e?.message || e), 5000, 'error')
-  }
 }
 
 async function handleReorder(order: string[]) {
@@ -456,40 +375,9 @@ onUnmounted(() => {
           <p class="workspace-summary" aria-live="polite">{{ tr('{0} 个项目 · {1} 个运行中', [appsInGroup.length, runningCount]) }}</p>
         </div>
         <div class="header-actions">
-          <button class="primary import-toggle" :aria-expanded="importPanelOpen" aria-controls="import-panel" @click="importPanelOpen = !importPanelOpen"><UiIcon name="plus" />{{ tr('导入脚本') }}</button>
+          <button class="primary import-toggle" @click="openImport()"><UiIcon name="plus" />{{ tr('添加项目') }}</button>
         </div>
       </header>
-      <div v-if="importPanelOpen" id="import-panel" class="import-panel">
-        <div class="import-panel-heading"><strong>{{ tr('导入脚本') }}</strong><button class="ghost icon" :aria-label="tr('收起导入')" @click="importPanelOpen = false"><UiIcon name="close" /></button></div>
-        <div class="actions">
-          <div class="import-box">
-            <input
-              ref="importPathRef"
-              v-model="pathInput"
-              class="path-input"
-              :aria-label="tr('脚本完整路径')"
-              :class="{ incomplete: pathInput && !pathComplete }"
-              :placeholder="isTauri ? tr('拖入脚本到下方，或点浏览') : tr('粘贴完整路径，如 D:\\proj\\start.bat')"
-              @keyup.enter="importFromInput"
-            />
-            <button class="ghost" @click="fileInput?.click()" :title="tr('选择脚本文件')">{{ tr("浏览") }}</button>
-            <button
-              class="primary"
-              :disabled="!pathInput.trim() || !pathComplete || importing"
-              @click="importFromInput"
-            >
-              {{ importing ? tr("导入中…") : tr("导入") }}
-            </button>
-          </div>
-          <div v-if="pathInput && !pathComplete" class="path-hint warn">
-            {{ tr("⚠ 只拿到文件名「") }}{{ pathInput }}{{ tr("」，浏览器无法自动获取磁盘路径。请补全完整路径（含盘符），例如在前面加上") }} <code>{{ tr("D:\\项目目录\\") }}</code>
-          </div>
-          <div v-else-if="pathInputHint" class="path-hint">{{ pathInputHint }}</div>
-        </div>
-        <p class="import-description">{{ isTauri ? tr('支持 .bat、.cmd、.ps1，也可以直接拖入窗口。') : tr('支持 .bat、.cmd、.ps1。浏览器中请粘贴脚本的完整路径。') }}</p>
-      </div>
-      <input ref="fileInput" type="file" accept=".bat,.cmd,.ps1" hidden @change="onFileChange" />
-
       <section
         class="content"
         :class="{ dragover: dragOver }"
@@ -505,7 +393,7 @@ onUnmounted(() => {
           :moving="movingGroups"
           :group-view="selectedGroupId !== null"
           :native-drop="isTauri"
-          @show-import="importPanelOpen = true"
+          @show-import="openImport()"
           @move-group="handleMoveGroup"
           @group-hover="dropGroupId = $event"
           :apps="appsInGroup"
@@ -527,12 +415,12 @@ onUnmounted(() => {
           @reidentify="(appId, serviceId) => apps.reidentifyService(appId, serviceId)"
           @set-color="(id, color) => apps.setCardColor(id, color)"
           @reorder="handleReorder"
-          @import="importScript"
+          @import="openImport"
         />
       </section>
     </main>
 
-    <ConfirmCard v-if="candidate" :candidate="candidate" @confirm="confirmCreate" @cancel="candidate = null" />
+    <AddProjectWizard v-if="importPanelOpen" ref="importWizard" :initial-path="initialImportPath" :native-drag-over="dragOver" :group-id="selectedGroupId || undefined" @close="importPanelOpen = false" @added="imported" />
     <ConfirmCard
       v-if="pending"
       mode="script-change"
@@ -578,6 +466,7 @@ onUnmounted(() => {
       </section>
     </div>
     <!-- 置顶通知栏：成功/失败/提示 集中显示在顶部中央，可堆叠、可手动关闭 -->
+    <CloudBuildAlerts />
     <div class="toast-stack">
       <transition-group name="toast">
         <div

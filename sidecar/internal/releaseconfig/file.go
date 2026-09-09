@@ -43,7 +43,7 @@ func (s *Service) GetFile(ctx context.Context, appID string) (*ConfigFile, error
 	}
 	revision := fileRevision(raw, exists)
 	if !exists {
-		cfg := cloneForManifest(s.scanRoot(root, repoFound))
+		cfg := cloneForManifest(s.scanRoot(ctx, root, repoFound))
 		document := struct {
 			SchemaVersion int            `json:"schemaVersion"`
 			VersionGroups []VersionGroup `json:"versionGroups"`

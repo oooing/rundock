@@ -92,6 +92,7 @@ async function startReq(
 }
 
 export const api = {
+  discoverStartup: (path: string) => req<import('@/types').StartupDiscovery>('/api/import/discover', { method: 'POST', body: JSON.stringify({ path }) }),
   // 导入（只读分析）
   import: (scriptPath: string) =>
     req<ImportCandidate>('/api/import', {
@@ -124,8 +125,13 @@ export const api = {
   openDir: (id: string) => req<{ opened: string }>(`/api/apps/${id}/open-dir`, { method: 'POST' }),
 
   // Git 版本发布
+  cloudBuildAlerts: () => req<import('@/types').CloudBuildStatus[]>('/api/cloud-builds'),
+  acknowledgeCloudBuild: (runId: string, alertKey: string) =>
+    req<{ acknowledged: boolean }>('/api/cloud-builds', { method: 'POST', body: JSON.stringify({ runId, alertKey }) }),
   releasePreflight: (id: string, checkRemote = false) =>
     req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, { method: 'POST' }),
+  unstageReleaseFiles: (id: string, statusFingerprint: string) =>
+    req<ReleasePreflight>(`/api/apps/${id}/release/unstage`, { method: 'POST', body: JSON.stringify({ statusFingerprint }) }),
   createReleaseNotesDraft: (id: string, body: ReleaseNotesDraftRequest) =>
     req<ReleaseNotesDraft>(`/api/apps/${id}/release/notes-draft`, { method: 'POST', body: JSON.stringify(body) }),
   getReleaseProfile: (id: string) => req<ReleaseProfile>(`/api/apps/${id}/release-profile`),

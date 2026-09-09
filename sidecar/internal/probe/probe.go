@@ -78,6 +78,9 @@ var httpClient = &http.Client{Timeout: 3 * time.Second}
 // CheckHealth 对候选 URL 做健康检查。
 // 路径优先级：原 URL -> /health -> /api/health -> /。
 // 第一个返回 2xx/3xx 的即视为可达。
+// CheckURL probes exactly the configured readiness endpoint, without fallback.
+func CheckURL(ctx context.Context, url string) *HealthResult { return probeURL(ctx, url) }
+
 func CheckHealth(ctx context.Context, baseURL string) *HealthResult {
 	candidates := healthPaths(baseURL)
 	for _, u := range candidates {

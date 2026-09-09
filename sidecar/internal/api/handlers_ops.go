@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/launcher-sidecar/internal/app"
+	"github.com/launcher-sidecar/internal/launcher"
 	"github.com/launcher-sidecar/internal/probe"
 	"github.com/launcher-sidecar/internal/store"
 )
@@ -123,15 +124,22 @@ func appView(a *store.App, s *Server) map[string]any {
 		runID = rt.RunID
 		pid = rt.PID
 	}
+	if status == app.StatusStopped || status == app.StatusFailed {
+		runID, pid = "", 0
+	}
 	row["status"] = status
 	row["runId"] = runID
 	row["pid"] = pid
-	// 多服务列表（项目下所有发现的端口服务）
-	services, _ := s.Store.ListServicesByApp(a.ID)
+	// Only this active run can report live services; retain historical rows for logs.
+	var services []*store.AppService
+	if runID != "" {
+		services, _ = s.Store.ListServicesByRun(runID)
+	}
 	if services == nil {
 		services = []*store.AppService{}
 	}
 	row["services"] = services
+	row["lastUrl"] = launcher.PreferredOpenURL(a.EntryScript, a.LastURL, services)
 	return row
 }
 
@@ -179,7 +187,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"stopped": true})
+	response := map[string]any{"stopped": true}
+	if a, err := s.Store.GetApp(id); err == nil && a != nil {
+		response["app"] = appView(a, s)
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // POST /api/apps/stop-all 停止所有正在运行的项目（退出前清理用）。
@@ -294,7 +306,7 @@ func (s *Server) handleOpenURL(w http.ResponseWriter, r *http.Request, id string
 	_ = readJSON(r, &body)
 	url := body.URL
 	if url == "" {
-		url = a.LastURL
+		url, _ = appView(a, s)["lastUrl"].(string)
 	}
 	if url == "" {
 		writeError(w, http.StatusBadRequest, "no url available")

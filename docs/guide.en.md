@@ -18,26 +18,54 @@ A Windows project manager for script-based start/stop control, live logs, and Gi
 ## Getting started
 
 1. Download a published Windows `.exe` or `.msi` installer from [Releases](https://github.com/oooing/rundock/releases).
-2. Open RunDock, drag a project's startup script into the desktop window, and review the import details.
-3. Use the project card to control its processes, view logs, or open the release panel.
+2. Click **Add project**, then drop a startup script or an entire project folder into the drop zone. Alternatively, enter its full path. Both use the same startup discovery flow.
+3. Review the name and entry, confirm the card, then click **Start**. Advanced details are collapsed; adding a project does not run it.
 
-In browser development mode, paste the script's **full path** into the top input to import it. Direct file drag-and-drop is supported in the desktop app.
+The installed app accepts dropped folders and `.bat`, `.cmd`, or `.ps1` scripts. If the web version cannot obtain the dropped item's disk location, it asks you to paste the **absolute path** below.
+
+Folder discovery recommends existing startup scripts and recognizes `dev`, `start`, or `serve` in `package.json`, using npm, pnpm, or yarn. Discovery only reads files: it does not install dependencies or rewrite the project. Prepare runtimes and dependencies according to the project documentation. If no entry is found, choose a startup file manually or open the preparation help. Duplicate entries point you to the existing card.
 
 The desktop app currently targets **Windows 10/11 x64**. Installers are unsigned and may trigger SmartScreen warnings; verify their source and checksums. Actions test artifacts are not published production releases.
 
 ## Releasing a project
 
-Click the release button on a project card, select targets and files, then review versions and release notes before submitting.
+Click the release button on a project card. The panel has **Release** and **Settings** tabs; everyday release actions stay in **Release**.
+
+### Release: targets, versions, and files
+
+1. **Choose targets**: the current version sits beside each target name. Select configured targets or choose code only.
+2. **Manage versions**: a separate card shows **current → target**. Choose automatic increments or manually enter `X.Y.Z`. Targets sharing a version appear once; independent groups are edited separately.
+3. **Select files**: review the changes to include, especially new files.
+4. **Review notes**: edit the short draft generated from code changes, or regenerate it.
+5. Review and submit. The app tracks GitHub Actions for the released tags; you can also follow the progress link.
+
+Failed cloud builds leave a notification at the bottom right with the project, version, available failed job and step, and a GitHub logs button. Tracking continues after the release panel closes. Successful builds stay quiet. Dismissing a failure prevents duplicate alerts; a failed rerun creates a new alert. Connection problems are shown separately from build failures.
+
+Tracking covers releases from the last seven days and requires the RunDock backend and GitHub connectivity. No system notification is sent while the app is shut down; reopening resumes checks and restores unread alerts. Public repositories can be read anonymously. Private repositories require an authenticated local GitHub CLI with Actions read access.
+
+![Release tab with targets and independent version management, shown in Chinese](./media/release-panel.webp)
+
+Current versions come from local tags and version files, not a live lookup of the latest public GitHub Release. Turning off tag creation leaves versions unchanged; cloud targets triggered by tags require it to remain enabled.
+
+### Settings: build location and project configuration
 
 - **Build location**: each project defaults to GitHub cloud build. RunDock pushes code and versions for the configured GitHub workflow to build and package, without running local build commands.
 - **Local build**: runs checks, builds, and packaging on this computer without uploading or deploying. The choice is saved per project. Missing steps are shown as unavailable; RunDock never silently switches build locations.
 
-- **Files**: tracked changes are selected by default; untracked files are not. Check that required new files are included.
-- **Version tags**: optional, with automatic increments or manually entered versions. The tag toggle remembers its previous setting.
 - **Remote upload**: “Upload after committing” controls remote push. Cloud builds require it; local builds disable it. Code-only submissions can choose independently.
-- **Safety checks**: existing staged changes, conflicts, a behind branch, duplicate tags, and other blocking issues stop the operation. Stage logs are available after failures.
+- **Configuration files**: open the current configuration to view, edit, validate, and save it, or open the annotated example. Saving does not start a build or upload.
+
+Choose **Back to release** when finished to continue selecting versions and files.
 
 Each project's targets, commands, version files, and automation settings live in [`.launcher/release.yaml`](../.launcher/release.yaml), written as JSON compatible with YAML 1.2. **Detecting a target does not mean its build, upload, or deployment steps are configured.**
+
+### Handling common messages
+
+- **Files already staged**: choose **Unstage and select files again**. Edits are preserved and the list refreshes so you can choose files without a terminal. RunDock backs up the index under `rundock-index-backups/` in the repository's Git directory first. Conflicts or an ongoing Git operation must still be resolved.
+- **New files not selected**: tracked changes are selected by default; untracked files are not. Select the new files your release needs.
+- **File state changed**: review the refreshed list and retry. Version choices and manually edited notes are retained.
+- **Code uploaded, cloud result pending**: open GitHub Actions. A successful push and a completed cloud build are separate stages.
+- **Build or push failed**: check the execution log and failed stage, then use the retry action offered by the page. Conflicts, behind branches, and duplicate tags are not overwritten automatically.
 
 ### RunDock's own automated release
 

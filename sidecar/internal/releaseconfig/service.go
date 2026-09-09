@@ -38,7 +38,7 @@ func (s *Service) Get(ctx context.Context, appID string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return s.scanRoot(root, repoFound), nil
+			return s.scanRoot(ctx, root, repoFound), nil
 		}
 		return nil, &Error{Code: "config_read_failed", Message: "无法读取发布配置：" + err.Error()}
 	}
@@ -63,7 +63,7 @@ func (s *Service) Scan(ctx context.Context, appID string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.scanRoot(root, repoFound), nil
+	return s.scanRoot(ctx, root, repoFound), nil
 }
 
 // Put validates and atomically stores a project-local manifest. The on-disk

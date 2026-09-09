@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 // PreparedCommand 描述一条准备好的、可直接执行的命令。
@@ -26,6 +27,9 @@ type PreparedCommand struct {
 
 // Handle 代表一个被托管的进程句柄。
 type Handle struct {
+	closeOnce sync.Once
+	closeErr  error
+	exited    chan struct{}
 	cmd       *exec.Cmd
 	rootPID   int
 	jobCloser func() error // Windows: 关闭 Job Object 句柄；其他平台 nil
@@ -39,16 +43,18 @@ func (h *Handle) IsConPTY() bool { return h.pty != nil }
 // PID 返回根进程 PID。
 func (h *Handle) PID() int { return h.rootPID }
 
-// Close 释放 Job Object 句柄等资源（不会终止进程，仅释放句柄）。
+// Close releases process resources once. Closing the Windows Job also reclaims
+// remaining children; call it after Wait has collected the root exit code.
 func (h *Handle) Close() error {
-	if h.pty != nil {
-		// ConPTY 模式：关闭会话资源（不终止进程）
-		closeConPTY(h.pty)
-	}
-	if h.jobCloser != nil {
-		return h.jobCloser()
-	}
-	return nil
+	h.closeOnce.Do(func() {
+		if h.jobCloser != nil {
+			h.closeErr = h.jobCloser()
+		}
+		if h.pty != nil {
+			closeConPTY(h.pty)
+		}
+	})
+	return h.closeErr
 }
 
 // Start 启动 PreparedCommand，隐藏窗口，把进程加入 Job Object，返回 Handle。
@@ -73,6 +79,7 @@ func Start(ctx context.Context, pc *PreparedCommand, onStdout, onStderr func(lin
 	}
 
 	h := &Handle{
+		exited:  make(chan struct{}),
 		cmd:     cmd,
 		rootPID: cmd.Process.Pid,
 		cancel:  cancel,
@@ -86,10 +93,12 @@ func Start(ctx context.Context, pc *PreparedCommand, onStdout, onStderr func(lin
 
 // Wait 等待进程退出，返回退出码。
 func (h *Handle) Wait() (int, error) {
+	if h.exited != nil {
+		defer close(h.exited)
+	}
 	if h.pty != nil {
 		// ConPTY 模式
 		code, err := waitConPTY(h.pty)
-		h.cancel()
 		return code, err
 	}
 	err := h.cmd.Wait()
@@ -108,17 +117,9 @@ func (h *Handle) GracefulStop() error {
 	return sendCtrlBreak(h)
 }
 
-// Terminate 强制终止进程树：ConPTY 模式用 TerminateProcess，普通模式用 taskkill /t /f。
-func (h *Handle) Terminate() error {
-	if h.pty != nil {
-		// ConPTY 模式：先 TerminateProcess，再靠 taskkill 兜底清子进程
-		if err := terminateConPTY(h.pty); err != nil {
-			return err
-		}
-		return terminateTree(h)
-	}
-	return terminateTree(h)
-}
+// Terminate kills the tree while the root identity and ConPTY wait handle are
+// still valid. Wait/Close perform resource cleanup afterwards, never before kill.
+func (h *Handle) Terminate() error { return terminateTree(h) }
 
 // mergeEnv 把注入变量合并到父进程环境。注入变量覆盖同名父进程变量。
 func mergeEnv(extra map[string]string) []string {

@@ -49,6 +49,12 @@ func Import(scriptPath string, registry *adapter.Registry) (*Candidate, error) {
 	if info.IsDir() {
 		return nil, fmt.Errorf("路径是目录，请拖入脚本文件: %s", abs)
 	}
+	if !info.Mode().IsRegular() || info.Size() > 1024*1024 {
+		return nil, fmt.Errorf("启动文件无法读取或超过 1 MB，请选择另一个启动文件")
+	}
+	if !supportedScript(abs) && strings.ToLower(filepath.Base(abs)) != "package.json" {
+		return nil, fmt.Errorf("请选择 .bat、.cmd、.ps1 启动脚本，或项目文件夹")
+	}
 
 	// 1. 推断项目根与工作目录
 	root, markers := detectProjectRoot(abs)
@@ -63,6 +69,28 @@ func Import(scriptPath string, registry *adapter.Registry) (*Candidate, error) {
 		registry.Register(adapter.BatchAdapter{})
 	}
 	chosen := registry.Select(root, abs)
+	// Explicit scripts must retain their wrapper's setup, working directory and
+	// readiness declarations instead of being replaced by a guessed npm command.
+	switch strings.ToLower(filepath.Ext(abs)) {
+	case ".bat", ".cmd":
+		chosen = adapter.BatchAdapter{}
+	case ".ps1":
+		chosen = adapter.PS1Adapter{}
+	default:
+		runner, script, e := packageStartup(abs)
+		if e != nil || script == "" {
+			return nil, fmt.Errorf("没有找到可用的 dev、start 或 serve 启动命令")
+		}
+		root, cwd = filepath.Dir(abs), filepath.Dir(abs)
+		switch runner {
+		case "pnpm":
+			chosen = adapter.NewPnpmAdapter()
+		case "yarn":
+			chosen = adapter.NewYarnAdapter()
+		default:
+			chosen = adapter.NewNPMAdapter()
+		}
+	}
 	adapterType := chosen.Type()
 
 	// 3. 静态提取 name / env / 端口

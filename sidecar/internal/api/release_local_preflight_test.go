@@ -54,4 +54,31 @@ func TestReleasePreflightAPIDefaultIsLocalEvenWhenRemoteIsUnavailable(t *testing
 			t.Fatalf("default still blocks on unavailable remote: %+v", pf)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("keep these edits"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "new.txt")
+	check := requestAPI(t, router, http.MethodPost, "/api/apps/fixture/release/preflight", nil)
+	var staged publisher.Preflight
+	if err := json.Unmarshal(check.Body.Bytes(), &staged); err != nil {
+		t.Fatal(err)
+	}
+	wrongMethod := requestAPI(t, router, http.MethodGet, "/api/apps/fixture/release/unstage", nil)
+	if wrongMethod.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET mutated index: %d", wrongMethod.Code)
+	}
+	stale := requestAPI(t, router, http.MethodPost, "/api/apps/fixture/release/unstage", []byte(`{"statusFingerprint":"old"}`))
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale request: %s", stale.Body.String())
+	}
+	body, _ := json.Marshal(map[string]string{"statusFingerprint": staged.StatusFingerprint})
+	result := requestAPI(t, router, http.MethodPost, "/api/apps/fixture/release/unstage", body)
+	var after publisher.Preflight
+	if err := json.Unmarshal(result.Body.Bytes(), &after); err != nil || result.Code != http.StatusOK || !after.CanRelease || after.RemoteChecked {
+		t.Fatalf("unstage response: %s %v", result.Body.String(), err)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, "new.txt"))
+	if err != nil || string(data) != "keep these edits" {
+		t.Fatalf("lost file: %s %v", data, err)
+	}
 }

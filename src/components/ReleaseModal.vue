@@ -4,6 +4,7 @@ import { tr } from '@/i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/http'
 import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
+import ReleaseVersionChange from './ReleaseVersionChange.vue'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { releaseContentState } from '@/utils/releaseContent'
 import type {
@@ -49,6 +50,8 @@ const phaseOptions = computed<Array<{ key: ExecutionPhase; label: string; hint: 
 const loading = ref(true)
 const savingProfile = ref(false)
 const publishing = ref(false)
+const unstaging = ref(false)
+const unstageNotice = ref('')
 const error = ref('')
 const errorCode = ref('')
 const versionPlanNotice = ref('')
@@ -88,7 +91,10 @@ const configSaving = ref(false)
 const configValidationError = ref('')
 const preflightStale = ref(false)
 const gitOnly = ref(false)
-const advancedOpen = ref(false)
+type ReleaseTab = 'publish' | 'settings'
+const releaseTab = ref<ReleaseTab>('publish')
+const tabScroll: Record<ReleaseTab, number> = { publish: 0, settings: 0 }
+const configFileDirty = ref(false)
 const confirmAction = ref<'retry' | 'regenerate-notes' | null>(null)
 const bodyRef = ref<HTMLElement | null>(null)
 
@@ -97,6 +103,7 @@ const logs = ref<ReleaseLog[]>([])
 const runTargets = ref<ReleaseTargetRun[]>([])
 const runArtifacts = ref<ReleaseArtifact[]>([])
 const runAutomation = ref<ReleaseAutomationStatus | null>(null)
+const cloudBuild = ref<import('@/types').CloudBuildStatus | null>(null)
 const retrying = ref(false)
 const openingAutomation = ref(false)
 const automationOpenError = ref('')
@@ -139,17 +146,6 @@ const invalidChosenTargetIds = computed(() => selectedTargets.value
 const selectedVersionGroupIds = computed(() => [...new Set(chosenTargets.value.map(({ target }) => target.versionGroup))])
 const selectedVersionGroups = computed(() => (releaseConfig.value?.versionGroups || [])
   .filter((group) => selectedVersionGroupIds.value.includes(group.id)))
-const releaseTagSummary = computed(() => {
-  const pf = preflight.value
-  if (!pf) return ''
-  if ((releaseConfig.value?.versionGroups.length || 0) > 1) {
-    if (gitOnly.value || !selectedVersionGroups.value.length) return tr('各平台版本独立管理')
-    const tags = selectedVersionGroups.value.map(group => pf.latestGroupTags[group.id]
-      || tr('{0}：未创建 Tag', [versionGroupDisplayName(group)]))
-    return tr('所选平台 Tag：{0}', [[...new Set(tags)].join(' · ')])
-  }
-  return pf.latestTag ? tr('本地 Tag：{0}', [pf.latestTag]) : tr('暂无 Tag')
-})
 const selectedVersionFiles = computed(() => {
   if (gitOnly.value || !selectedVersionGroups.value.length) return preflight.value?.versionFiles || []
   return [...new Set(selectedVersionGroups.value.flatMap((group) => group.versionFiles.map((file) => file.path)))]
@@ -190,12 +186,16 @@ const plannedVersions = computed<PlannedVersion[]>(() => {
     const target = versionMode.value === 'auto' ? suggestedVersion : (versionInputs.value.repository || suggestedVersion)
     return [{ versionGroupId: 'repository', versionGroupName: tr("项目版本"), currentVersion: pf.latestTag || tr("未创建 Tag"), suggestedVersion, targetVersion: target, tagName: `v${target}` }]
   }
-  const namespaced = (releaseConfig.value?.versionGroups.length || 0) > 1
-  return selectedVersionGroups.value.map((group) => {
+  return selectedVersionGroups.value.map(versionForGroup)
+})
+
+function versionForGroup(group: ReleaseVersionGroup): PlannedVersion {
+    const pf = preflight.value!
+    const namespaced = (releaseConfig.value?.versionGroups.length || 0) > 1
     const values: string[] = []
     if (!group.versionFiles.length && group.currentVersion) values.push(group.currentVersion)
     for (const file of group.versionFiles) values.push(pf.currentVersions[file.path] || group.currentVersion || '')
-    const latestGroupVersion = (pf.latestGroupTags[group.id] || '').replace(/^.*\/v/, '')
+    const latestGroupVersion = (pf.latestGroupTags[group.id] || (!namespaced ? pf.latestTag : '') || '').replace(/^.*\/v|^v/, '')
     const suggestedVersion = namespaced
       ? (pf.suggestedVersions[group.id] || nextPatchVersion([...values, latestGroupVersion]))
       : suggestReleaseVersion(values.filter(Boolean), pf.latestTag)
@@ -209,8 +209,17 @@ const plannedVersions = computed<PlannedVersion[]>(() => {
       targetVersion: target,
       tagName: namespaced ? `${prefix}/v${target}` : `v${target}`,
     }
-  })
-})
+}
+
+function platformVersions(platform: ProductPlatform) {
+  if (!preflight.value) return []
+  const groupIds = new Set(platform.targets.map(target => target.versionGroup))
+  return (releaseConfig.value?.versionGroups || []).filter(group => groupIds.has(group.id)).map(versionForGroup)
+}
+
+function displayCurrentVersion(value: string) {
+  return /^(?:v)?\d+\.\d+\.\d+$/.test(value) ? `v${value.replace(/^v/, '')}` : value
+}
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const versionValid = computed(() => !createTag.value || (plannedVersions.value.length > 0 && plannedVersions.value.every((version) => versionPattern.test(version.targetVersion))))
 const primaryTargetVersion = computed(() => plannedVersions.value[0]?.targetVersion || '')
@@ -270,7 +279,7 @@ const localChecksPassed = computed(() => !!preflight.value && !blockingIssues.va
   && (preflight.value.canRelease || preflight.value.blockingIssues.length > 0))
 const remoteMissing = computed(() => pushRemote.value && !!preflight.value && !preflight.value.remotes.includes(remoteName.value))
 const canPublish = computed(() => {
-  if (configFileOpen.value || configSaving.value) return false
+  if (unstaging.value || configFileDirty.value || configEditorOpen.value || configSaving.value) return false
   if (!localChecksPassed.value || remoteMissing.value || savingProfile.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
   if (createTag.value && (!versionValid.value || releaseNotesLoading.value || (releaseNotesStale.value && !releaseNotesDirty.value) || !releaseNotes.value.trim())) return false
   if (newContentState.value !== 'new') return false
@@ -303,7 +312,7 @@ const retryTargetNames = computed(() => retryConfirmationTargets.value.length
 const hasOnlineAction = computed(() => selectedTargets.value.some((target) => target.publish || target.deploy))
 const hasExternalAction = computed(() => hasOnlineAction.value || willTriggerAutomation.value)
 const remoteDestination = computed(() => /github\.com/i.test(preflight.value?.remoteUrl || '') ? 'GitHub' : tr("远程仓库"))
-const automationPageUrl = computed(() => runAutomation.value?.url
+const automationPageUrl = computed(() => cloudBuild.value?.url || runAutomation.value?.url
   || activeRun.value?.automationUrl
   || githubActionsUrl(preflight.value?.remoteUrl || '', configuredAutomation.value?.workflow || ''))
 
@@ -351,10 +360,11 @@ const cloudExecutionNotice = computed(() => {
       : tr("云端目标由 GitHub Actions 构建、打包并按项目配置发布；本地目标仍按配置执行。"),
   }
 })
-const completionTitle = computed(() => automationHandedOff.value ? tr('代码已上传，云端结果待确认') : activeRun.value?.pushRemote
+const completionTitle = computed(() => cloudBuild.value?.state === 'failed' ? tr('云端构建失败') : cloudBuild.value?.state === 'succeeded' ? tr('云端构建已完成') : automationHandedOff.value ? tr('代码已上传，正在跟踪云端构建') : activeRun.value?.pushRemote
   ? tr("已提交到 {0}", [automationHandedOff.value ? 'GitHub' : remoteDestination.value])
   : tr("本地操作已完成"))
 const completionDescription = computed(() => {
+  if (cloudBuild.value?.summary) return tr(cloudBuild.value.summary)
   if (!activeRun.value?.pushRemote) return tr("提交已保存在本机，尚未上传到远程仓库。")
   return activeRun.value.createTag ? tr("代码和版本 Tag 已上传。") : tr("代码已上传。")
 })
@@ -903,6 +913,25 @@ function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = tru
   scheduleReleaseNotesDraft()
 }
 
+async function unstageFiles() {
+  if (!preflight.value || unstaging.value || publishing.value) return
+  unstaging.value = true
+  unstageNotice.value = ''
+  error.value = ''
+  try {
+    const pf = await api.unstageReleaseFiles(props.app.id, preflight.value.statusFingerprint)
+    if (disposed) return
+    applyPreflight(pf)
+    unstageNotice.value = tr('已取消暂存，文件修改已保留。请在下方重新选择本次提交的文件。')
+  } catch (reason) {
+    if (disposed) return
+    if (reason instanceof ApiError && reason.preflight) applyPreflight(reason.preflight)
+    error.value = messageOf(reason)
+  } finally {
+    unstaging.value = false
+  }
+}
+
 async function load(resumeFailedRun = true) {
   loading.value = true
   error.value = ''
@@ -1005,7 +1034,7 @@ async function scanReleaseConfig() {
   try {
     const previous = releaseConfig.value ? cloneConfig(releaseConfig.value) : null
     applyReleaseConfig(await api.scanReleaseConfig(props.app.id), true)
-    advancedOpen.value = true
+    void switchReleaseTab('settings')
     configBeforeEdit.value = previous
     configEndpointAvailable.value = true
     configNotice.value = tr("自动识别已完成。请检查建议；点击“保存并使用”后才会写入项目。")
@@ -1017,7 +1046,7 @@ async function scanReleaseConfig() {
 
 function openConfigEditor() {
   if (!releaseConfig.value) { void scanReleaseConfig(); return }
-  advancedOpen.value = true
+  void switchReleaseTab('settings')
   configBeforeEdit.value = cloneConfig(releaseConfig.value)
   configDraft.value = cloneConfig(releaseConfig.value)
   configEditorOpen.value = true
@@ -1069,8 +1098,20 @@ async function saveReleaseConfig() {
   finally { configSaving.value = false }
 }
 
-function onAdvancedToggle(event: Event) {
-  advancedOpen.value = (event.target as HTMLDetailsElement).open
+async function switchReleaseTab(tab: ReleaseTab, focus = false) {
+  if (publishing.value || activeRun.value) return
+  if (bodyRef.value) tabScroll[releaseTab.value] = bodyRef.value.scrollTop
+  releaseTab.value = tab
+  await nextTick()
+  if (bodyRef.value) bodyRef.value.scrollTop = tabScroll[tab]
+  if (focus) document.getElementById('release-tab-' + tab)?.focus()
+}
+
+function onReleaseTabKeydown(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const tab = event.key === 'Home' ? 'publish' : event.key === 'End' ? 'settings' : releaseTab.value === 'publish' ? 'settings' : 'publish'
+  void switchReleaseTab(tab, true)
 }
 
 async function onConfigFileSaved(config: ReleaseConfig) {
@@ -1192,6 +1233,7 @@ function showRun(run: ReleaseRun) {
   runTargets.value = []
   runArtifacts.value = []
   runAutomation.value = null
+  cloudBuild.value = null
   retryMetadataLoaded.value = false
   retryConfirmationRequired.value = undefined
   retryConfirmationTargets.value = []
@@ -1221,12 +1263,16 @@ async function poll() {
     runTargets.value = view.targets || []
     runArtifacts.value = view.artifacts || []
     runAutomation.value = view.automation || null
+    cloudBuild.value = view.cloudBuild || null
     retryConfirmationRequired.value = view.retryConfirmationRequired
     retryConfirmationTargets.value = view.retryConfirmationTargets || []
     retryMetadataLoaded.value = true
     logs.value = [...logs.value, ...(view.logs || [])]
     if (view.run.status === 'queued' || view.run.status === 'running') schedulePoll()
-    else history.value = await api.listReleases(props.app.id)
+    else {
+      history.value = await api.listReleases(props.app.id)
+      if (view.run.status === 'succeeded' && automationHandedOff.value && cloudBuild.value?.state !== 'succeeded') schedulePoll(15000)
+    }
   } catch (reason) {
     if (disposed) return
     error.value = messageOf(reason)
@@ -1272,6 +1318,7 @@ function startNew() {
   runTargets.value = []
   runArtifacts.value = []
   runAutomation.value = null
+  cloudBuild.value = null
   retryMetadataLoaded.value = false
   retryConfirmationRequired.value = undefined
   retryConfirmationTargets.value = []
@@ -1332,22 +1379,26 @@ onBeforeUnmount(() => {
         <button class="ghost icon" :disabled="publishing" @click="emit('close')">✕</button>
       </header>
 
+      <nav v-if="!activeRun" class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onReleaseTabKeydown">
+        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="releaseTab === 'publish'" :tabindex="releaseTab === 'publish' ? 0 : -1" :disabled="publishing" @click="switchReleaseTab('publish')">{{ tr('发布') }}</button>
+        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="releaseTab === 'settings'" :tabindex="releaseTab === 'settings' ? 0 : -1" :disabled="publishing" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
+      </nav>
+
       <div ref="bodyRef" class="m-body" :inert="publishing">
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
         <div v-if="error" class="alert error" role="alert">{{ error }}</div>
-        <ReleaseConfigFileEditor v-if="!loading && !preflight && !activeRun" :app-id="app.id" @saved="onConfigFileSaved" @editing="configFileOpen = $event" />
         <div v-if="versionPlanNotice" class="alert warn" role="status">{{ versionPlanNotice }}</div>
         <div v-if="preflightStale" class="alert warn">{{ tr("配置或 Git 已变化，请重新检查。") }}<button :disabled="savingProfile" @click="saveAndRecheck">{{ tr("重新检查") }}</button></div>
         <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
 
         <template v-if="activeRun">
           <section class="progress-block">
-            <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff }" role="status" aria-live="polite">
-              <span class="completion-icon" aria-hidden="true">{{ automationHandedOff ? '↑' : '✓' }}</span>
+            <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff && cloudBuild?.state !== 'succeeded', failed: cloudBuild?.state === 'failed' }" role="status" aria-live="polite">
+              <span class="completion-icon" aria-hidden="true">{{ cloudBuild?.state === 'failed' ? '!' : automationHandedOff && cloudBuild?.state !== 'succeeded' ? '↑' : '✓' }}</span>
               <h3>{{ completionTitle }}</h3>
               <p>{{ completionDescription }}</p>
               <template v-if="automationHandedOff">
-                <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span class="cloud-result-pending">{{ tr("云端结果尚未确认，请到 GitHub 查看最终发布结果。") }}</span></div>
+                <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span v-if="cloudBuild?.state !== 'succeeded'" class="cloud-result-pending">{{ tr('可以关闭此窗口；应用运行期间会继续跟踪，失败时提醒你。') }}</span></div>
                 <button v-if="automationPageUrl" type="button" class="actions-link" :disabled="openingAutomation" :aria-busy="openingAutomation" @click="openAutomationPage">{{ openingAutomation ? tr('正在打开浏览器…') : tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></button>
                 <p v-if="automationOpenError" class="field-error" role="alert">{{ automationOpenError }}</p>
               </template>
@@ -1367,81 +1418,137 @@ onBeforeUnmount(() => {
           </section>
         </template>
 
-        <template v-else-if="(preflight || releaseConfig) && !loading">
-          <section v-if="preflight" class="repo-glance" :class="{ problem: !localChecksPassed }">
-            <span class="ready-dot"></span>
-            <strong>{{ preflight.branch || tr("未绑定分支") }}</strong>
-            <span class="repo-tag-summary" :title="tr('Tag 是版本记录，不代表云端构建已完成')">{{ releaseTagSummary }}</span>
-            <span class="repo-glance-status" :title="localChecksPassed ? tr('已检查本地 Git 状态；上传时由 Git 拒绝冲突，不提前查询远端。') : tr('请按下方提示处理仓库问题')">{{ localChecksPassed ? tr("本地检查通过") : tr("本地仓库需要处理") }}</span>
+        <section v-else-if="(preflight || releaseConfig) && !loading" v-show="releaseTab === 'publish'" id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="release-panel" tabindex="0">
+          <div class="release-mode-summary"><span>{{ gitOnly ? tr('仅提交代码') : buildMode === 'github' ? tr('GitHub 云端构建') : tr('本地构建') }}</span><button type="button" @click="switchReleaseTab('settings', true)">{{ tr('调整设置') }}</button></div>
+          <div v-if="configFileDirty || configEditorOpen" class="alert warn settings-edit-hint">{{ tr('设置有未保存的修改，请先保存或取消修改。') }}<button type="button" @click="switchReleaseTab('settings', true)">{{ tr('前往设置') }}</button></div>
+          <section v-if="blockingIssues.length" class="issues">
+            <div v-for="issue in blockingIssues" :key="issue.code" class="alert" :class="issue.code === 'staged_changes' ? 'warn staged-issue' : 'error'">
+              <template v-if="issue.code === 'staged_changes'">
+                <strong>{{ tr('有文件已加入 Git 待提交列表') }}</strong>
+                <p>{{ tr('取消暂存后，可在这里重新选择文件。不会删除文件或撤销修改。') }}</p>
+                <button type="button" :disabled="unstaging || publishing || blockingIssues.some(item => ['repository_operation', 'merge_conflict'].includes(item.code))" :aria-busy="unstaging" @click="unstageFiles">{{ unstaging ? tr('正在取消暂存…') : tr('取消暂存并重新选择文件') }}</button>
+              </template>
+              <template v-else>{{ tr(issue.message) }}</template>
+            </div>
           </section>
-          <section v-else class="repo-glance checking"><span class="ready-dot"></span><strong>{{ tr("正在读取本地仓库…") }}</strong><span class="repo-glance-status">{{ tr("构建端可以先选择") }}</span></section>
-          <section v-if="blockingIssues.length" class="issues"><div v-for="issue in blockingIssues" :key="issue.code" class="alert error">{{ tr(issue.message) }}</div></section>
+          <div v-if="unstageNotice" class="alert info" role="status">{{ unstageNotice }}</div>
           <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
 
           <section class="platform-section">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
             <div class="platform-grid">
-              <button
-                v-for="platform in productPlatforms"
-                :key="platform.id"
-                type="button"
-                class="platform-card"
-                :aria-pressed="platformSelected(platform)"
-                :class="{ selected: platformSelected(platform), partial: platformPartiallySelected(platform), limited: platformPartiallyAvailable(platform), unavailable: !!platformUnavailableReason(platform) }"
-                :disabled="!!platformUnavailableReason(platform)"
-                @click="togglePlatform(platform, !platformSelected(platform))"
-              >
-                <span class="platform-icon">{{ platform.icon }}</span>
-                <span class="platform-copy">
-                  <strong>{{ platform.name }}</strong>
-                  <small>{{ platformCardDetail(platform) }}</small>
-                </span>
-                <span v-if="platformSelected(platform) || platformPartiallySelected(platform)" class="chosen-mark">✓</span>
-                <span v-if="platformActionLabels(platform, platformHasSelection(platform)).some((label) => label === tr('上传') || label === tr('部署上线'))" class="risk-badge">{{ tr("含上线操作") }}</span>
-              </button>
-              <button type="button" class="platform-card git-card" :class="{ selected: gitOnly }" @click="toggleGitOnly(!gitOnly)">
-                <span class="platform-icon">⑂</span>
-                <span class="platform-copy"><strong>{{ tr("仅提交代码") }}</strong><small>{{ createTag ? tr("同时创建 Tag") : tr("不创建 Tag") }}</small></span>
-                <span v-if="gitOnly" class="chosen-mark">✓</span>
-              </button>
+              <article v-for="platform in productPlatforms" :key="platform.id" class="platform-card version-platform-card" :aria-label="platform.name"
+                :class="{ selected: !gitOnly && platformSelected(platform), partial: !gitOnly && platformPartiallySelected(platform), unavailable: !!platformUnavailableReason(platform) }">
+                <button type="button" class="platform-select" :aria-pressed="!gitOnly && platformSelected(platform)" :disabled="!!platformUnavailableReason(platform)" @click="togglePlatform(platform, !platformSelected(platform))">
+                  <span class="platform-icon">{{ platform.icon }}</span>
+                  <span class="platform-copy">
+                    <span class="platform-title"><strong>{{ platform.name }}</strong><span v-for="version in platformVersions(platform)" :key="version.versionGroupId" class="platform-current-version" :title="`${version.versionGroupName} · ${tr('当前版本')}`">{{ displayCurrentVersion(version.currentVersion) }}</span><span v-if="!preflight" class="platform-current-version">{{ tr('正在读取版本…') }}</span></span>
+                    <small>{{ platformCardDetail(platform) }}</small>
+                  </span>
+                  <span v-if="!gitOnly && (platformSelected(platform) || platformPartiallySelected(platform))" class="chosen-mark">✓</span>
+                </button>
+              </article>
+              <article class="platform-card git-card version-platform-card" :class="{ selected: gitOnly }" :aria-label="tr('仅提交代码')">
+                <button type="button" class="platform-select" :aria-pressed="gitOnly" @click="toggleGitOnly(!gitOnly)">
+                  <span class="platform-icon">⑂</span>
+                  <span class="platform-copy"><strong>{{ tr('仅提交代码') }}</strong><small>{{ createTag ? tr('同时创建 Tag') : tr('不创建 Tag') }}</small></span>
+                  <span v-if="gitOnly" class="chosen-mark">✓</span>
+                </button>
+              </article>
             </div>
           </section>
 
           <template v-if="preflight">
-          <section class="block version-quick">
-            <h3>{{ tr("发布版本") }}</h3>
+          <section class="block release-versions" :aria-label="tr('发布版本')">
+            <div class="tag-switch-row"><h3>{{ tr('发布版本') }}</h3><label class="push-choice"><span>{{ tr('创建版本 Tag') }}</span><input :aria-label="tr('创建版本 Tag')" v-model="createTag" type="checkbox" @change="onCreateTagChange" /></label></div>
             <template v-if="createTag">
-              <div class="version-list">
-                <div v-for="version in plannedVersions" :key="version.versionGroupId" class="version-row">
-                  <span class="version-name"><strong>{{ version.versionGroupName }}</strong><small>{{ tr("当前") }} {{ version.currentVersion }}</small></span>
-                  <input v-if="versionMode === 'manual'" :value="version.targetVersion" :class="{ invalid: version.targetVersion && !versionPattern.test(version.targetVersion) }" :placeholder="tr('例如 1.4.0')" @input="onVersionInput(version.versionGroupId, ($event.target as HTMLInputElement).value)" />
-                  <span v-else class="version-next">→ <strong>{{ version.targetVersion }}</strong></span>
-                  <code>{{ version.tagName }}</code>
-                </div>
+              <div class="choice-picker version-mode-picker" role="radiogroup" :aria-label="tr('版本规则')">
+                <label class="choice-option" :class="{ selected: versionMode === 'auto' }"><input v-model="versionMode" type="radio" name="release-version-mode" value="auto" @change="onVersionModeChange" /><span><strong>{{ tr('自动递增') }}</strong></span></label>
+                <label class="choice-option" :class="{ selected: versionMode === 'manual' }"><input v-model="versionMode" type="radio" name="release-version-mode" value="manual" @change="onVersionModeChange" /><span><strong>{{ tr('手动设置') }}</strong></span></label>
               </div>
-              <div v-if="!versionValid" class="field-error">{{ tr("版本必须是 X.Y.Z，例如 1.4.0。") }}</div>
+              <div class="release-version-list">
+                <ReleaseVersionChange v-for="version in plannedVersions" :key="version.versionGroupId" :current="version.currentVersion" :target="version.targetVersion" :label="version.versionGroupName" :upgrading="true" :editable="versionMode === 'manual'" @change="onVersionInput(version.versionGroupId, $event)" />
+              </div>
+              <div v-if="!versionValid" class="field-error">{{ tr('版本必须是 X.Y.Z，例如 1.4.0。') }}</div>
             </template>
-            <div v-else class="no-tag-note">{{ tr("不更新版本号，也不创建 Tag。") }}</div>
+            <p v-else class="section-help">{{ tr('不创建版本 Tag') }}</p>
           </section>
 
-          <details class="advanced-settings" :open="advancedOpen" @toggle="onAdvancedToggle">
-            <summary><span>{{ tr("高级设置") }}</span><small>{{ gitOnly ? tr("仅提交代码") : buildMode === 'github' ? tr("GitHub 云端构建") : tr("本地构建") }}</small></summary>
-            <div class="advanced-body">
+          <section class="file-picker">
+            <div class="section-head file-picker-head">
+              <h3>{{ tr("选择提交文件") }}</h3>
+              <div v-if="preflight.changes.length" class="file-actions">
+                <span>{{ tr("已选") }} {{ selectedPaths.length }} / {{ preflight.changes.length }}</span>
+                <button type="button" @click="selectAllFiles(!allFilesSelected)">{{ allFilesSelected ? tr("取消全选") : tr("全选") }}</button>
+              </div>
+            </div>
+            <div v-if="unselectedNewFiles.length" class="alert warn file-warning">{{ tr('还有 {0} 个新增文件未勾选，发布后远端不会包含这些文件。', [unselectedNewFiles.length]) }}</div>
+            <div v-if="!preflight.changes.length" class="muted">{{ tr("当前没有代码变更。创建 Tag 时，版本文件仍会自动更新并提交。") }}</div>
+            <div v-else class="file-list">
+              <label v-for="file in orderedChanges" :key="file.path" class="file-row" :class="{ unselected: !selected[file.path] }">
+                <input v-model="selected[file.path]" type="checkbox" :disabled="file.staged" />
+                <span class="file-status" :class="{ added: !file.tracked }">{{ fileStatusLabel(file) }}</span>
+                <code :title="file.path">{{ file.path }}</code>
+              </label>
+            </div>
+            <details v-if="preflight.aheadCount" class="unpushed-files">
+              <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>
+              <div class="unpushed-note">{{ tr("这些文件已经提交，所以不会出现在上面的待提交列表中。") }}</div>
+              <div class="file-list committed-list">
+                <div v-for="file in preflight.unpushedChanges" :key="file.path" class="file-row committed-row">
+                  <span class="committed-mark">✓</span>
+                  <span class="file-status" :class="{ added: file.status.startsWith('A') }">{{ file.status.startsWith('A') ? tr("新增") : file.status.startsWith('D') ? tr("删除") : file.status.startsWith('R') ? tr("改名") : tr("修改") }}</span>
+                  <code :title="file.path">{{ file.path }}</code>
+                </div>
+              </div>
+            </details>
+          </section>
+
+          <section v-if="createTag" class="release-notes">
+            <div class="release-notes-head">
+              <h3>{{ pushRemote ? tr("更新说明（将显示在 GitHub）") : tr('更新说明') }}</h3>
+              <button type="button" :disabled="releaseNotesLoading" @click="generateReleaseNotesDraft(true)">{{ releaseNotesLoading ? tr("生成中…") : tr("重新生成") }}</button>
+            </div>
+            <textarea
+              v-model="releaseNotes"
+              rows="7"
+              maxlength="12000"
+              :placeholder="releaseNotesLoading ? tr('正在自动生成，也可以直接填写…') : tr('请简要填写本次功能、问题修复和性能变化')"
+              :aria-label="tr('更新说明')"
+              @input="onReleaseNotesInput"
+            ></textarea>
+            <div v-if="releaseNotesStale && releaseNotesDirty" class="alert warn release-notes-alert">{{ tr("文件、构建端或版本已变化。你修改过的说明已保留，可直接修改或重新生成。") }}</div>
+            <div v-if="releaseNotesError" class="alert error release-notes-alert">{{ tr("生成失败：") }}{{ releaseNotesError }} <button type="button" @click="generateReleaseNotesDraft(true)">{{ tr("重试") }}</button></div>
+            <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">{{ tr("创建 Tag 前请填写更新说明。") }}</div>
+          </section>
+
+          <section class="summary-card">
+            <h3>{{ tr("本次操作") }}</h3>
+            <p class="file-count">{{ tr('已选文件：{0} 个', [selectedPaths.length]) }}</p>
+            <ul><li v-for="line in summaryLines" :key="line">{{ line }}</li></ul>
+            <div v-if="hasOnlineAction" class="alert warn">{{ tr("包含上传或上线，请确认目标环境。") }}</div>
+            <div v-if="automationBranchMismatch" class="alert warn">{{ tr('自动发布只接受 {0} 分支，当前为 {1}。', [configuredAutomation?.releaseBranch, preflight.branch]) }}</div>
+            <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">{{ tr("所选云端构建由 Tag 触发，请开启“创建版本 Tag”。") }}</div>
+            <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">{{ tr("云端构建必须上传到 GitHub。") }}</div>
+            <div v-else-if="invalidChosenTargetIds.length" class="alert warn">{{ tr("请为高级目标选择操作，或改为“仅提交代码”。") }}</div>
+            <div v-else-if="!gitOnly && !selectedTargets.length" class="alert warn">{{ tr("请选择发布平台或“仅提交代码”。") }}</div>
+          </section>
+          <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
+          </template>
+          <div v-else class="state panel-detail-loading">{{ tr("正在读取版本和代码变更…") }}</div>
+        </section>
+        <section v-if="!activeRun && !loading" v-show="releaseTab === 'settings'" id="release-panel-settings" role="tabpanel" aria-labelledby="release-tab-settings" class="release-panel settings-panel" tabindex="0">
+          <div class="settings-intro"><h3>{{ tr('设置') }}</h3><p>{{ tr('配置构建方式、版本规则和发布目标，完成后返回发布。') }}</p></div>
+          <template v-if="preflight">
           <section class="block build-mode-section">
             <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
-            <div class="build-mode-picker" role="group" :aria-label="tr('构建位置')">
-              <button type="button" :aria-pressed="buildMode === 'github'" :class="{ selected: buildMode === 'github' }" @click="changeBuildMode('github')"><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></button>
-              <button type="button" :aria-pressed="buildMode === 'local'" :class="{ selected: buildMode === 'local' }" @click="changeBuildMode('local')"><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，不上传或部署') }}</small></button>
+            <div class="choice-picker" role="radiogroup" :aria-label="tr('构建位置')">
+              <label class="choice-option" :class="{ selected: buildMode === 'github' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'github'" :aria-label="tr('GitHub 云端构建')" @change="changeBuildMode('github')" /><span><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></span></label>
+              <label class="choice-option" :class="{ selected: buildMode === 'local' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'local'" :aria-label="tr('本地构建')" @change="changeBuildMode('local')" /><span><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，不上传或部署') }}</small></span></label>
             </div>
             <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地模式只执行检查、构建和打包，需要本机已安装项目依赖。') }}</p>
           </section>
 
-          <section class="block release-rules">
-            <div class="tag-switch-row"><div><h3>{{ tr("创建版本 Tag") }}</h3><p>{{ tr("每个版本组独立递增；同批 Tag 指向同一个提交。") }}</p></div><label class="switch"><input :aria-label="tr('创建版本 Tag')" v-model="createTag" type="checkbox" @change="onCreateTagChange" /><span></span></label></div>
-            <template v-if="createTag">
-              <div class="mode-picker"><label :class="{ active: versionMode === 'auto' }"><input v-model="versionMode" type="radio" value="auto" @change="onVersionModeChange" />{{ tr("自动递增") }}</label><label :class="{ active: versionMode === 'manual' }"><input v-model="versionMode" type="radio" value="manual" @change="onVersionModeChange" />{{ tr("手动设置") }}</label></div>
-            </template>
-          </section>
           <section class="block upload-settings">
             <h3>{{ tr('提交与上传') }}</h3>
             <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
@@ -1464,7 +1571,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="configNotice" class="alert info">{{ configNotice }}</div>
             <div v-if="releaseConfig" class="config-meta"><span>{{ releaseConfig.source === 'file' ? tr("已保存配置") : tr("自动识别建议") }}</span><span>{{ tr("识别可信度") }} {{ configConfidence }}%</span><code>{{ releaseConfig.configPath || '.launcher/release.yaml' }}</code></div>
-            <ReleaseConfigFileEditor :app-id="app.id" :disabled="configScanning || configSaving || configEditorOpen" @saved="onConfigFileSaved" @editing="configFileOpen = $event" />
+            <ReleaseConfigFileEditor :app-id="app.id" :disabled="configScanning || configSaving || configEditorOpen" @saved="onConfigFileSaved" @editing="configFileOpen = $event" @dirty="configFileDirty = $event" />
             <div v-for="warning in releaseConfig?.warnings || []" :key="warning" class="alert warn">{{ warning }}</div>
 
             <template v-if="configEditorOpen && configDraft">
@@ -1513,85 +1620,17 @@ onBeforeUnmount(() => {
             <div v-else class="no-tag-note">{{ tr("本次不会修改版本文件，也不会创建或推送 Tag。") }}</div>
             <label class="full-label">{{ tr("提交说明") }}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
           </section>
-            </div>
-          </details>
 
-          <section class="file-picker">
-            <div class="section-head file-picker-head">
-              <h3>{{ tr("选择提交文件") }}</h3>
-              <div v-if="preflight.changes.length" class="file-actions">
-                <span>{{ tr("已选") }} {{ selectedPaths.length }} / {{ preflight.changes.length }}</span>
-                <button type="button" @click="selectAllFiles(!allFilesSelected)">{{ allFilesSelected ? tr("取消全选") : tr("全选") }}</button>
-              </div>
-            </div>
-            <div v-if="unselectedNewFiles.length" class="alert warn file-warning">{{ tr('还有 {0} 个新增文件未勾选，发布后远端不会包含这些文件。', [unselectedNewFiles.length]) }}</div>
-            <div v-if="!preflight.changes.length" class="muted">{{ tr("当前没有代码变更。创建 Tag 时，版本文件仍会自动更新并提交。") }}</div>
-            <div v-else class="file-list">
-              <label v-for="file in orderedChanges" :key="file.path" class="file-row" :class="{ unselected: !selected[file.path] }">
-                <input v-model="selected[file.path]" type="checkbox" :disabled="file.staged" />
-                <span class="file-status" :class="{ added: !file.tracked }">{{ fileStatusLabel(file) }}</span>
-                <code :title="file.path">{{ file.path }}</code>
-              </label>
-            </div>
-            <div class="file-footnote">{{ tr("版本设置自动修改的版本文件会一并提交，不受这里的勾选影响。") }}</div>
-            <details v-if="preflight.aheadCount" class="unpushed-files">
-              <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>
-              <div class="unpushed-note">{{ tr("这些文件已经提交，所以不会出现在上面的待提交列表中。") }}</div>
-              <div class="file-list committed-list">
-                <div v-for="file in preflight.unpushedChanges" :key="file.path" class="file-row committed-row">
-                  <span class="committed-mark">✓</span>
-                  <span class="file-status" :class="{ added: file.status.startsWith('A') }">{{ file.status.startsWith('A') ? tr("新增") : file.status.startsWith('D') ? tr("删除") : file.status.startsWith('R') ? tr("改名") : tr("修改") }}</span>
-                  <code :title="file.path">{{ file.path }}</code>
-                </div>
-              </div>
-            </details>
-          </section>
-
-          <section v-if="createTag" class="release-notes">
-            <div class="release-notes-head">
-              <h3>{{ pushRemote ? tr("更新说明（将显示在 GitHub）") : tr('更新说明') }}</h3>
-              <button type="button" :disabled="releaseNotesLoading" @click="generateReleaseNotesDraft(true)">{{ releaseNotesLoading ? tr("生成中…") : tr("重新生成") }}</button>
-            </div>
-            <textarea
-              v-model="releaseNotes"
-              rows="7"
-              maxlength="12000"
-              :placeholder="releaseNotesLoading ? tr('正在自动生成，也可以直接填写…') : tr('请简要填写本次功能、问题修复和性能变化')"
-              :aria-label="tr('更新说明')"
-              @input="onReleaseNotesInput"
-            ></textarea>
-            <div class="release-notes-meta">
-              <span v-if="releaseNotesLoading">{{ tr("正在根据代码变更生成简短说明…") }}</span>
-              <span v-else-if="releaseNotesDirty">{{ tr("已人工修改") }}</span>
-              <span v-else-if="releaseNotes">{{ tr("已根据代码变更生成初稿，可直接修改") }}</span>
-              <span v-if="releaseNotesBaseTag" :title="tr('基于 {0} 之后的变更生成', [releaseNotesBaseTag])">{{ tr("基于") }} {{ releaseNotesBaseTag }}</span>
-            </div>
-            <div v-if="releaseNotesStale && releaseNotesDirty" class="alert warn release-notes-alert">{{ tr("文件、构建端或版本已变化。你修改过的说明已保留，可直接修改或重新生成。") }}</div>
-            <div v-if="releaseNotesError" class="alert error release-notes-alert">{{ tr("生成失败：") }}{{ releaseNotesError }} <button type="button" @click="generateReleaseNotesDraft(true)">{{ tr("重试") }}</button></div>
-            <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">{{ tr("创建 Tag 前请填写更新说明。") }}</div>
-          </section>
-
-          <section class="summary-card">
-            <h3>{{ tr("本次操作") }}</h3>
-            <p class="file-count">{{ tr('已选文件：{0} 个', [selectedPaths.length]) }}</p>
-            <ul><li v-for="line in summaryLines" :key="line">{{ line }}</li></ul>
-            <div v-if="hasOnlineAction" class="alert warn">{{ tr("包含上传或上线，请确认目标环境。") }}</div>
-            <div v-if="automationBranchMismatch" class="alert warn">{{ tr('自动发布只接受 {0} 分支，当前为 {1}。', [configuredAutomation?.releaseBranch, preflight.branch]) }}</div>
-            <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">{{ tr("所选云端构建由 Tag 触发，请开启“创建版本 Tag”。") }}</div>
-            <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">{{ tr("云端构建必须上传到 GitHub。") }}</div>
-            <div v-else-if="invalidChosenTargetIds.length" class="alert warn">{{ tr("请为高级目标选择操作，或改为“仅提交代码”。") }}</div>
-            <div v-else-if="!gitOnly && !selectedTargets.length" class="alert warn">{{ tr("请选择发布平台或“仅提交代码”。") }}</div>
-          </section>
-          <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
           </template>
-          <div v-else class="state panel-detail-loading">{{ tr("正在读取版本和代码变更…") }}</div>
-        </template>
+          <ReleaseConfigFileEditor v-else :app-id="app.id" @saved="onConfigFileSaved" @editing="configFileOpen = $event" @dirty="configFileDirty = $event" />
+        </section>
       </div>
 
-      <footer v-if="preflight && !activeRun" class="m-foot" :inert="publishing">
-        <span v-if="releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
+      <footer v-if="!activeRun && !loading && (preflight || releaseTab === 'settings')" class="m-foot" :inert="publishing">
+        <span v-if="releaseTab === 'publish' && releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
-        <div class="publish-control">
+        <button v-if="releaseTab === 'settings'" type="button" class="primary return-to-release" @click="switchReleaseTab('publish', true)">{{ tr('返回发布') }}</button>
+        <div v-else class="publish-control">
           <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
       </footer>
@@ -1609,21 +1648,51 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.release-tabs { display: flex; flex-shrink: 0; gap: 6px; padding: 8px 20px 0; border-bottom: 1px solid var(--border); }
+.release-tabs [role="tab"] { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px 14px; border: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--text-dim); font-size: 14px; font-weight: 600; cursor: pointer; }
+.release-tabs [role="tab"]:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
+.release-tabs [aria-selected="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.release-tabs [aria-selected="true"]::after { content: ''; position: absolute; bottom: -1px; left: 16px; right: 16px; height: 3px; background: var(--accent); border-radius: 3px 3px 0 0; }
+.release-tabs button:focus-visible,.release-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.release-panel { display: flex; flex-direction: column; gap: 18px; min-width: 0; outline: none; }
+.release-mode-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-dim); font-size: 12px; }
+.release-mode-summary button { color: var(--accent); font-size: 12px; padding: 7px 12px; cursor: pointer; }
+.settings-intro h3 { font-size: 16px; margin: 0 0 6px; }.settings-intro p { font-size: 12px; color: var(--text-dim); margin: 0; line-height: 1.6; }
+.settings-panel > .block { padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg) 25%, transparent); }
+.settings-panel :deep(button:not(:disabled)) { cursor: pointer; }.settings-panel :deep(button:not(:disabled):hover) { border-color: var(--accent); }
+.settings-edit-hint { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.unsaved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.m-head,.m-foot { flex-shrink: 0; }.m-body { min-height: 0; }
+@media (max-width: 720px) { .release-tabs { padding-left: 14px; padding-right: 14px; }.settings-panel > .block { padding: 14px; } }
 .repo-tag-summary { min-width: 0; overflow-wrap: anywhere; }
 .alert.error { white-space: pre-line; overflow-wrap: anywhere; }
 .completion-banner.pending { border-color: color-mix(in srgb, var(--amber) 35%, transparent); background: color-mix(in srgb, var(--amber) 5%, var(--bg-elev)); }
 .completion-banner.pending .completion-icon { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
 .completion-banner.pending h3 { color: var(--text); }
 .completion-banner.pending .completion-next { border-color: color-mix(in srgb, var(--amber) 20%, transparent); }
+.completion-banner.failed { border-color: var(--red); background: color-mix(in srgb, var(--red) 7%, var(--bg-elev)); }
+.completion-banner.failed .completion-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .m-foot { flex-wrap: wrap; align-items: center; }
 .release-content-hint { margin-right: auto; flex: 1 1 180px; font-size: 12px; color: var(--text-dim); }
 .overlay { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.58); display: flex; align-items: center; justify-content: center; padding: 20px; }.modal { width: min(920px,100%); max-height: 94vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }.m-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border); }.m-head h2 { margin: 0; font-size: 17px; }.m-body { padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }.m-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }.state,.muted { color: var(--text-faint); font-size: 12px; }.alert { padding: 9px 11px; border-radius: 7px; font-size: 12px; line-height: 1.5; }.alert.error { color: var(--red); background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.3); }.alert.warn { color: var(--amber); background: rgba(251,191,36,.08); }.alert.info { color: var(--accent); background: rgba(79,140,255,.08); border: 1px solid rgba(79,140,255,.2); }
 .repo-glance { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 12px; border: 1px solid rgba(52,211,153,.22); border-radius: 9px; color: var(--text-dim); background: rgba(52,211,153,.05); font-size: 12px; }.repo-glance strong { color: var(--text); }.repo-glance-status { margin-left: auto; color: var(--green); }.ready-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }.repo-glance.checking { border-color: rgba(79,140,255,.3); background: rgba(79,140,255,.06); }.repo-glance.checking .ready-dot { background: var(--accent); animation: checking-pulse 1s ease-in-out infinite alternate; }.repo-glance.checking .repo-glance-status { color: var(--accent); }.repo-glance.problem { border-color: rgba(248,113,113,.25); background: rgba(248,113,113,.05); }.repo-glance.problem .ready-dot { background: var(--red); }.repo-glance.problem .repo-glance-status { color: var(--red); } @keyframes checking-pulse { to { opacity: .35; transform: scale(.75); } }
-.build-mode-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.build-mode-picker button { display: flex; flex-direction: column; gap: 7px; padding: 15px; text-align: left; white-space: normal; }
-.build-mode-picker button.selected { border-color: var(--accent); background: rgba(79,140,255,.12); }
-.build-mode-picker small { color: var(--text-dim); line-height: 1.5; }
-@media (max-width: 600px) { .build-mode-picker { grid-template-columns: 1fr; } }
+.choice-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.choice-option { display: flex; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer; }
+.choice-option.selected { border-color: var(--accent); background: rgba(79,140,255,.12); }
+.choice-option:hover { border-color: var(--accent); }
+.choice-option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.choice-option input { margin: 0; flex-shrink: 0; accent-color: var(--accent); }
+.choice-option input:focus-visible { outline: none; box-shadow: none; }
+.choice-option > span { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.choice-option strong { font-size: 13px; color: var(--text); }
+.choice-option small { color: var(--text-dim); line-height: 1.5; }
+.version-mode-picker { margin: 14px 0; }
+.release-versions { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }
+.release-versions .tag-switch-row h3 { color: var(--text); font-size: 15px; margin: 0; }
+.release-version-list { display: grid; gap: 10px; }
+.staged-issue p { margin: 7px 0 12px; line-height: 1.5; }
+.staged-issue button { margin: 0; }
+@media (max-width: 600px) { .choice-picker { grid-template-columns: 1fr; } }
 .platform-section { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.platform-section h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.basic-section-head { align-items: center; }.platform-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-top: 12px; }.platform-card { position: relative; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; min-height: 76px; padding: 12px; overflow: hidden; text-align: left; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--bg); }.platform-card:not(:disabled):hover { border-color: rgba(79,140,255,.65); }.platform-card.selected { border-color: var(--accent); background: rgba(79,140,255,.1); box-shadow: inset 0 0 0 1px rgba(79,140,255,.16); }.platform-card.partial { border-color: var(--amber); border-style: dashed; }.platform-card.limited:not(.selected):not(.partial) { border-style: dashed; }.platform-card.unavailable { cursor: not-allowed; opacity: .62; }.platform-icon { font-size: 22px; line-height: 1; }.platform-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding-right: 14px; }.platform-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.platform-copy small { color: var(--text-faint); font-size: 10px; line-height: 1.35; }.chosen-mark { position: absolute; top: 8px; right: 9px; color: var(--accent); font-weight: 700; }.risk-badge { position: absolute; right: 8px; bottom: 6px; padding: 1px 5px; border-radius: 8px; color: var(--amber); background: rgba(251,191,36,.12); font-size: 9px; }.git-card .platform-icon { color: var(--accent); font-size: 26px; }
 .file-picker { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.file-picker h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.file-picker-head { align-items: center; }.file-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--text-faint); font-size: 11px; }.file-actions button { padding: 5px 8px; }.file-warning { margin-bottom: 9px; }.file-list { max-height: 230px; overflow: auto; padding: 3px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }.file-footnote { margin-top: 8px; color: var(--text-faint); font-size: 10px; }
 .release-notes { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.release-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }.release-notes h3 { margin: 0; color: var(--text); font-size: 15px; }.release-notes-head button { flex: 0 0 auto; padding: 6px 9px; }.release-notes textarea { width: 100%; min-height: 132px; resize: vertical; line-height: 1.55; }.release-notes-meta { display: flex; min-height: 17px; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; color: var(--text-faint); font-size: 10px; }.release-notes-alert { margin-top: 8px; }.release-notes-alert button { margin-left: 6px; padding: 3px 7px; }.automation-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 9px; }.automation-result a { flex: 0 0 auto; color: var(--accent); }
@@ -1663,4 +1732,15 @@ onBeforeUnmount(() => {
 .progress-title > strong { min-width: 0; overflow-wrap: anywhere; }
 .progress-title > .status { flex-shrink: 0; }
 @media (max-width: 720px) { .completion-banner { padding: 24px 16px; gap: 10px; }.completion-banner h3 { font-size: 25px; }.completion-icon { width: 52px; height: 52px; font-size: 30px; }.actions-link { width: 100%; }.cloud-execution-notice { padding: 12px; } }
+.platform-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; align-items: stretch; }
+.version-platform-card { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; min-height: 0; }
+.version-platform-card.unavailable { opacity: .8; }
+.platform-select { position: relative; display: flex; flex: 1; align-items: center; gap: 12px; width: 100%; min-height: 88px; padding: 16px; border: 0; border-radius: 0; text-align: left; background: transparent; color: var(--text); cursor: pointer; }
+.platform-select:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.platform-select:focus-visible { outline-offset: -3px; }.platform-select:disabled { cursor: not-allowed; }
+.platform-select .platform-copy strong { font-size: 17px; line-height: 1.35; white-space: normal; }
+.platform-select .platform-copy small { font-size: 11px; }.platform-select .platform-icon { font-size: 25px; }
+.platform-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; padding-right: 12px; }
+.platform-current-version { color: var(--text-dim); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .platform-grid { grid-template-columns: 1fr; }.platform-select { min-height: 76px; padding: 14px; } }
 </style>

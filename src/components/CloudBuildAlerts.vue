@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '@/api/http'
+import { getBaseURL } from '@/api/base'
+import { wsClient } from '@/api/ws'
 import { tr } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 import type { AppView, CloudBuildStatus } from '@/types'
 
 const props = defineProps<{ app?: AppView | null }>()
-const emit = defineEmits<{ update: [alerts: CloudBuildStatus[]]; close: [] }>()
+const emit = defineEmits<{ update: [alerts: CloudBuildStatus[]]; close: []; open: [appId: string] }>()
 const alerts = ref<CloudBuildStatus[]>([])
+const notices = ref<CloudBuildStatus[]>([])
+const notice = computed(() => notices.value[0])
+const noticed = new Set<string>()
+let unsubscribe: (() => void) | undefined
 const projectAlerts = computed(() => alerts.value.filter(alert => alert.appId === props.app?.id))
 const errors = ref<Record<string, string>>({})
 const busy = ref<string[]>([])
@@ -16,14 +22,46 @@ let previousFocus: HTMLElement | null = null
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 let revision = 0
-function update(value: CloudBuildStatus[]) { alerts.value = value; emit('update', value) }
+let polling = false
+let refreshQueued = false
+function update(value: CloudBuildStatus[]) {
+  alerts.value = value
+  emit('update', value)
+  // Only unread, actionable results arrive here. Success stays quiet, and the
+  // same failure must not pop up again on each poll or WebSocket reconnect.
+  notices.value = notices.value.filter(item => value.some(alert => alert.alertKey === item.alertKey))
+  for (const alert of value) {
+    if (!alert.alertKey || noticed.has(alert.alertKey)) continue
+    noticed.add(alert.alertKey)
+    notices.value.push(alert)
+  }
+}
+function closeNotice() {
+  notices.value.shift()
+  try { sessionStorage.setItem(`rundock.cloud.noticed:${getBaseURL()}`, JSON.stringify([...noticed].filter(key => !notices.value.some(item => item.alertKey === key)))) } catch { /* In-memory deduplication still works. */ }
+}
+function viewNotice() {
+  if (!notice.value) return
+  emit('open', notice.value.appId)
+  closeNotice()
+}
 async function poll() {
+  if (disposed) return
+  if (polling) { refreshQueued = true; return }
+  if (timer) clearTimeout(timer)
+  polling = true
   const startedRevision = revision
   try {
     const result = await api.cloudBuildAlerts()
     if (!disposed && startedRevision === revision) update(result || [])
   } catch { /* Retain known failures while the sidecar reconnects. */ }
-  finally { if (!disposed) timer = setTimeout(poll, 15000) }
+  finally {
+    polling = false
+    if (!disposed) {
+      if (refreshQueued) { refreshQueued = false; void poll() }
+      else timer = setTimeout(poll, 15000)
+    }
+  }
 }
 async function dismiss(alert: CloudBuildStatus) {
   if (busy.value.includes(alert.alertKey)) return
@@ -59,12 +97,31 @@ watch(() => props.app?.id, async id => {
   if (id) { previousFocus = document.activeElement as HTMLElement; await nextTick(); dialog.value?.querySelector<HTMLButtonElement>('.close-button')?.focus() }
   else { previousFocus?.focus(); previousFocus = null }
 })
-onMounted(poll)
-onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer) })
+function onVisible() { if (document.visibilityState === 'visible') void poll() }
+onMounted(() => {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(`rundock.cloud.noticed:${getBaseURL()}`) || '[]')
+    if (Array.isArray(saved)) saved.filter(key => typeof key === 'string').forEach(key => noticed.add(key))
+  } catch { /* Storage may be disabled. */ }
+  unsubscribe = wsClient.on(message => { if (message.type === 'cloud:build' || message.type === 'hello') void poll() })
+  document.addEventListener('visibilitychange', onVisible)
+  void poll()
+})
+onUnmounted(() => { disposed = true; unsubscribe?.(); document.removeEventListener('visibilitychange', onVisible); if (timer) clearTimeout(timer) })
 </script>
 
 <template>
   <Teleport to="body">
+    <aside v-if="notice" class="build-notice" role="alert" aria-live="assertive" aria-atomic="true">
+      <UiIcon name="alert-circle" :size="22" class="notice-icon" />
+      <div class="notice-content">
+        <strong>{{ notice.state === 'failed' ? tr('云端构建失败') : tr('云端构建需要关注') }}</strong>
+        <p>{{ notice.appName }} · {{ notice.version }}</p>
+        <p class="notice-summary">{{ tr(notice.summary) }}</p>
+        <button @click="viewNotice">{{ tr('查看构建详情') }}<UiIcon name="arrow-right" :size="14" /></button>
+      </div>
+      <button class="close-button" :aria-label="tr('关闭提醒，保留卡片标识')" @click="closeNotice"><UiIcon name="close" :size="16" /></button>
+    </aside>
     <div v-if="app" class="build-overlay" @click.self="close">
       <section ref="dialog" class="build-dialog" role="dialog" aria-modal="true" :aria-label="tr('{0} 的构建提醒', [app.name])" @keydown="trapFocus">
         <header class="build-heading"><div><p>{{ tr('云端构建提醒') }}</p><h2>{{ app.name }}</h2></div><button class="close-button" :aria-label="tr('关闭')" @click="close"><UiIcon name="close" /></button></header>
@@ -85,6 +142,8 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer) })
 </template>
 
 <style scoped>
+.build-notice { position: fixed; right: 24px; bottom: 24px; z-index: 240; width: min(420px, calc(100vw - 48px)); box-sizing: border-box; display: flex; align-items: flex-start; gap: 12px; padding: 18px; color: var(--text); background: var(--bg-elev); border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 12px; box-shadow: 0 12px 36px #0006; }
+.notice-icon { color: var(--red); flex-shrink: 0; }.notice-content { flex: 1; min-width: 0; }.notice-content strong { font-size: 14px; }.notice-content p { margin: 7px 0; font-size: 13px; overflow-wrap: anywhere; }.notice-content .notice-summary { color: var(--text-dim); font-size: 12px; line-height: 1.6; max-height: 76px; overflow: auto; }.notice-content button { margin-top: 5px; padding: 0; border: 0; background: transparent; color: var(--accent); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .build-overlay { position: fixed; inset: 0; z-index: 250; padding: 24px; background: #0009; display: grid; place-items: center; }
 .build-dialog { width: min(620px,100%); max-height: 85vh; display: flex; flex-direction: column; background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 20px 60px #0006; }
 .build-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px; border-bottom: 1px solid var(--border); }.build-heading p { font-size: 12px; color: var(--text-dim); margin: 0 0 6px; }.build-heading h2 { font-size: 20px; margin: 0; overflow-wrap: anywhere; }.close-button { border: 0; background: transparent; padding: 4px; }

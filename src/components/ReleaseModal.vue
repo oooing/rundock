@@ -77,6 +77,9 @@ const pushRemote = ref(true)
 const buildMode = ref<'github' | 'local'>('github')
 const versionMode = ref<ReleaseVersionMode>('auto')
 const profileReady = ref(false)
+// Preflight may arrive after the user has already chosen a platform or mode.
+// Saved defaults must never replace explicit choices made in this dialog.
+const editedReleaseOptions = new Set<'targets' | 'build' | 'tag' | 'version' | 'push'>()
 
 const releaseConfig = ref<ReleaseConfig | null>(null)
 const configDraft = ref<ReleaseConfig | null>(null)
@@ -457,6 +460,7 @@ function phaseAllowed(phase: ExecutionPhase) {
 }
 
 function changeBuildMode(mode: 'github' | 'local') {
+  editedReleaseOptions.add('build')
   if (buildMode.value === mode) return
   const platforms = new Set(productPlatforms.value.filter(platformHasSelection).map(platform => platform.id))
   buildMode.value = mode
@@ -551,6 +555,7 @@ function platformCardDetail(platform: ProductPlatform) {
 }
 
 function togglePlatform(platform: ProductPlatform, checked: boolean) {
+  editedReleaseOptions.add('targets')
   if (checked) gitOnly.value = false
   for (const target of platformRunnableTargets(platform)) {
     const choice = targetChoices.value[target.id]
@@ -563,6 +568,7 @@ function togglePlatform(platform: ProductPlatform, checked: boolean) {
 }
 
 function toggleGitOnly(checked: boolean) {
+  editedReleaseOptions.add('targets')
   gitOnly.value = checked
   if (!checked) return
   for (const choice of Object.values(targetChoices.value)) choice.selected = false
@@ -906,14 +912,17 @@ function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = tru
   preReleaseCommand.value = pf.profile?.preReleaseCommand || ''
   if (initial) {
     const remembered = readLocalPreferences()
-    buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github'
-    for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
-    pushRemote.value = buildMode.value === 'local' && !gitOnly.value ? false : (typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true)
-    createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true)
-    versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto')
+    const keepTargets = editedReleaseOptions.has('targets') || editedReleaseOptions.has('build')
+    if (!keepTargets) {
+      buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github'
+      for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
+    }
+    if (!keepTargets && !editedReleaseOptions.has('push')) pushRemote.value = buildMode.value === 'local' && !gitOnly.value ? false : (typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true)
+    if (!editedReleaseOptions.has('tag')) createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true)
+    if (!editedReleaseOptions.has('version')) versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto')
   }
   if (createTag.value) syncVersionInputs()
-  setDefaultCommitMessage(initial)
+  setDefaultCommitMessage()
   if (resetFiles) resetSelection(pf)
   preflightStale.value = false
   scheduleReleaseNotesDraft()
@@ -970,8 +979,11 @@ async function load(resumeFailedRun = true) {
       || (resumeFailedRun ? history.value.find(canResumeFailedRun) : undefined)
     if (resumable) showRun(resumable)
 
-    applyPreflight(await localPreflight, true)
+    const pf = await localPreflight
+    if (disposed) return
+    applyPreflight(pf, true)
     profileReady.value = true
+    if (editedReleaseOptions.size) rememberPreferences()
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -996,10 +1008,12 @@ async function saveAndRecheck() {
 }
 
 function onVersionInput(groupID: string, value: string) {
+  editedReleaseOptions.add('version')
   versionInputs.value = { ...versionInputs.value, [groupID]: value.trim() }
   setDefaultCommitMessage()
 }
 function onCreateTagChange() {
+  editedReleaseOptions.add('tag')
   if (createTag.value) {
     syncVersionInputs()
     scheduleReleaseNotesDraft()
@@ -1011,10 +1025,12 @@ function onCreateTagChange() {
   setDefaultCommitMessage()
 }
 function onVersionModeChange() {
+  editedReleaseOptions.add('version')
   syncVersionInputs()
   setDefaultCommitMessage()
 }
 function setTargetSelected(targetId: string, checked: boolean) {
+  editedReleaseOptions.add('targets')
   const choice = targetChoices.value[targetId]
   const target = configuredTargets.value.find((item) => item.id === targetId)
   if (!choice || !target) return
@@ -1025,6 +1041,7 @@ function setTargetSelected(targetId: string, checked: boolean) {
   }
 }
 function setTargetPhase(targetId: string, phase: ExecutionPhase, checked: boolean) {
+  editedReleaseOptions.add('targets')
   if (targetChoices.value[targetId]) targetChoices.value[targetId][phase] = checked
   if (checked) gitOnly.value = false
 }
@@ -1564,7 +1581,7 @@ onBeforeUnmount(() => {
           <section class="block upload-settings">
             <h3>{{ tr('提交与上传') }}</h3>
             <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-              <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" />
+              <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" @change="editedReleaseOptions.add('push')" />
               <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
             </label>
             <div class="button-row">

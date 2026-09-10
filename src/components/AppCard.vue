@@ -282,7 +282,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 </script>
 
 <template>
-  <article ref="cardElement" class="card card-motion" :class="['s-' + a.status]" :data-motion="a.status === 'running' && !a.restarting ? runningEffect : 'none'" :style="cardStyle" :aria-busy="a.restarting || undefined" @keydown="onEscape">
+  <article ref="cardElement" class="card card-motion" :class="['s-' + a.status]" :data-motion="a.status === 'running' && !a.restarting ? runningEffect : 'none'" :style="cardStyle" :aria-busy="a.restarting || a.status === 'starting' || undefined" @keydown="onEscape">
     <header class="head">
       <div class="name-row">
         <button class="ghost icon drag-handle" :title="tr('拖动排序或移到分组；Alt + 左右方向键调整顺序')" :aria-label="tr('拖动项目')" :disabled="moving" @pointerdown.stop.prevent="emit('drag-start', $event, a.id)" @keydown.alt.left.stop.prevent="emit('reorder-key', a.id, -1)" @keydown.alt.right.stop.prevent="emit('reorder-key', a.id, 1)">
@@ -428,13 +428,13 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 @media (prefers-reduced-motion: reduce) {
   .card { transition: none; }
 }
-.card:is(.s-starting, .s-stopping, .s-degraded) { --card-state-color: var(--card-status-amber, var(--amber)); }
+.card.s-degraded { --card-state-color: var(--card-status-amber, var(--amber)); }
 .card.s-failed { --card-state-color: var(--card-status-red, var(--red)); }
-.card:is(.s-starting, .s-stopping, .s-degraded, .s-failed) {
+.card:is(.s-degraded, .s-failed) {
   box-shadow: inset 0 3px 0 var(--card-state-color);
   border-color: color-mix(in srgb, var(--card-state-color) 45%, var(--card-bg, var(--bg-elev)));
 }
-.card:is(.s-starting, .s-stopping, .s-degraded, .s-failed):hover { border-color: var(--card-state-color); }
+.card:is(.s-degraded, .s-failed):hover { border-color: var(--card-state-color); }
 .card :is(button, a, summary, select, input):focus-visible { outline: 2px solid var(--card-fg, var(--accent)); outline-offset: 3px; }
 .head { display: flex; flex-direction: column; gap: 8px; }
 .name-row { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
@@ -461,6 +461,11 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 .card .badge.starting, .card .badge.stopping, .card .badge.degraded { color: var(--card-status-amber, var(--amber)); }
 .card .badge.failed { color: var(--card-status-red, var(--red)); }
 .badge .dot { width: 6px; height: 6px; }
+.card .badge:is(.starting, .stopping) .dot { flex: 0 0 auto; width: 10px; height: 10px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; background: transparent; animation: card-status-spin .9s linear infinite; }
+@keyframes card-status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .card .badge:is(.starting, .stopping) .dot { animation: none; }
+}
 .group-row { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; color: var(--card-muted, var(--text-dim)); font-size: 11px; }
 .group-select { max-width: 132px; min-width: 0; padding: 3px 4px; font-size: 11px; color: var(--card-muted, var(--text-dim)); border-color: transparent; border-radius: 4px; background: transparent; }
 .group-select:hover { border-color: var(--card-border, var(--border)); }

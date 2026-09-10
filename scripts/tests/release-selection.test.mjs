@@ -54,3 +54,54 @@ test('the recovery action returns to Publish and scrolls/focuses target selectio
   await s.chooseReleaseTarget()
   assert.deepEqual(calls, [['tab', 'publish'], ['scroll', { block: 'start' }], ['focus', { preventScroll: true }]])
 })
+
+function delayedPreflightFixture() {
+  const target = {id:'windows', steps:{build:'build',package:'package',publish:'tag-push',deploy:''}}
+  const state = {buildMode:ref('github'), pushRemote:ref(true), createTag:ref(true), versionMode:ref('auto'), gitOnly:ref(false),
+    targetChoices:ref({windows:{selected:false,build:false,package:false,publish:true,deploy:false}}),
+    preflight:ref(null),remoteName:ref('origin'),versionStrategy:ref('auto'),preReleaseCommand:ref(''),preflightStale:ref(false)}
+  const actions=load(['editedReleaseOptions','applyPreflight','defaultTargetChoice','togglePlatform','toggleGitOnly','setTargetPhase'],{
+    ...state, configuredTargets:ref([target]),normalizePreflight:value=>value,
+    platformRunnableTargets:()=>[target],phaseOptions:ref(['build','package','publish','deploy'].map(key=>({key}))),
+    phaseAllowed:phase=>state.buildMode.value==='github'?phase==='publish':['build','package'].includes(phase),
+    readLocalPreferences:()=>({}), syncVersionInputs(){},setDefaultCommitMessage(){},resetSelection(){},scheduleReleaseNotesDraft(){},
+  })
+  let resolve
+  const pending=new Promise(done=>{resolve=done}).then(pf=>actions.applyPreflight(pf,true))
+  return {state,actions,finish:async()=>{resolve({profile:{buildMode:'local',versionMode:'manual',createTag:false},changes:[],suggestedVersion:'2.0.16'});await pending}}
+}
+
+test('late initial preflight preserves the platform selected while versions are loading',async()=>{
+  const f=delayedPreflightFixture()
+  f.actions.togglePlatform({},true)
+  await f.finish()
+  assert.equal(f.state.buildMode.value,'github','saved build mode must not invalidate the selected cloud target')
+  assert.equal(f.state.targetChoices.value.windows.selected,true)
+  assert.equal(f.state.targetChoices.value.windows.publish,true)
+  assert.equal(f.state.gitOnly.value,false)
+  assert.equal(f.state.createTag.value,false,'untouched tag preference still loads')
+  assert.equal(f.state.preflight.value.suggestedVersion,'2.0.16','fresh version data still applies')
+})
+
+test('late preflight also preserves explicit deselection, code-only and phase choices',async()=>{
+  for(const action of ['deselect','code-only','phase']){
+    const f=delayedPreflightFixture()
+    f.actions.togglePlatform({},true)
+    if(action==='deselect')f.actions.togglePlatform({},false)
+    if(action==='code-only')f.actions.toggleGitOnly(true)
+    if(action==='phase')f.actions.setTargetPhase('windows','publish',false)
+    await f.finish()
+    assert.equal(f.state.buildMode.value,'github')
+    assert.equal(f.state.gitOnly.value,action==='code-only')
+    assert.equal(f.state.targetChoices.value.windows.selected,action==='phase')
+    if(action==='phase')assert.equal(f.state.targetChoices.value.windows.publish,false)
+  }
+})
+
+test('untouched release options still initialize from saved preferences',async()=>{
+  const f=delayedPreflightFixture();await f.finish()
+  assert.equal(f.state.buildMode.value,'local')
+  assert.equal(f.state.createTag.value,false)
+  assert.equal(f.state.versionMode.value,'manual')
+  assert.equal(f.state.targetChoices.value.windows.selected,false)
+})

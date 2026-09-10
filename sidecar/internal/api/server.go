@@ -70,6 +70,9 @@ func New(s *store.Store, hub *logbus.Hub, reg *adapter.Registry) *Server {
 	l.Diagnostics = diag
 	pub := publisher.New(s)
 	pub.SetDiagnostics(diag)
+	if hub != nil {
+		pub.OnCloudBuildChange = hub.BroadcastCloudBuild
+	}
 	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg, shutdownRequested: make(chan struct{})}
 }
 

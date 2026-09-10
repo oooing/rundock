@@ -25,6 +25,8 @@ type Service struct {
 	mu            sync.Mutex
 	active        map[string]bool
 	diagnostics   *diagnostics.Service
+	// Set before monitoring starts. Called only after a changed snapshot is saved.
+	OnCloudBuildChange func(*store.CloudBuild)
 }
 
 const releasePushTimeout = 2 * time.Minute

@@ -481,7 +481,7 @@ onUnmounted(() => {
       </section>
     </div>
     <!-- 置顶通知栏：成功/失败/提示 集中显示在顶部中央，可堆叠、可手动关闭 -->
-    <CloudBuildAlerts :app="cloudDetailsApp" @update="cloudAlerts = $event" @close="cloudDetailsAppId = null" />
+    <CloudBuildAlerts :app="cloudDetailsApp" @update="cloudAlerts = $event" @open="cloudDetailsAppId = $event" @close="cloudDetailsAppId = null" />
     <div class="toast-stack">
       <transition-group name="toast">
         <div

@@ -171,7 +171,7 @@ export interface AppService {
 
 /** WebSocket 消息信封 */
 export interface WSMessage {
-  type: 'app:log' | 'app:event' | 'app:status' | 'app:url' | 'app:services' | 'hello'
+  type: 'app:log' | 'app:event' | 'app:status' | 'app:url' | 'app:services' | 'cloud:build' | 'hello'
   time: string
   appId?: string
   runId?: string

@@ -13,12 +13,13 @@ import (
 type WSType string
 
 const (
-	WSLog      WSType = "app:log"
-	WSEvent    WSType = "app:event"
-	WSStatus   WSType = "app:status"
-	WSURL      WSType = "app:url"
-	WSServices WSType = "app:services" // 多服务状态变更
-	WSHello    WSType = "hello"
+	WSLog        WSType = "app:log"
+	WSEvent      WSType = "app:event"
+	WSStatus     WSType = "app:status"
+	WSURL        WSType = "app:url"
+	WSServices   WSType = "app:services" // 多服务状态变更
+	WSHello      WSType = "hello"
+	WSCloudBuild WSType = "cloud:build"
 )
 
 // WSMessage 推给前端的 WebSocket 消息统一信封。
@@ -111,6 +112,12 @@ func (h *Hub) BroadcastEvent(appID, runID string, ev Event) {
 // BroadcastStatus 广播状态变更。
 func (h *Hub) BroadcastStatus(appID, runID, old, new string) {
 	h.send(WSMessage{Type: WSStatus, Time: nowRFC3339(), App: appID, Run: runID, Old: old, Status: new})
+}
+
+// BroadcastCloudBuild invalidates the alert list; clients fetch persisted,
+// acknowledgement-aware alerts rather than recreating dismissed notifications.
+func (h *Hub) BroadcastCloudBuild(build *store.CloudBuild) {
+	h.send(WSMessage{Type: WSCloudBuild, Time: nowRFC3339(), App: build.AppID, Run: build.ReleaseRunID, Status: build.State})
 }
 
 // BroadcastURL 广播识别到的 URL。

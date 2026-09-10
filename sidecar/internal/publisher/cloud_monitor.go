@@ -46,6 +46,8 @@ type githubJob struct {
 
 type githubReader func(context.Context, string, any) error
 
+const cloudPollInterval = 30 * time.Second
+
 // MonitorCloudBuilds lives with the sidecar, independent of the release modal.
 // State and acknowledgements survive application restarts. GitHub is read-only.
 func (s *Service) MonitorCloudBuilds(ctx context.Context) {
@@ -58,7 +60,7 @@ func (s *Service) MonitorCloudBuilds(ctx context.Context) {
 		case <-timer.C:
 		}
 		s.checkCloudBuilds(ctx, readGitHub, time.Now().UTC())
-		timer.Reset(time.Minute)
+		timer.Reset(cloudPollInterval)
 	}
 }
 
@@ -96,7 +98,7 @@ func (s *Service) checkCloudBuilds(ctx context.Context, read githubReader, now t
 				continue
 			}
 		}
-		build := &store.CloudBuild{ReleaseRunID: id, AppID: run.AppID, Version: strings.Join(releaseTagNames(releaseVersionsForRun(run, plan)), "、"), State: "pending", URL: githubWorkflowURL(plan.RemoteURL, ""), CheckedAt: now.Format(time.RFC3339), NextCheck: now.Add(time.Minute).Format(time.RFC3339)}
+		build := &store.CloudBuild{ReleaseRunID: id, AppID: run.AppID, Version: strings.Join(releaseTagNames(releaseVersionsForRun(run, plan)), "、"), State: "pending", URL: githubWorkflowURL(plan.RemoteURL, ""), CheckedAt: now.Format(time.RFC3339), NextCheck: now.Add(cloudPollInterval).Format(time.RFC3339)}
 		if app, _ := s.store.GetApp(run.AppID); app != nil {
 			build.AppName = app.Name
 		}
@@ -123,7 +125,10 @@ func (s *Service) checkCloudBuilds(ctx context.Context, read githubReader, now t
 		if ctx.Err() != nil {
 			return
 		}
-		_ = s.store.SaveCloudBuild(build)
+		if err := s.store.SaveCloudBuild(build); err == nil && s.OnCloudBuildChange != nil &&
+			(old == nil || old.State != build.State || old.AlertKey != build.AlertKey || old.Summary != build.Summary) {
+			s.OnCloudBuildChange(build)
+		}
 	}
 }
 

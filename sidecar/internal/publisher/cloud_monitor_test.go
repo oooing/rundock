@@ -283,3 +283,51 @@ func TestCloudMonitorAutomaticallyClearsOldUnmatchedAlert(t *testing.T) {
 		t.Fatalf("%+v %v", after, err)
 	}
 }
+
+func TestCloudMonitorResumesPendingReleaseAndPushesPersistedChanges(t *testing.T) {
+	s, _, cleanup := newReleaseFixture(t)
+	defer cleanup()
+	plan := executionPlan{SchemaVersion: 1, RemoteURL: "https://github.com/oooing/ingLocalPlay", Automation: &releaseconfig.Automation{Provider: releaseconfig.AutomationGitHubActions, Trigger: releaseconfig.AutomationTriggerTag}}
+	raw, _ := json.Marshal(plan)
+	run := &store.ReleaseRun{ID: "resume", AppID: "app1", TagName: "web-server/v2.0.27", Status: "succeeded", CommitSHA: "3fcf275243da0eaa9c2282f27cd471347e0189ec", ExecutionPlan: raw}
+	if err := s.store.CreateReleaseRun(run); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := s.store.SaveCloudBuild(&store.CloudBuild{ReleaseRunID: run.ID, State: "running", NextCheck: now.Add(-time.Minute).Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh service has no in-memory release/session state, as after restart.
+	s = New(s.store)
+	changes := 0
+	s.OnCloudBuildChange = func(build *store.CloudBuild) {
+		changes++
+		stored, err := s.store.GetCloudBuild(build.ReleaseRunID)
+		if err != nil || stored.State != build.State || stored.AlertKey != build.AlertKey {
+			t.Fatalf("notification preceded persistence: %+v %v", stored, err)
+		}
+	}
+	conclusion := "failure"
+	read := func(_ context.Context, endpoint string, out any) error {
+		if strings.Contains(endpoint, "/jobs?") {
+			return errors.New("logs unavailable")
+		}
+		*out.(*githubRunList) = githubRunList{Total: 1, Runs: []githubWorkflowRun{{ID: 34493579418, Attempt: 1, Name: "Build Container Image", Path: ".github/workflows/container-image.yml", HeadSHA: run.CommitSHA, HeadBranch: run.TagName, Event: "push", Status: "completed", Conclusion: conclusion, CreatedAt: now}}}
+		return nil
+	}
+	s.checkCloudBuilds(context.Background(), read, now)
+	alerts, err := s.store.CloudBuildAlerts()
+	if err != nil || len(alerts) != 1 || alerts[0].State != "failed" || changes != 1 {
+		t.Fatalf("alerts=%+v changes=%d error=%v", alerts, changes, err)
+	}
+	s.checkCloudBuilds(context.Background(), read, now.Add(6*time.Minute))
+	if changes != 1 {
+		t.Fatal("unchanged failure was broadcast twice")
+	}
+	conclusion = "success"
+	s.checkCloudBuilds(context.Background(), read, now.Add(12*time.Minute))
+	alerts, err = s.store.CloudBuildAlerts()
+	if err != nil || len(alerts) != 0 || changes != 2 {
+		t.Fatalf("recovery alerts=%+v changes=%d error=%v", alerts, changes, err)
+	}
+}

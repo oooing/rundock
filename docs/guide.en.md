@@ -17,6 +17,8 @@ A Windows project manager for script-based start/stop control, live logs, and Gi
 
 ## In-app updates
 
+EXE setup and uninstall close the main process and background service belonging to that installation directory, then verify that the executable files can be replaced. An unresponsive legacy backend is terminated. Development copies in other directories and saved project/group data are preserved. If another program still locks a file, setup stops with an error instead of skipping the backend and leaving mixed versions.
+
 Windows production builds check for updates about 8 seconds after launch and download available updates in the background. The sidebar shows progress and an **Update ready** prompt. Click it to open Settings, review the version and available notes, and confirm installation. The automatic check runs once per launch; no-update and network-failure results do not interrupt your work. Manual checks and download retries remain available in Settings. Closing Settings does not interrupt downloads. Web and development builds do not check or download automatically.
 
 After verification, **Quit and install** stops all projects and the background service, opens the Windows installer, and exits RunDock. Follow the installer to upgrade while retaining project and group configuration. Finish ongoing work before installation. The web version links to release downloads instead.

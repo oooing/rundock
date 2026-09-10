@@ -374,7 +374,6 @@ onUnmounted(() => {
       :drop-group-id="dropGroupId"
       @select="selectedGroupId = $event"
       @settings="showSettings = true"
-      @help="showHelp = true"
     />
 
     <main class="main">

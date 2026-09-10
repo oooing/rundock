@@ -13,17 +13,18 @@ const props = defineProps<{ selected: string | null; dropGroupId?: string | null
 const emit = defineEmits<{
   (e: 'select', id: string | null): void
   (e: 'settings'): void
-  (e: 'help'): void
 }>()
 
 const groups = useGroupsStore()
 const apps = useAppsStore()
 const githubURL = 'https://github.com/oooing/rundock'
-async function visitGitHub(event: MouseEvent) {
-  if (!isTauri) return
-  event.preventDefault()
+const openingGitHub = ref(false)
+async function visitGitHub() {
+  if (openingGitHub.value) return
+  openingGitHub.value = true
   try { await openProjectGitHub() }
   catch { prompt(tr('未能打开 GitHub，请复制链接到浏览器查看。'), githubURL) }
+  finally { openingGitHub.value = false }
 }
 
 const countAll = computed(() => apps.apps.length)
@@ -98,10 +99,10 @@ async function newGroup() {
         <UiIcon :name="appUpdate.phase === 'ready' ? 'check-circle' : 'refresh'" :size="16" />
         <span><strong>{{ appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small>v{{ appUpdate.info.version }}<template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
       </button>
-      <a class="github-link" :href="githubURL" target="_blank" rel="noopener noreferrer" @click="visitGitHub"><UiIcon name="external-link" :size="16" /><span>GitHub</span><span class="repository-name">oooing/rundock</span></a>
+      <button v-if="isTauri" type="button" class="github-link" :disabled="openingGitHub" @click.stop="visitGitHub"><UiIcon name="external-link" :size="16" /><span>GitHub</span><span class="repository-name">oooing/rundock</span></button>
+      <a v-else class="github-link" :href="githubURL" target="_blank" rel="noopener noreferrer"><UiIcon name="external-link" :size="16" /><span>GitHub</span><span class="repository-name">oooing/rundock</span></a>
       <div class="footer-row">
         <button class="ghost settings-link" @click="emit('settings')"><UiIcon name="settings" :size="16" />{{ tr('设置') }}</button>
-        <button class="ghost icon help-link" :title="tr('使用帮助')" :aria-label="tr('使用帮助')" @click="emit('help')"><UiIcon name="help" :size="17" /></button>
         <span class="version" :title="tr('当前版本')">v{{ appVersion }}</span>
       </div>
     </div>
@@ -241,12 +242,11 @@ async function newGroup() {
 .footer .update-link.ready { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 .update-link strong { display: block; font-size: 12px; font-weight: 500; line-height: 1.5; }.update-link small { display: block; font-size: 11px; margin-top: 3px; color: var(--text-faint); }
 .update-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.github-link { display: flex; align-items: center; gap: 8px; padding: 10px; margin-bottom: 6px; border-radius: 8px; color: var(--text-dim); text-decoration: none; font-size: 13px; flex-wrap: wrap; }
+.github-link { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; padding: 10px; margin-bottom: 6px; border-radius: 8px; color: var(--text-dim); text-decoration: none; font-size: 13px; flex-wrap: wrap; }
 .github-link:hover { background: var(--bg-elev-2); color: var(--text); }
 .github-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .repository-name { font-size: 10px; color: var(--text-faint); }
 .settings-link { display: flex; align-items: center; gap: 10px; }
-.footer .help-link { flex: 0 0 auto; display: grid; place-items: center; padding: 5px; }
 @media (max-width: 1000px) {
   .sidebar { width: 180px; padding-inline: 8px; }
   .brand { gap: 8px; }

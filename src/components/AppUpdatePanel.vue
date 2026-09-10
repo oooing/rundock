@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { tr } from '@/i18n'
 import { isTauri, openProjectReleases } from '@/tauri/window'
 import { appUpdate as update, checkAppUpdate, downloadAppUpdate, installAppUpdate } from '@/stores/appUpdate'
 defineProps<{ currentVersion: string }>()
 const percent = computed(() => update.total ? Math.min(100, Math.floor(update.downloaded / update.total * 100)) : 0)
 const busy = computed(() => ['checking', 'downloading', 'installing'].includes(update.phase))
-async function openReleases(event: MouseEvent) {
-  if (!isTauri) return
-  event.preventDefault()
+const openingReleases = ref(false)
+async function openReleases() {
+  if (openingReleases.value) return
+  openingReleases.value = true
   try { await openProjectReleases() }
   catch { prompt(tr('未能打开 GitHub，请复制链接到浏览器查看。'), 'https://github.com/oooing/rundock/releases') }
+  finally { openingReleases.value = false }
 }
 </script>
 
@@ -30,13 +32,15 @@ async function openReleases(event: MouseEvent) {
         <button v-if="update.phase === 'available'" class="primary" @click="downloadAppUpdate">{{ tr('下载更新') }} · {{ (update.info.size / 1048576).toFixed(1) }} MB</button>
         <div v-if="update.phase === 'ready'" class="actions"><button class="primary" @click="installAppUpdate">{{ tr('退出并安装') }}</button><button @click="downloadAppUpdate">{{ tr('重新下载') }}</button></div>
       </template>
-      <div v-if="update.error" class="update-error" role="alert">{{ update.error }}<a href="https://github.com/oooing/rundock/releases" target="_blank" rel="noopener noreferrer" @click="openReleases">{{ tr('查看版本下载页') }}</a></div>
+      <div v-if="update.error" class="update-error" role="alert">{{ update.error }}<button type="button" class="release-link" :disabled="openingReleases" @click.stop="openReleases">{{ tr('查看版本下载页') }}</button></div>
     </template>
     <template v-else><p>{{ tr('应用内安装仅支持 Windows 桌面版，Web 版请下载安装包。') }}</p><a href="https://github.com/oooing/rundock/releases" target="_blank" rel="noopener noreferrer">{{ tr('查看版本下载页') }} ↗</a></template>
   </section>
 </template>
 
 <style scoped>
+.release-link { display: block; margin-top: 6px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
+.release-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .app-update { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
-.update-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.update-heading h3 { margin: 0 0 6px; font-size: 15px; }.update-heading span,p,summary { color: var(--text-dim); font-size: 12px; line-height: 1.6; }.new-version { display: block; margin-top: 18px; font-size: 20px; }.new-version span { color: var(--text-faint); margin: 0 6px; }details { margin-top: 12px; }summary { cursor: pointer; }pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; max-height: 180px; overflow: auto; }progress { width: 100%; accent-color: var(--accent); margin-top: 16px; }.install-note { margin: 14px 0; }.actions { display: flex; gap: 8px; }a { color: var(--accent); font-size: 12px; }.update-error { color: var(--red); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; margin-top: 12px; }.update-error a { display: block; margin-top: 6px; }
+.update-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.update-heading h3 { margin: 0 0 6px; font-size: 15px; }.update-heading span,p,summary { color: var(--text-dim); font-size: 12px; line-height: 1.6; }.new-version { display: block; margin-top: 18px; font-size: 20px; }.new-version span { color: var(--text-faint); margin: 0 6px; }details { margin-top: 12px; }summary { cursor: pointer; }pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; max-height: 180px; overflow: auto; }progress { width: 100%; accent-color: var(--accent); margin-top: 16px; }.install-note { margin: 14px 0; }.actions { display: flex; gap: 8px; }a { color: var(--accent); font-size: 12px; }.update-error { color: var(--red); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; margin-top: 12px; }
 </style>

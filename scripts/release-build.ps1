@@ -194,6 +194,11 @@ try {
     Write-Host '[release] 构建 Tauri NSIS + MSI'
     Invoke-Npm @('run', 'tauri', '--', 'build', '--ci', '--bundles', 'nsis,msi', '--', '--locked')
 
+    if (-not $SkipTests) {
+        Write-Host '[release] 验证 NSIS 安装/卸载释放后台文件'
+        & (Join-Path $PSScriptRoot 'tests/installer-shutdown.test.ps1') -Go $go
+    }
+
     $expected = @(
         (Join-Path $codeDirectory "src-tauri/target/release/bundle/nsis/RunDock_${tagVersion}_x64-setup.exe"),
         (Join-Path $codeDirectory "src-tauri/target/release/bundle/msi/RunDock_${tagVersion}_x64_en-US.msi")

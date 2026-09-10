@@ -97,6 +97,7 @@ const tabScroll: Record<ReleaseTab, number> = { publish: 0, settings: 0 }
 const configFileDirty = ref(false)
 const confirmAction = ref<'retry' | 'regenerate-notes' | null>(null)
 const bodyRef = ref<HTMLElement | null>(null)
+const platformSectionRef = ref<HTMLElement | null>(null)
 
 const activeRun = ref<ReleaseRun | null>(null)
 const logs = ref<ReleaseLog[]>([])
@@ -143,6 +144,7 @@ const selectedTargets = computed<SelectedReleaseTarget[]>(() => gitOnly.value ? 
 const invalidChosenTargetIds = computed(() => selectedTargets.value
   .filter((target) => !target.build && !target.package && !target.publish && !target.deploy)
   .map((target) => target.targetId))
+const targetSelectionMissing = computed(() => !gitOnly.value && !selectedTargets.value.length)
 const selectedVersionGroupIds = computed(() => [...new Set(chosenTargets.value.map(({ target }) => target.versionGroup))])
 const selectedVersionGroups = computed(() => (releaseConfig.value?.versionGroups || [])
   .filter((group) => selectedVersionGroupIds.value.includes(group.id)))
@@ -247,6 +249,7 @@ const automationBranchMismatch = computed(() => !!willTriggerAutomation.value
 const willBuildWindowsInAutomation = computed(() => buildMode.value === 'github' && productPlatforms.value.some((platform) => platform.id === 'pc' && platformHasSelection(platform)))
 const willBuildTargetsInAutomation = computed(() => selectedHasTagPushTarget.value || willBuildWindowsInAutomation.value)
 const releaseNotesOptionsSignature = computed(() => JSON.stringify({
+  gitOnly: gitOnly.value,
   statusFingerprint: preflight.value?.statusFingerprint || '',
   selectedPaths: [...selectedPaths.value].sort(),
   selectedTargets: [...selectedTargets.value].sort((left, right) => left.targetId.localeCompare(right.targetId)),
@@ -580,6 +583,7 @@ const targetStageLabel = computed<Record<string, string>>(() => ({
 }))
 
 const summaryLines = computed(() => {
+  if (targetSelectionMissing.value) return []
   const lines: string[] = []
   if (createTag.value) {
     for (const version of plannedVersions.value) lines.push(tr("{0}：{1}（{2}）", [version.versionGroupName, version.targetVersion || tr("待填写"), version.tagName || tr("待生成 Tag")]))
@@ -834,12 +838,14 @@ function syncVersionInputs() {
 }
 
 function scheduleReleaseNotesDraft(delay = 80) {
+  if (targetSelectionMissing.value) return
   if (!createTag.value || !preflight.value || releaseNotesDirty.value || activeRun.value || disposed) return
   if (releaseNotesTimer) clearTimeout(releaseNotesTimer)
   releaseNotesTimer = setTimeout(() => { releaseNotesTimer = null; void generateReleaseNotesDraft() }, delay)
 }
 
 async function generateReleaseNotesDraft(force = false, overwriteConfirmed = false) {
+  if (targetSelectionMissing.value) return
   const pf = preflight.value
   if (!pf || !createTag.value || releaseNotesLoading.value) return
   // A scheduled draft may start after the user has begun typing.
@@ -1105,6 +1111,12 @@ async function switchReleaseTab(tab: ReleaseTab, focus = false) {
   await nextTick()
   if (bodyRef.value) bodyRef.value.scrollTop = tabScroll[tab]
   if (focus) document.getElementById('release-tab-' + tab)?.focus()
+}
+
+async function chooseReleaseTarget() {
+  await switchReleaseTab('publish')
+  platformSectionRef.value?.scrollIntoView({ block: 'start' })
+  platformSectionRef.value?.focus({ preventScroll: true })
 }
 
 function onReleaseTabKeydown(event: KeyboardEvent) {
@@ -1434,7 +1446,7 @@ onBeforeUnmount(() => {
           <div v-if="unstageNotice" class="alert info" role="status">{{ unstageNotice }}</div>
           <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
 
-          <section class="platform-section">
+          <section ref="platformSectionRef" class="platform-section" tabindex="-1" :aria-label="tr('选择构建端')">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
             <div class="platform-grid">
               <article v-for="platform in productPlatforms" :key="platform.id" class="platform-card version-platform-card" :aria-label="platform.name"
@@ -1504,7 +1516,7 @@ onBeforeUnmount(() => {
             </details>
           </section>
 
-          <section v-if="createTag" class="release-notes">
+          <section v-if="createTag && !targetSelectionMissing" class="release-notes">
             <div class="release-notes-head">
               <h3>{{ pushRemote ? tr("更新说明（将显示在 GitHub）") : tr('更新说明') }}</h3>
               <button type="button" :disabled="releaseNotesLoading" @click="generateReleaseNotesDraft(true)">{{ releaseNotesLoading ? tr("生成中…") : tr("重新生成") }}</button>
@@ -1531,7 +1543,7 @@ onBeforeUnmount(() => {
             <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">{{ tr("所选云端构建由 Tag 触发，请开启“创建版本 Tag”。") }}</div>
             <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">{{ tr("云端构建必须上传到 GitHub。") }}</div>
             <div v-else-if="invalidChosenTargetIds.length" class="alert warn">{{ tr("请为高级目标选择操作，或改为“仅提交代码”。") }}</div>
-            <div v-else-if="!gitOnly && !selectedTargets.length" class="alert warn">{{ tr("请选择发布平台或“仅提交代码”。") }}</div>
+            <div v-else-if="targetSelectionMissing" class="alert warn target-selection-hint"><span>{{ tr("请选择发布平台或“仅提交代码”。") }}</span><button type="button" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button><button type="button" @click="toggleGitOnly(true)">{{ tr('仅提交代码') }}</button></div>
           </section>
           <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
           </template>
@@ -1630,6 +1642,7 @@ onBeforeUnmount(() => {
         <span v-if="releaseTab === 'publish' && releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
         <button v-if="releaseTab === 'settings'" type="button" class="primary return-to-release" @click="switchReleaseTab('publish', true)">{{ tr('返回发布') }}</button>
+        <button v-else-if="targetSelectionMissing" type="button" class="primary" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button>
         <div v-else class="publish-control">
           <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
@@ -1648,6 +1661,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.target-selection-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.target-selection-hint > span { flex: 1 1 240px; }
+.platform-section:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .release-tabs { display: flex; flex-shrink: 0; gap: 6px; padding: 8px 20px 0; border-bottom: 1px solid var(--border); }
 .release-tabs [role="tab"] { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px 14px; border: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--text-dim); font-size: 14px; font-weight: 600; cursor: pointer; }
 .release-tabs [role="tab"]:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }

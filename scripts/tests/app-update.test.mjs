@@ -25,6 +25,7 @@ test('startup checks and downloads once, but never installs automatically', asyn
   assert.deepEqual(calls, ['check_app_update', 'download_app_update'])
   assert.equal(s.appUpdate.phase, 'ready')
   assert.equal(s.appUpdate.downloaded, 100)
+  assert.equal(s.appUpdate.dialogOpen, true)
   await s.installAppUpdate()
   assert.equal(calls.at(-1), 'install_app_update')
 })
@@ -36,7 +37,46 @@ test('no update and network failure do not download or install', async () => {
     assert.deepEqual(calls, ['check_app_update'])
     assert.equal(s.appUpdate.phase, failure ? 'idle' : 'current')
     assert.equal(s.appUpdate.error, failure ? 'offline' : '')
+    assert.equal(s.appUpdate.dialogOpen, false)
   }
+})
+
+test('dismissed update finishes quietly and can reopen without losing the verified installer', async () => {
+  let finish
+  const calls = []
+  const s = store(async cmd => {
+    calls.push(cmd)
+    if (cmd === 'check_app_update') return info
+    if (cmd === 'download_app_update') await new Promise(resolve => { finish = resolve })
+  })
+  const preparing = s.prepareStartupUpdate()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(s.appUpdate.phase, 'downloading')
+  assert.equal(s.appUpdate.dialogOpen, true)
+  s.dismissAppUpdate()
+  finish()
+  await preparing
+  assert.equal(s.appUpdate.phase, 'ready')
+  assert.equal(s.appUpdate.dialogOpen, false, 'download completion must not reopen a dismissed dialog')
+  assert.equal(s.appUpdate.info.version, info.version)
+  await s.checkAppUpdate()
+  assert.equal(s.appUpdate.dialogOpen, true)
+  assert.equal(s.appUpdate.phase, 'ready')
+  assert.deepEqual(calls, ['check_app_update', 'download_app_update'])
+  await s.installAppUpdate()
+  s.dismissAppUpdate()
+  assert.equal(s.appUpdate.dialogOpen, true, 'installation cannot be cancelled after handing off')
+})
+
+test('installation error keeps the update ready for a manual retry', async () => {
+  const s = store(async cmd => { if (cmd === 'check_app_update') return info; if (cmd === 'install_app_update') throw 'busy' })
+  await s.prepareStartupUpdate()
+  await s.installAppUpdate()
+  assert.equal(s.appUpdate.phase, 'ready')
+  assert.equal(s.appUpdate.error, 'busy')
+  s.dismissAppUpdate()
+  s.openAppUpdate()
+  assert.equal(s.appUpdate.dialogOpen, true)
 })
 test('download failure leaves a manual retry, not an automatic retry loop', async () => {
   let downloads = 0

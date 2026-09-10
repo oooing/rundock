@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { tr } from '@/i18n'
 
-import { onBeforeUnmount, ref } from 'vue'
+import { useCardDrag } from '@/utils/useCardDrag'
 import AppCard from '@/components/AppCard.vue'
 import UiIcon from '@/components/UiIcon.vue'
 import type { AppView, CloudBuildStatus, Group, ServiceRole } from '@/types'
@@ -41,81 +41,13 @@ const emit = defineEmits<{
   (e: 'group-hover', groupId: string | null): void
 }>()
 
-const draggingId = ref<string | null>(null)
-const dragOverId = ref<string | null>(null)
+const { draggingId, dragOverId, dropEdge, singleColumn, dragMessage, onCardDragStart, onKeyboardReorder } = useCardDrag({
+  items: () => props.apps,
+  reorder: order => emit('reorder', order),
+  moveGroup: (id, groupId) => emit('move-group', id, groupId),
+  hoverGroup: groupId => emit('group-hover', groupId),
+})
 
-function onCardDragStart(event: PointerEvent, id: string) {
-  if (event.button !== 0) return
-  draggingId.value = id
-  dragOverId.value = null
-  document.body.classList.add('card-reordering')
-  window.addEventListener('pointermove', onCardPointerMove, { passive: false })
-  window.addEventListener('pointerup', onCardPointerUp)
-  window.addEventListener('pointercancel', resetCardDrag)
-  window.addEventListener('blur', resetCardDrag)
-  window.addEventListener('keydown', cancelOnEscape)
-}
-
-function cancelOnEscape(event: KeyboardEvent) { if (event.key === 'Escape') resetCardDrag() }
-function groupAtPoint(x: number, y: number) {
-  return document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-drop-group-id]') || null
-}
-
-function cardIdAtPoint(x: number, y: number) {
-  const slot = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-card-id]')
-  return slot?.dataset.cardId || null
-}
-
-function onCardPointerMove(event: PointerEvent) {
-  if (!draggingId.value) return
-  event.preventDefault()
-  const group = groupAtPoint(event.clientX, event.clientY)
-  emit('group-hover', group ? group.dataset.dropGroupId! : null)
-  const targetId = cardIdAtPoint(event.clientX, event.clientY)
-  dragOverId.value = targetId && targetId !== draggingId.value ? targetId : null
-}
-
-function onCardPointerUp(event: PointerEvent) {
-  const sourceId = draggingId.value
-  const group = groupAtPoint(event.clientX, event.clientY)
-  if (sourceId && group) {
-    emit('move-group', sourceId, group.dataset.dropGroupId!)
-    resetCardDrag()
-    return
-  }
-  const targetId = cardIdAtPoint(event.clientX, event.clientY)
-  if (!sourceId || !targetId || sourceId === targetId) {
-    resetCardDrag()
-    return
-  }
-  const order = props.apps.map((a) => a.id)
-  const from = order.indexOf(sourceId)
-  const to = order.indexOf(targetId)
-  if (from < 0 || to < 0) {
-    resetCardDrag()
-    return
-  }
-  const [moved] = order.splice(from, 1)
-  const targetAfterRemoval = order.indexOf(targetId)
-  const insertAt = from < to ? targetAfterRemoval + 1 : targetAfterRemoval
-  order.splice(insertAt, 0, moved)
-  emit('reorder', order)
-  resetCardDrag()
-}
-
-function resetCardDrag() {
-  draggingId.value = null
-  dragOverId.value = null
-  emit('group-hover', null)
-  document.body.classList.remove('card-reordering')
-  window.removeEventListener('pointermove', onCardPointerMove)
-  window.removeEventListener('pointerup', onCardPointerUp)
-  window.removeEventListener('pointercancel', resetCardDrag)
-  window.removeEventListener('blur', resetCardDrag)
-  window.removeEventListener('keydown', cancelOnEscape)
-}
-
-onBeforeUnmount(resetCardDrag)
 </script>
 
 <template>
@@ -154,7 +86,7 @@ onBeforeUnmount(resetCardDrag)
         :key="a.id"
         class="card-slot"
         :data-card-id="a.id"
-        :class="{ dragging: draggingId === a.id, 'drag-over': dragOverId === a.id }"
+        :class="{ dragging: draggingId === a.id, 'drag-over': dragOverId === a.id, 'drop-before': dragOverId === a.id && dropEdge === 'before', 'drop-after': dragOverId === a.id && dropEdge === 'after', 'drop-horizontal': singleColumn }"
       >
         <AppCard
           :app="a"
@@ -176,9 +108,11 @@ onBeforeUnmount(resetCardDrag)
           @reidentify="(appId, serviceId) => emit('reidentify', appId, serviceId)"
           @set-color="(id, color) => emit('set-color', id, color)"
           @drag-start="onCardDragStart"
+          @reorder-key="onKeyboardReorder"
         />
       </div>
     </div>
+    <div v-if="draggingId" class="drag-status" role="status">{{ dragMessage }}<kbd>Esc</kbd>{{ tr('取消') }}</div>
   </div>
 </template>
 
@@ -193,19 +127,35 @@ onBeforeUnmount(resetCardDrag)
   gap: 16px;
 }
 .card-slot {
+  position: relative;
   min-width: 0;
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
 .card-slot :deep(.card) { height: 100%; }
 .card-slot.dragging {
-  opacity: 0.42;
-}
-.card-slot.drag-over {
-  transform: translateY(-4px);
   outline: 2px dashed var(--accent);
-  outline-offset: 4px;
+  outline-offset: -2px;
   border-radius: var(--radius);
 }
+.card-slot.dragging :deep(.card) { opacity: 0.22; }
+.card-slot.dragging :deep(.card::before), .card-slot.dragging :deep(.card::after) { display: none; }
+.card-slot.drag-over::before { content: ''; position: absolute; top: 0; bottom: 0; width: 3px; background: var(--accent); border-radius: 3px; z-index: 5; pointer-events: none; box-shadow: 0 0 0 1px var(--bg); }
+.card-slot.drop-before::before { left: -10px; }
+.card-slot.drop-after::before { right: -10px; }
+.card-slot.drag-over::after { content: ''; position: absolute; top: -4px; width: 9px; height: 9px; border: 2px solid var(--accent); background: var(--bg); border-radius: 50%; z-index: 5; pointer-events: none; }
+.card-slot.drop-before::after { left: -13px; }
+.card-slot.drop-after::after { right: -13px; }
+.card-slot.drop-horizontal.drag-over::before { left: 0; right: 0; width: auto; height: 3px; bottom: auto; }
+.card-slot.drop-horizontal.drop-before::before { top: -10px; }
+.card-slot.drop-horizontal.drop-after::before { top: auto; bottom: -10px; }
+.card-slot.drop-horizontal.drag-over::after { left: -4px; right: auto; }
+.card-slot.drop-horizontal.drop-before::after { top: -13px; }
+.card-slot.drop-horizontal.drop-after::after { top: auto; bottom: -13px; }
+:global(.card-drag-preview) { position: fixed !important; margin: 0 !important; z-index: 200; pointer-events: none !important; transform-origin: top left; transition: none !important; box-shadow: 0 20px 50px rgba(0,0,0,.5), 0 0 0 1px var(--card-fg, var(--text)); opacity: 0.97; }
+:global(.card-drag-preview *) { pointer-events: none !important; }
+.drag-status { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 210; pointer-events: none; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px); padding: 10px 16px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--bg-elev); box-shadow: var(--shadow); font-size: 13px; }
+.drag-status kbd { margin-left: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .card-slot { transition: none; } }
 :global(body.card-reordering),
 :global(body.card-reordering *) {
   cursor: grabbing !important;

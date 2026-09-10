@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/launcher-sidecar/internal/app"
@@ -118,6 +119,15 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if err := readJSON(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		for key, max := range map[string]int{"grace_period_seconds": 120, "url_discover_timeout_seconds": 600} {
+			if value, ok := body[key]; ok {
+				n, err := strconv.Atoi(value)
+				if err != nil || n < 1 || n > max {
+					writeError(w, http.StatusBadRequest, "运行参数超出范围: "+key)
+					return
+				}
+			}
 		}
 		for k, v := range body {
 			if err := s.Store.SetSetting(k, v); err != nil {

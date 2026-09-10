@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "launcher-platform"
-version = "2.0.15"
+version = "2.0.16"
 dependencies = [
  "reqwest",
  "semver",

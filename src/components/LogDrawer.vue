@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { tr } from '@/i18n'
 
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '@/api/http'
 import { useAppsStore } from '@/stores/apps'
 import type { LogEntry } from '@/types'
@@ -19,6 +19,8 @@ const loading = ref(false)
 const runId = ref('')
 const sinceId = ref(0)
 const bodyRef = ref<HTMLElement | null>(null)
+const drawerRef = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
 
 const app = computed(() => apps.apps.find((a) => a.id === props.appId))
 const combined = computed(() => {
@@ -89,14 +91,20 @@ async function clearAndReload() {
 }
 
 onMounted(async () => {
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  drawerRef.value?.focus()
   await loadHistory()
   nextTick(scrollBottom)
+})
+
+onUnmounted(() => {
+  if (previousFocus?.isConnected) previousFocus.focus()
 })
 </script>
 
 <template>
-  <div class="overlay" @click.self="emit('close')">
-    <div class="drawer">
+  <div class="overlay" @click.self="emit('close')" @keydown.esc.stop.prevent="emit('close')">
+    <div ref="drawerRef" class="drawer" role="dialog" aria-modal="true" :aria-label="tr('日志 —') + ' ' + (app?.name || appId)" tabindex="-1">
       <header class="d-head">
         <div class="d-title">
           <h3>{{ tr("日志 —") }} {{ app?.name || appId }}</h3>

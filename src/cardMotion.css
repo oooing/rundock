@@ -1,0 +1,66 @@
+@property --rundock-orbit-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.card-motion { position: relative; }
+.card-motion[data-motion='breathe']::before,
+.card-motion[data-motion='orbit']::before,
+.card-motion[data-motion='chase']::before,
+.card-motion[data-motion='ripple']::before,
+.card-motion[data-motion='ripple']::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.card-motion[data-motion='breathe']::before {
+  border: 2px solid var(--card-glow, var(--accent));
+  box-shadow: 0 0 20px 3px color-mix(in srgb, var(--card-glow, var(--accent)) 48%, transparent),
+    inset 0 0 15px color-mix(in srgb, var(--card-glow, var(--accent)) 18%, transparent);
+  animation: rundock-breathe 2.8s ease-in-out infinite;
+}
+.card-motion[data-motion='orbit']::before,
+.card-motion[data-motion='chase']::before {
+  padding: 2px;
+  background: conic-gradient(from var(--rundock-orbit-angle), transparent 0deg 215deg,
+    color-mix(in srgb, var(--card-glow, var(--accent)) 15%, transparent) 250deg,
+    var(--card-glow, var(--accent)) 310deg 340deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: rundock-orbit 3.2s linear infinite;
+}
+.card-motion[data-motion='chase']::before {
+  background: conic-gradient(from var(--rundock-orbit-angle), transparent 0deg 85deg,
+    color-mix(in srgb, var(--card-glow, var(--accent)) 20%, transparent) 115deg,
+    var(--card-glow, var(--accent)) 155deg 175deg, transparent 180deg 265deg,
+    color-mix(in srgb, var(--card-glow, var(--accent)) 20%, transparent) 295deg,
+    var(--card-glow, var(--accent)) 335deg 355deg, transparent 360deg);
+  animation-duration: 2.6s;
+}
+.card-motion[data-motion='ripple']::before,
+.card-motion[data-motion='ripple']::after {
+  border: 1px solid var(--card-glow, var(--accent));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--card-glow, var(--accent)) 35%, transparent);
+  animation: rundock-ripple 3s ease-out infinite;
+}
+.card-motion[data-motion='ripple']::after { animation-delay: -1.5s; }
+@keyframes rundock-breathe {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 1; }
+}
+@keyframes rundock-orbit {
+  to { --rundock-orbit-angle: 360deg; }
+}
+@keyframes rundock-ripple {
+  0% { inset: -1px; opacity: 0.85; }
+  85%, 100% { inset: -9px; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-motion[data-motion]::before { animation: none; opacity: 0.7; }
+  .card-motion[data-motion='ripple']::after { display: none; animation: none; }
+}

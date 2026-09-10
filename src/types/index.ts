@@ -76,6 +76,7 @@ export interface AppView {
   pid: number
   sortOrder: number
   services: AppService[] // 当前运行的服务；停止或失败后为空
+  knownServices?: AppService[] // 各端口最近一次发现的服务，不代表当前运行
   cardColor: string
 }
 

@@ -139,6 +139,11 @@ func appView(a *store.App, s *Server) map[string]any {
 		services = []*store.AppService{}
 	}
 	row["services"] = services
+	knownServices, _ := s.Store.ListLatestServicesByApp(a.ID)
+	if knownServices == nil {
+		knownServices = []*store.AppService{}
+	}
+	row["knownServices"] = knownServices
 	row["lastUrl"] = launcher.PreferredOpenURL(a.EntryScript, a.LastURL, services)
 	return row
 }

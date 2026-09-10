@@ -53,6 +53,10 @@ func TestRuntimeViewUsesCurrentRunAndClearsTerminalData(t *testing.T) {
 		if row["pid"] != 0 || row["runId"] != "" || len(row["services"].([]*store.AppService)) != 0 {
 			t.Fatal(row)
 		}
+		known := row["knownServices"].([]*store.AppService)
+		if len(known) != 1 || known[0].AppRunID != "new" {
+			t.Fatal("last known service must survive without becoming a live service", known)
+		}
 	}
 	s.Manager.Registry.Remove(a.ID)
 	if len(appView(a, s)["services"].([]*store.AppService)) != 0 {

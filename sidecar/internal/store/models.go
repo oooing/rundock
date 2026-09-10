@@ -142,6 +142,26 @@ func (s *Store) ListServicesByApp(appID string) ([]*AppService, error) {
 	return scanServices(rows)
 }
 
+// ListLatestServicesByApp retains one last-known address per port, independently
+// of whether the latest attempt reached service discovery.
+func (s *Store) ListLatestServicesByApp(appID string) ([]*AppService, error) {
+	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
+		FROM app_services WHERE rowid IN (SELECT MAX(rowid) FROM app_services WHERE app_id=? GROUP BY port) ORDER BY port`, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanServices(rows)
+}
+
+// Keep the latest record per port before starting a new run, so a failed restart
+// cannot erase addresses or manual roles, while repeated starts stay bounded.
+func (s *Store) PruneServiceHistory(appID string) error {
+	_, err := s.db.Exec(`DELETE FROM app_services WHERE app_id=? AND rowid NOT IN
+		(SELECT MAX(rowid) FROM app_services WHERE app_id=? GROUP BY port)`, appID, appID)
+	return err
+}
+
 // ListServicesByRun 返回某次运行发现的所有服务。
 func (s *Store) ListServicesByRun(runID string) ([]*AppService, error) {
 	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source

@@ -8,7 +8,7 @@ import net from 'node:net';
 const root=process.cwd();const dir=mkdtempSync(path.join(root,'.tmp','recovery-'));
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const children=[];
-const node='C:/Program Files/nodejs/node.exe';
+const node=process.execPath;
 function child(file,args,env={}){const p=spawn(file,args,{cwd:root,windowsHide:true,env:{...process.env,...env},stdio:['pipe','pipe','pipe']});children.push(p);p.output='';p.stdout.on('data',b=>p.output+=b);p.stderr.on('data',b=>p.output+=b);return p;}
 async function port(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;}
 const apiPort=await port();const base=`http://127.0.0.1:${apiPort}`;

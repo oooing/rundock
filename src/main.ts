@@ -2,6 +2,7 @@ import { createApp, watch } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import './styles.css'
+import './cardMotion.css'
 import { locale, tr } from './i18n'
 import { setNativeLanguage } from './tauri/window'
 

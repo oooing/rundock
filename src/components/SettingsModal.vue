@@ -1,31 +1,33 @@
 <script setup lang="ts">
 import { locale, setLocale, tr } from '@/i18n'
 
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '@/api/http'
 import type { ExportSnapshot } from '@/types'
-import { getAppVersion } from '@/tauri/window'
+import { getAppVersion, isTauri } from '@/tauri/window'
 import AppUpdatePanel from './AppUpdatePanel.vue'
+import MotionSettings from './MotionSettings.vue'
+import { createAutoSettings, runtimeLimits } from '@/utils/autoSettings'
+import { appUpdate } from '@/stores/appUpdate'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
+const modal = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && !appUpdate.dialogOpen) { event.stopPropagation(); emit('close') }
+}
 
-const settings = ref<Record<string, string>>({})
-const saving = ref(false)
-const saved = ref(false)
+const runtime = createAutoSettings(api)
+const settings = runtime.state
+const runtimeLabels = {
+  grace_period_seconds: '停止等待时间（秒）',
+  url_discover_timeout_seconds: '启动检测超时（秒）',
+}
 const appVersion = ref('0.1.0')
 
 async function load() {
-  settings.value = await api.getSettings()
-}
-async function save() {
-  saving.value = true
-  try {
-    await api.setSettings(settings.value)
-    saved.value = true
-    setTimeout(() => (saved.value = false), 1500)
-  } finally {
-    saving.value = false
-  }
+  const values = await runtime.load()
+  if (values) closeRemembered.value = values.closeBehavior === 'minimize'
 }
 
 async function exportConfig() {
@@ -61,37 +63,40 @@ function importConfig() {
 
 // 关闭行为记忆：当前是否「记住最小化」。重置 = 删除记忆，恢复每次询问。
 const closeRemembered = ref(false)
-async function loadCloseBehavior() {
-  try {
-    const s = await api.getSettings()
-    closeRemembered.value = s.closeBehavior === 'minimize'
-  } catch {
-    closeRemembered.value = false
-  }
-}
+const closeError = ref('')
 async function resetCloseBehavior() {
-  await api.setSettings({ closeBehavior: '' })
-  closeRemembered.value = false
+  closeError.value = ''
+  try {
+    await api.setSettings({ closeBehavior: '' })
+    closeRemembered.value = false
+  } catch (error) { closeError.value = String(error) }
 }
 
 onMounted(() => {
+  previousFocus = document.activeElement as HTMLElement | null
+  modal.value?.focus()
+  document.addEventListener('keydown', onKeydown)
   load()
-  loadCloseBehavior()
   getAppVersion().then((v) => {
     appVersion.value = v
   })
+})
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
+  if (previousFocus?.isConnected) previousFocus.focus()
 })
 </script>
 
 <template>
   <div class="overlay" @click.self="emit('close')">
-    <div class="modal">
+    <div ref="modal" class="modal" tabindex="-1" role="dialog" aria-modal="true" :aria-label="tr('设置')">
       <header class="m-head">
         <h2>{{ tr("设置") }}</h2>
-        <button class="ghost icon" @click="emit('close')">✕</button>
+        <button class="ghost icon" :aria-label="tr('关闭')" @click="emit('close')">✕</button>
       </header>
 
       <div class="m-body">
+        <p class="autosave-note">{{ tr('设置自动保存，无需手动确认') }}</p>
         <AppUpdatePanel :current-version="appVersion" />
 
         <section class="block">
@@ -104,28 +109,23 @@ onMounted(() => {
           </div>
         </section>
 
-        <section class="block">
-          <h4>{{ tr("运行参数") }}</h4>
-          <div class="row">
-            <label>{{ tr("优雅停止等待（秒）") }}</label>
-            <input v-model="settings.grace_period_seconds" class="num" />
+        <MotionSettings />
+
+        <details class="block advanced">
+          <summary>{{ tr('高级设置') }}<span>{{ tr('运行参数') }}</span></summary>
+          <p class="desc">{{ tr('通常无需调整。修改后自动保存，用于下一次启动或停止项目。') }}</p>
+          <p v-if="settings.loadError" class="setting-error" role="alert">{{ tr('设置加载失败：') }}{{ settings.loadError }} <button @click="load">{{ tr('重试') }}</button></p>
+          <div v-for="(max, key) in runtimeLimits" :key="key" class="runtime-field">
+            <div class="row">
+              <label :for="key">{{ tr(runtimeLabels[key]) }}</label>
+              <input :id="key" type="number" min="1" :max="max" step="1" :value="settings.values[key]" :disabled="!settings.loaded" :aria-invalid="['error', 'invalid'].includes(settings.fields[key].status)" :aria-describedby="`${key}-hint`" class="num" @input="runtime.set(key, ($event.target as HTMLInputElement).value)" />
+            </div>
+            <p :id="`${key}-hint`" class="desc">{{ key === 'grace_period_seconds' ? tr('给项目正常退出的时间，超时后强制停止。') : tr('等待启动服务就绪的时间，较慢的项目可适当增加。') }}</p>
+            <p v-if="settings.fields[key].status === 'invalid'" class="setting-error" role="alert">{{ tr('请输入 1–{0} 的整数', [max]) }}</p>
+            <p v-else-if="settings.fields[key].status === 'error'" class="setting-error" role="alert">{{ tr('未保存：') }}{{ settings.fields[key].error }} <button @click="runtime.set(key, settings.values[key])">{{ tr('重试') }}</button></p>
+            <p v-else-if="settings.fields[key].status !== 'idle'" class="field-status" role="status">{{ settings.fields[key].status === 'saving' ? tr('保存中…') : tr('已自动保存') }}</p>
           </div>
-          <div class="row">
-            <label>{{ tr("URL 发现超时（秒）") }}</label>
-            <input v-model="settings.url_discover_timeout_seconds" class="num" />
-          </div>
-          <div class="row">
-            <label>{{ tr("健康检查间隔（秒）") }}</label>
-            <input v-model="settings.health_check_interval_seconds" class="num" />
-          </div>
-          <div class="row">
-            <label>{{ tr("每运行日志保留条数") }}</label>
-            <input v-model="settings.log_retention_per_run" class="num" />
-          </div>
-          <button class="primary" @click="save" :disabled="saving">
-            {{ saving ? tr("保存中…") : saved ? tr("已保存 ✓") : tr("保存") }}
-          </button>
-        </section>
+        </details>
 
         <section class="block">
           <h4>{{ tr("配置导入导出") }}</h4>
@@ -136,12 +136,13 @@ onMounted(() => {
           </div>
         </section>
 
-        <section class="block">
+        <section v-if="isTauri" class="block close-settings">
           <h4>{{ tr("关闭行为") }}</h4>
           <p class="desc">
             {{ closeRemembered ? tr("当前：关闭窗口时自动最小化到托盘（已记住）。") : tr("当前：关闭窗口时每次询问。") }}
           </p>
           <button v-if="closeRemembered" @click="resetCloseBehavior">{{ tr("恢复每次询问") }}</button>
+          <p v-if="closeError" class="setting-error" role="alert">{{ tr('未保存：') }}{{ closeError }}</p>
         </section>
       </div>
     </div>
@@ -160,6 +161,7 @@ onMounted(() => {
   padding: 20px;
 }
 .modal {
+  outline: none;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -195,22 +197,17 @@ onMounted(() => {
   letter-spacing: 0.05em;
   color: var(--text-faint);
 }
-.version-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  font-size: 13px;
-  color: var(--text-dim);
-}
-.version-row code {
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
+.autosave-note { margin: 0; font-size: 12px; color: var(--text-faint); }
+.advanced { border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.advanced summary { cursor: pointer; font-size: 13px; }
+.advanced summary span { margin-left: 8px; color: var(--text-faint); font-size: 12px; }
+.advanced[open] summary { margin-bottom: 16px; }
+.runtime-field + .runtime-field { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.runtime-field .row { margin-bottom: 6px; }
+.runtime-field .desc { margin-bottom: 0; }
+.field-status, .setting-error { font-size: 12px; margin: 6px 0 0; }
+.field-status { color: var(--text-dim); }
+.setting-error { color: var(--red); overflow-wrap: anywhere; }
 .row {
   display: flex;
   align-items: center;

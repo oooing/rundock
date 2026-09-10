@@ -26,7 +26,8 @@ export interface StartResult {
 
 export const useAppsStore = defineStore('apps', () => {
   const apps = ref<AppView[]>([])
-  const loading = ref(false)
+  // The initial empty array is not a loaded, empty project list.
+  const loading = ref(true)
   const error = ref('')
 
   // 实时日志缓冲（按 appId），日志抽屉订阅

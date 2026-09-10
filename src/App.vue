@@ -12,12 +12,13 @@ import ConfirmCard from '@/components/ConfirmCard.vue'
 import AddProjectWizard from '@/components/AddProjectWizard.vue'
 import LogDrawer from '@/components/LogDrawer.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
+import AppUpdateDialog from '@/components/AppUpdateDialog.vue'
 import HelpModal from '@/components/HelpModal.vue'
 import CloseDialog from '@/components/CloseDialog.vue'
 import QuitConfirm from '@/components/QuitConfirm.vue'
 import ReleaseModal from '@/components/ReleaseModal.vue'
 import CloudBuildAlerts from '@/components/CloudBuildAlerts.vue'
-import { prepareStartupUpdate } from '@/stores/appUpdate'
+import { appUpdate, prepareStartupUpdate } from '@/stores/appUpdate'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { api } from '@/api/http'
 import {
@@ -316,6 +317,16 @@ function cancelPending() {
 }
 
 let startupUpdateTimer: ReturnType<typeof setTimeout> | undefined
+let initialProjectsRequested = false
+watch(() => conn.sidecarReady, (ready) => {
+  if (!ready || initialProjectsRequested) return
+  initialProjectsRequested = true
+  void apps.load()
+  void groups.load().catch((error) => {
+    showToast(tr('分组加载失败：') + (error?.message || String(error)))
+  })
+}, { immediate: true })
+
 onMounted(async () => {
   if (isTauriShell && import.meta.env.PROD) {
     startupUpdateTimer = setTimeout(() => { void prepareStartupUpdate() }, 8000)
@@ -351,13 +362,6 @@ onMounted(async () => {
       showHelp.value = false
     }
   })
-  // 等就绪后加载
-  const wait = setInterval(async () => {
-    if (conn.sidecarReady) {
-      clearInterval(wait)
-      await Promise.all([apps.load(), groups.load()])
-    }
-  }, 500)
 })
 
 onUnmounted(() => {
@@ -380,7 +384,7 @@ onUnmounted(() => {
       <header class="topbar">
         <div class="title">
           <h1 :title="selectedGroupId === null ? tr('全部应用') : selectedGroupName">{{ selectedGroupId === null ? tr('全部应用') : selectedGroupName }}</h1>
-          <p class="workspace-summary" aria-live="polite">{{ tr('{0} 个项目 · {1} 个运行中', [appsInGroup.length, runningCount]) }}</p>
+          <p class="workspace-summary" aria-live="polite">{{ apps.loading && !apps.apps.length ? tr('正在加载项目…') : tr('{0} 个项目 · {1} 个运行中', [appsInGroup.length, runningCount]) }}</p>
         </div>
         <div class="header-actions">
           <button class="primary import-toggle" @click="openImport()"><UiIcon name="plus" />{{ tr('添加项目') }}</button>
@@ -442,6 +446,7 @@ onUnmounted(() => {
     <LogDrawer v-if="logAppId" :app-id="logAppId" @close="logAppId = null" />
     <ReleaseModal v-if="releaseApp" :app="releaseApp" @close="releaseAppId = null" />
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
+    <AppUpdateDialog v-if="isTauriShell && appUpdate.dialogOpen && appUpdate.info" />
     <HelpModal v-if="showHelp" @close="showHelp = false" />
     <CloseDialog
       v-if="showCloseDialog"
@@ -523,7 +528,7 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
 }
-.topbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--workspace-header-height); padding: var(--workspace-header-top) 28px var(--workspace-header-bottom); }
+.topbar { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--workspace-header-height); padding: var(--workspace-header-top) 28px var(--workspace-header-bottom); }
 .title { min-width: 0; }
 .title h1 { margin: 0; font-size: 24px; line-height: var(--workspace-title-line); font-weight: 600; letter-spacing: -.025em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-summary { margin: var(--workspace-heading-gap) 0 0; color: var(--text-faint); font-size: 12px; line-height: var(--workspace-subtitle-line); font-variant-numeric: tabular-nums; }
@@ -575,7 +580,9 @@ onUnmounted(() => {
 .content {
   flex: 1;
   overflow: auto;
-  padding: 0 28px 28px;
+  /* Extend into the header gap for the glow without lowering the first row. */
+  margin-top: -28px;
+  padding: 28px 28px 28px;
   position: relative;
   transition: background 0.15s;
 }
@@ -584,8 +591,8 @@ onUnmounted(() => {
   outline: 2px dashed var(--accent);
   outline-offset: -10px;
 }
-@media (max-width: 1100px) { .content { padding: 0 20px 24px; } }
-@media (max-width: 600px) { .content { padding: 0 14px 20px; } }
+@media (max-width: 1100px) { .content { padding-inline: 20px; padding-bottom: 24px; } }
+@media (max-width: 600px) { .content { padding-inline: 14px; padding-bottom: 20px; } }
 .quitting-overlay {
   position: fixed;
   inset: 0;

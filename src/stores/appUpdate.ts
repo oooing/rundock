@@ -7,7 +7,14 @@ export const appUpdate = reactive({
   phase: 'idle' as 'idle' | 'checking' | 'available' | 'current' | 'downloading' | 'ready' | 'installing',
   info: null as AppUpdateInfo | null,
   downloaded: 0, total: 0, error: '',
+  dialogOpen: false,
 })
+export function openAppUpdate() {
+  if (appUpdate.info) appUpdate.dialogOpen = true
+}
+export function dismissAppUpdate() {
+  if (appUpdate.phase !== 'installing') appUpdate.dialogOpen = false
+}
 let startupUpdateStarted = false
 /** One background attempt per launch; installation always requires a click. */
 export async function prepareStartupUpdate() {
@@ -20,11 +27,14 @@ export async function prepareStartupUpdate() {
 }
 export async function checkAppUpdate() {
   if (['checking', 'downloading', 'installing'].includes(appUpdate.phase)) return
+  // A native check clears the verified installer. Keep it ready for installation.
+  if (appUpdate.phase === 'ready') { openAppUpdate(); return }
   const previous = appUpdate.phase
   appUpdate.phase = 'checking'; appUpdate.error = ''
   try {
     appUpdate.info = await invoke<AppUpdateInfo | null>('check_app_update')
     appUpdate.phase = appUpdate.info ? 'available' : 'current'
+    appUpdate.dialogOpen = !!appUpdate.info
   } catch (error) { appUpdate.error = String(error); appUpdate.phase = previous }
 }
 export async function downloadAppUpdate() {

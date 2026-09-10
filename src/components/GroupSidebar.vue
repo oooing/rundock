@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { tr } from '@/i18n'
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useGroupsStore } from '@/stores/groups'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
 import { getAppVersion, isTauri, openProjectGitHub } from '@/tauri/window'
 import pkg from '../../package.json'
-import { appUpdate } from '@/stores/appUpdate'
+import { appUpdate, openAppUpdate } from '@/stores/appUpdate'
 
 const props = defineProps<{ selected: string | null; dropGroupId?: string | null }>()
 const emit = defineEmits<{
@@ -28,6 +28,7 @@ async function visitGitHub() {
 }
 
 const countAll = computed(() => apps.apps.length)
+const countsReady = computed(() => !apps.loading || apps.apps.length > 0)
 const countByGroup = (id: string) => apps.apps.filter((a) => a.groupId === id).length
 
 // 版本号：Tauri 壳里读打包版本，浏览器开发模式回退到 package.json
@@ -38,11 +39,43 @@ onMounted(() => {
   })
 })
 
+const groupFormOpen = ref(false)
+const groupName = ref('')
+const groupError = ref('')
+const creatingGroup = ref(false)
+const groupNameInput = ref<HTMLInputElement | null>(null)
+const newGroupButton = ref<HTMLButtonElement | null>(null)
+
 async function newGroup() {
-  const name = prompt(tr("分组名称"))
-  if (!name?.trim()) return
-  try { await groups.create(name.trim()) }
-  catch (error) { alert(tr('创建分组失败：') + (error instanceof Error ? error.message : String(error))) }
+  groupFormOpen.value = true
+  await nextTick()
+  groupNameInput.value?.focus()
+}
+
+async function closeGroupForm() {
+  if (creatingGroup.value) return
+  groupFormOpen.value = false
+  groupName.value = ''
+  groupError.value = ''
+  await nextTick()
+  newGroupButton.value?.focus()
+}
+
+async function createGroup() {
+  const name = groupName.value.trim()
+  if (!name || creatingGroup.value) return
+  creatingGroup.value = true
+  groupError.value = ''
+  try {
+    await groups.create(name)
+    creatingGroup.value = false
+    await closeGroupForm()
+  } catch (error) {
+    groupError.value = tr('创建分组失败：') + (error instanceof Error ? error.message : String(error))
+    creatingGroup.value = false
+    await nextTick()
+    groupNameInput.value?.focus()
+  }
 }
 </script>
 
@@ -65,17 +98,26 @@ async function newGroup() {
       >
         <UiIcon name="grid" :size="16" />
         <span class="label">{{ tr("全部应用") }}</span>
-        <span class="count">{{ countAll }}</span>
+        <span class="count">{{ countsReady ? countAll : '—' }}</span>
       </button>
 
       <div class="section-title">
         <span>{{ tr("分组") }}</span>
-        <button class="ghost icon" :title="tr('新建分组')" :aria-label="tr('新建分组')" @click="newGroup"><UiIcon name="plus" :size="15" /></button>
+        <button ref="newGroupButton" class="ghost icon" :title="tr('新建分组')" :aria-label="tr('新建分组')" :aria-expanded="groupFormOpen" aria-controls="new-group-form" :disabled="creatingGroup" @click="newGroup"><UiIcon name="plus" :size="15" /></button>
       </div>
+
+      <form v-if="groupFormOpen" id="new-group-form" class="group-form" :aria-busy="creatingGroup" @submit.prevent="createGroup" @keydown.esc.stop.prevent="closeGroupForm">
+        <input ref="groupNameInput" v-model="groupName" :aria-label="tr('分组名称')" :placeholder="tr('分组名称')" :disabled="creatingGroup" :aria-invalid="!!groupError" :aria-describedby="groupError ? 'new-group-error' : undefined" autocomplete="off" />
+        <p v-if="groupError" id="new-group-error" class="group-error" role="alert">{{ groupError }}</p>
+        <div class="group-form-actions">
+          <button type="button" class="ghost" :disabled="creatingGroup" @click="closeGroupForm">{{ tr('取消') }}</button>
+          <button type="submit" class="primary" :disabled="!groupName.trim() || creatingGroup">{{ creatingGroup ? tr('创建中…') : tr('创建') }}</button>
+        </div>
+      </form>
 
       <button class="nav-item" data-drop-group-id="" :aria-current="props.selected === '' ? 'page' : undefined" :class="{ active: props.selected === '', 'drop-target': props.dropGroupId === '' }" @click="emit('select', '')">
         <UiIcon name="folder" :size="16" /><span class="label">{{ tr('未分组') }}</span>
-        <span class="count">{{ apps.apps.filter(a => !a.groupId).length }}</span>
+        <span class="count">{{ countsReady ? apps.apps.filter(a => !a.groupId).length : '—' }}</span>
       </button>
 
       <button
@@ -90,12 +132,12 @@ async function newGroup() {
       >
         <span class="ico swatch" :style="{ background: g.color || 'var(--text-faint)' }"></span>
         <span class="label">{{ g.name }}</span>
-        <span class="count">{{ countByGroup(g.id) }}</span>
+        <span class="count">{{ countsReady ? countByGroup(g.id) : '—' }}</span>
       </button>
     </nav>
 
     <div class="footer">
-      <button v-if="isTauri && appUpdate.info && ['downloading', 'ready', 'available'].includes(appUpdate.phase)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' }" @click="emit('settings')">
+      <button v-if="isTauri && appUpdate.info && ['downloading', 'ready', 'available'].includes(appUpdate.phase)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' }" @click="openAppUpdate">
         <UiIcon :name="appUpdate.phase === 'ready' ? 'check-circle' : 'refresh'" :size="16" />
         <span><strong>{{ appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small>v{{ appUpdate.info.version }}<template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
       </button>
@@ -223,6 +265,11 @@ async function newGroup() {
   color: var(--text-faint);
 }
 .section-title > button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; flex-shrink: 0; }
+.group-form { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.group-form input { width: 100%; min-width: 0; }
+.group-form-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.group-form-actions button { padding: 5px 8px; font-size: 12px; }
+.group-error { margin: 0; color: var(--red); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .footer {
   padding-top: 10px;
   border-top: 1px solid var(--border);

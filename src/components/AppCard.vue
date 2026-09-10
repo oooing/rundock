@@ -6,7 +6,9 @@ import type { AppView, CloudBuildStatus, Group, ServiceRole, StartupIssue } from
 import { api } from '@/api/http'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
-import { CARD_COLOR_PALETTE, getReadableTextColor, normalizeHexColor } from '@/utils/cardColors'
+import { CARD_COLOR_PALETTE, getCardVisualStyle, normalizeHexColor } from '@/utils/cardColors'
+import { runningEffect } from '@/stores/motion'
+import { cardServices } from '@/utils/cardServices'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
 const emit = defineEmits<{
@@ -17,6 +19,7 @@ const emit = defineEmits<{
   (e: 'reidentify', appId: string, serviceId: string): void
   (e: 'set-color', id: string, color: string): void
   (e: 'drag-start', event: PointerEvent, id: string): void
+  (e: 'reorder-key', id: string, direction: number): void
   (e: 'move-group', id: string, groupId: string): void
   (e: 'cloud-details', id: string): void
 }>()
@@ -39,14 +42,14 @@ const portsReleased = computed(() => startupIssue.value?.code === 'port_in_use'
 const issueTitle = computed(() => {
   if (recovering.value) return tr('正在重新启动…')
   if (checkingIssue.value) return tr('正在检查失败原因…')
-  if (portsReleased.value) return tr('可以重新启动')
+  if (portsReleased.value) return tr('上次启动失败')
   if (startupIssue.value?.conflicts.length) return tr('端口 {0} 被占用', [[...new Set(startupIssue.value.conflicts.map(conflict => conflict.port))].join('、')])
   return tr('启动失败')
 })
 const issueDescription = computed(() => {
   if (recovering.value) return checkingIssue.value ? tr('正在检查占用进程…') : ''
   if (checkingIssue.value) return ''
-  if (portsReleased.value) return tr('端口 {0} 已释放。', [startupIssue.value!.ports.join('、')])
+  if (portsReleased.value) return tr('启动脚本报告端口 {0} 被占用，当前未检测到占用；若重试仍失败，请查看日志。', [startupIssue.value!.ports.join('、')])
   if (startupIssue.value?.reason) return tr(startupIssue.value.reason)
   if (startupIssue.value?.canRecover && startupIssue.value.conflicts.length) return tr('将关闭本项目占用进程，再自动启动')
   return tr('打开日志查看失败原因。')
@@ -104,6 +107,7 @@ const cardElement = ref<HTMLElement | null>(null)
 const manageDetails = ref<HTMLDetailsElement | null>(null)
 const manageSummary = ref<HTMLElement | null>(null)
 const nameInput = ref<HTMLInputElement | null>(null)
+const nameButton = ref<HTMLButtonElement | null>(null)
 let roleTrigger: HTMLButtonElement | null = null
 // role 可能为 undefined（老数据/未填充），默认回退到 unknown，避免 ROLE_META[undefined] 崩溃。
 function roleMeta(role?: ServiceRole) {
@@ -211,12 +215,13 @@ async function commitRename(restoreFocus = false) {
     emit('rename', a.value.id, n)
   }
   editingName.value = false
-  if (restoreFocus) { await nextTick(); manageSummary.value?.focus() }
+  if (restoreFocus) { await nextTick(); nameButton.value?.focus() }
 }
-function cancelRename() {
+async function cancelRename() {
   nameDraft.value = a.value.name
   editingName.value = false
-  manageSummary.value?.focus()
+  await nextTick()
+  nameButton.value?.focus()
 }
 
 const isActive = computed(
@@ -248,22 +253,10 @@ function healthText(h: string): string {
   return m[h] || h
 }
 
-// 展示顺序：前端 > 后端 > 数据库 > 未识别，同角色按端口
-const ROLE_ORDER: Record<ServiceRole, number> = {
-  frontend: 0,
-  backend: 1,
-  database: 2,
-  unknown: 3,
-}
-const sortedServices = computed(() => {
-  const list = [...(a.value.services || [])]
-  return list.sort((x, y) => {
-    const rx = ROLE_ORDER[(x.role as ServiceRole) || 'unknown'] ?? 9
-    const ry = ROLE_ORDER[(y.role as ServiceRole) || 'unknown'] ?? 9
-    if (rx !== ry) return rx - ry
-    return (x.port || 0) - (y.port || 0)
-  })
-})
+const sortedServices = computed(() => cardServices(a.value))
+const primaryURLInServices = computed(() => sortedServices.value.some(svc => svc.url === a.value.lastUrl))
+const serviceState = (svc: ReturnType<typeof cardServices>[number]) => svc.source === 'current'
+  ? healthText(svc.health) : svc.source === 'history' ? tr('上次发现') : tr('配置端口')
 
 // 打开某个服务的 URL（通过 open-url 事件，后端会用系统浏览器打开）
 function openServiceUrl(url: string) {
@@ -284,56 +277,25 @@ function clearColor() {
   closeMenus(true)
   emit('set-color', a.value.id, '')
 }
-const cardStyle = computed(() => {
-  const bg = normalizeHexColor(a.value.cardColor)
-  if (!bg) return {}
-  const luminance = (color: string) => {
-    const channels = [1, 3, 5].map((start) => parseInt(color.slice(start, start + 2), 16) / 255)
-      .map((value) => value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4))
-    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
-  }
-  const bgLuminance = luminance(bg)
-  const contrast = (color: string) => {
-    const value = luminance(color)
-    return (Math.max(value, bgLuminance) + 0.05) / (Math.min(value, bgLuminance) + 0.05)
-  }
-  // The legacy brightness helper can choose white on medium gray; retain the
-  // saved background while guaranteeing readable text for custom colors.
-  let fg = getReadableTextColor(bg)
-  if (contrast(fg) < 4.5) fg = contrast('#111827') >= contrast('#f8fafc') ? '#111827' : '#f8fafc'
-  if (contrast(fg) < 4.5) fg = bgLuminance > 0.179 ? '#000000' : '#ffffff'
-  const readable = (color: string) => contrast(color) >= 4.5 ? color : fg
-  const darkText = luminance(fg) < 0.1
-  return {
-    '--card-bg': bg,
-    '--card-fg': fg,
-    '--card-muted': readable(darkText ? '#475569' : '#cbd5e1'),
-    '--card-panel': darkText ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
-    '--card-border': darkText ? 'rgba(17, 24, 39, 0.18)' : 'rgba(255, 255, 255, 0.16)',
-    '--card-link': fg,
-    '--card-status-green': readable(darkText ? '#166534' : '#a7f3d0'),
-    '--card-status-amber': readable(darkText ? '#854d0e' : '#fde68a'),
-    '--card-status-red': readable(darkText ? '#991b1b' : '#fecaca'),
-  } as Record<string, string>
-})
+const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.status === 'stopped'))
+
 </script>
 
 <template>
-  <article ref="cardElement" class="card" :class="['s-' + a.status]" :style="cardStyle" :aria-busy="a.restarting || undefined" @keydown="onEscape">
+  <article ref="cardElement" class="card card-motion" :class="['s-' + a.status]" :data-motion="a.status === 'running' && !a.restarting ? runningEffect : 'none'" :style="cardStyle" :aria-busy="a.restarting || undefined" @keydown="onEscape">
     <header class="head">
       <div class="name-row">
-        <button class="ghost icon drag-handle" :title="tr('拖动可排序，或移到侧栏分组')" :aria-label="tr('拖动项目')" :disabled="moving" @pointerdown.stop.prevent="emit('drag-start', $event, a.id)">
-          <UiIcon name="grip" :size="17" />
+        <button class="ghost icon drag-handle" :title="tr('拖动排序或移到分组；Alt + 左右方向键调整顺序')" :aria-label="tr('拖动项目')" :disabled="moving" @pointerdown.stop.prevent="emit('drag-start', $event, a.id)" @keydown.alt.left.stop.prevent="emit('reorder-key', a.id, -1)" @keydown.alt.right.stop.prevent="emit('reorder-key', a.id, 1)">
+          <UiIcon name="grip" :size="20" />
         </button>
-        <h3 v-if="!editingName" :title="a.name" @dblclick="startRename">{{ a.name }}</h3>
+        <h3 v-if="!editingName"><button ref="nameButton" type="button" class="name-trigger" :title="tr('单击修改名称')" @click="startRename">{{ a.name }}</button></h3>
         <input v-else ref="nameInput" v-model="nameDraft" class="name-edit" :aria-label="tr('项目名称')" @keydown.enter.prevent="commitRename(true)" @keydown.esc.stop.prevent="cancelRename" @blur="commitRename()" />
         <button v-if="cloudAlerts?.length" class="build-alert-badge" :class="{ failed: buildFailures.length }" :aria-label="tr('查看 {0} 的构建提醒（{1}）', [a.name, cloudAlerts.length])" :title="tr('点击查看失败版本和构建详情')" aria-haspopup="dialog" @click.stop="emit('cloud-details', a.id)"><UiIcon name="alert-circle" :size="13" /><span>{{ buildBadge }}</span><span v-if="cloudAlerts.length > 1" class="build-alert-count">{{ cloudAlerts.length }}</span></button>
       </div>
       <div class="identity-row">
         <span class="badge" :class="a.restarting ? 'starting' : a.status"><span class="dot"></span>{{ statusLabel }}</span>
         <div class="group-row">
-          <label :for="`group-${a.id}`">{{ tr('分组') }}</label>
-          <select :id="`group-${a.id}`" class="group-select" :value="a.groupId || ''" :disabled="moving" @change="chooseGroup">
+          <select :id="`group-${a.id}`" class="group-select" :aria-label="tr('分组')" :value="a.groupId || ''" :disabled="moving" @change="chooseGroup">
             <option value="">{{ tr('未分组') }}</option>
             <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
           </select>
@@ -342,10 +304,11 @@ const cardStyle = computed(() => {
     </header>
 
     <div class="meta">
-      <div v-if="a.services && a.services.length" class="services" :tabindex="a.services.length > 2 ? 0 : undefined" :role="a.services.length > 2 ? 'region' : undefined" :aria-label="tr('项目端口')">
+      <div v-if="sortedServices.length" class="services-heading"><span>{{ tr('服务与端口') }}</span><span>{{ sortedServices.length }}</span></div>
+      <div v-if="sortedServices.length" class="services" :tabindex="sortedServices.length > 2 ? 0 : undefined" role="region" :aria-label="tr('服务与端口')">
         <div v-for="svc in sortedServices" :key="svc.id" class="svc-row">
           <div class="role-wrap" @focusout="onMenuFocusOut">
-            <button class="role-btn" :class="{ locked: svc.roleSource === 'manual' }" :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? tr('（已锁定）') : '') + tr(' — 点击切换')" :aria-label="roleMeta(svc.role).label + tr(' — 点击切换')" :aria-expanded="roleMenuOpen === svc.id" :aria-controls="`role-menu-${a.id}-${svc.id}`" @click.stop="toggleRoleMenu(svc.id, $event)">
+            <button class="role-btn" :disabled="svc.source === 'configured'" :class="{ locked: svc.roleSource === 'manual' }" :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? tr('（已锁定）') : '') + tr(' — 点击切换')" :aria-label="roleMeta(svc.role).label + tr(' — 点击切换')" :aria-expanded="roleMenuOpen === svc.id" :aria-controls="`role-menu-${a.id}-${svc.id}`" @click.stop="toggleRoleMenu(svc.id, $event)">
               <UiIcon :name="roleMeta(svc.role).icon" :size="15" />
             </button>
             <div v-if="roleMenuOpen === svc.id" :id="`role-menu-${a.id}-${svc.id}`" class="role-menu" :style="roleMenuStyle" @click.stop>
@@ -357,27 +320,25 @@ const cardStyle = computed(() => {
               <button class="reidentify" @click="reidentify(svc.id)"><UiIcon name="refresh" :size="14" />{{ tr('重新识别') }}</button>
             </div>
           </div>
-          <span class="svc-dot" :class="svc.health" :title="healthText(svc.health)" role="img" :aria-label="healthText(svc.health)"></span>
+          <span class="svc-dot" :class="svc.source === 'current' ? svc.health : 'inactive'" :title="serviceState(svc)" role="img" :aria-label="serviceState(svc)"></span>
+          <a v-if="svc.url && svc.role !== 'database'" class="svc-url mono" :class="{ dim: svc.source !== 'current' }" :href="svc.url" :title="svc.url + ' · ' + serviceState(svc)" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
+          <span v-else class="svc-url">{{ svc.role === 'database' ? tr('数据库') : tr('待发现服务地址') }}</span>
+          <span v-if="svc.source !== 'current'" class="svc-source">{{ serviceState(svc) }}</span>
           <span class="svc-port mono">:{{ svc.port }}</span>
-          <a class="svc-url mono" :class="{ dim: !urlReachable }" :href="svc.url" :title="svc.url + (urlReachable ? '' : tr('（服务未运行）'))" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
         </div>
       </div>
-      <div v-else-if="a.lastUrl" class="meta-row url" :class="{ dim: !urlReachable }">
-        <span class="k">URL</span>
+      <div v-if="a.lastUrl && !primaryURLInServices" class="meta-row url" :class="{ dim: !urlReachable }">
+        <span class="k">{{ tr('访问地址') }}</span>
         <a class="v mono" :href="a.lastUrl" :title="a.lastUrl + (urlReachable ? '' : tr('（服务未运行）'))" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
       </div>
       <div class="meta-row path" :title="a.entryScript">
-        <span class="k">{{ tr('入口') }}</span>
+        <span class="k">{{ tr('启动脚本') }}</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
       </div>
-      <div class="meta-row pid-row">
-        <span class="k">PID</span>
-        <span class="v mono">{{ a.pid || '—' }}</span>
-      </div>
-    <details v-if="showStartupIssue" ref="issueDetails" class="startup-error" :class="{ resolved: portsReleased && !recoveryError, pending: checkingIssue || recovering }" :aria-busy="checkingIssue || recovering">
+    <button v-if="showStartupIssue" type="button" class="failure-log-link" @click="emit('log', a.id)"><UiIcon name="alert-circle" :size="18" /><strong>{{ issueTitle }}</strong><span>{{ tr('查看失败日志') }}</span><UiIcon name="arrow-right" :size="14" /></button>
+    <details v-if="showStartupIssue" ref="issueDetails" class="startup-error" :class="{ pending: checkingIssue || recovering }" :aria-busy="checkingIssue || recovering">
       <summary>
-        <UiIcon class="issue-icon" :name="checkingIssue || recovering ? 'refresh' : portsReleased && !recoveryError ? 'check-circle' : 'alert-circle'" :size="16" />
-        <strong role="status" aria-live="polite">{{ issueTitle }}</strong>
+        <strong>{{ tr('原因与处理') }}</strong>
         <UiIcon class="issue-chevron" name="chevron-down" :size="13" />
       </summary>
       <div class="issue-content">
@@ -410,12 +371,16 @@ const cardStyle = computed(() => {
         <button class="ghost release-btn" :title="tr('Git 版本发布')" @click="emit('release', a.id)"><UiIcon name="upload" :size="14" />{{ tr('发布') }}</button>
       </div>
       <div class="utility-actions">
-        <button v-if="!showStartupIssue" class="ghost icon" :title="tr('查看日志')" :aria-label="tr('查看日志')" @click="emit('log', a.id)"><UiIcon name="log" /></button>
+        <button class="ghost icon" :title="tr('查看日志')" :aria-label="tr('查看日志')" @click="emit('log', a.id)"><UiIcon name="log" /></button>
         <button class="ghost icon" :class="{ dim: a.lastUrl && !urlReachable }" :title="a.lastUrl ? (urlReachable ? tr('打开 URL') : tr('服务未运行，URL 可能无法访问')) : tr('暂无 URL')" :aria-label="tr('打开 URL')" :disabled="!a.lastUrl" @click="emit('open-url', a.id)"><UiIcon name="external-link" /></button>
         <button class="ghost icon" :title="tr('打开目录')" :aria-label="tr('打开目录')" @click="emit('open-dir', a.id)"><UiIcon name="folder" /></button>
         <details ref="manageDetails" class="manage" @toggle="onManageToggle" @focusout="onMenuFocusOut">
-          <summary ref="manageSummary" :aria-disabled="recovering || undefined" @click="recovering && $event.preventDefault()">{{ tr('更多操作') }}<UiIcon name="chevron-down" :size="13" /></summary>
+          <summary ref="manageSummary" :title="tr('更多操作')" :aria-label="tr('更多操作')" :aria-disabled="recovering || undefined" @click="recovering && $event.preventDefault()"><UiIcon name="more-vertical" :size="18" /></summary>
           <div class="manage-menu">
+            <details class="runtime-details">
+              <summary><UiIcon name="server" :size="15" />{{ tr('运行详情') }}<UiIcon name="chevron-down" :size="13" /></summary>
+              <dl><dt>{{ tr('状态') }}</dt><dd>{{ statusLabel }}</dd><dt>{{ tr('进程编号（PID）') }}</dt><dd class="mono">{{ a.pid || '—' }}</dd></dl>
+            </details>
             <button @click="startRename"><UiIcon name="edit" :size="15" />{{ tr('改名') }}</button>
             <button :aria-expanded="colorMenuOpen" :aria-controls="`colors-${a.id}`" @click="toggleColorMenu"><UiIcon name="palette" :size="15" />{{ tr('卡片背景色') }}</button>
             <div v-if="colorMenuOpen" :id="`colors-${a.id}`" class="color-menu">
@@ -437,7 +402,16 @@ const cardStyle = computed(() => {
 </template>
 
 <style scoped>
+.services-heading { display: flex; justify-content: space-between; color: var(--card-muted, var(--text-dim)); font-size: 11px; margin-bottom: 4px; }
+.svc-source { margin-left: auto; white-space: nowrap; font-size: 10px; color: var(--card-muted, var(--text-faint)); }
+.svc-dot.inactive { background: var(--card-muted, var(--text-faint)); }
+.failure-log-link { width: 100%; display: flex; align-items: center; gap: 7px; padding: 10px; margin-top: 10px; text-align: left; border: 1px solid var(--card-status-red, var(--red)); border-radius: 7px; background: var(--card-panel, var(--bg)); color: var(--card-status-red, var(--red)); }
+.failure-log-link strong { flex: 1; font-size: 12px; }
+.failure-log-link span { font-size: 11px; white-space: nowrap; }
+.failure-log-link:hover { background: var(--card-panel, var(--bg-elev-2)); }
+.failure-log-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .card {
+  position: relative;
   background: var(--card-bg, var(--bg-elev));
   color: var(--card-fg, var(--text));
   border: 1px solid var(--card-border, var(--border));
@@ -447,37 +421,60 @@ const cardStyle = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  transition: border-color 0.15s;
+  transition: border-color 0.2s, background-color 0.3s;
 }
 .card:hover { border-color: var(--card-muted, var(--text-faint)); }
+.card.s-stopped { background: var(--card-bg, color-mix(in srgb, var(--bg-elev) 62%, black)); }
+@media (prefers-reduced-motion: reduce) {
+  .card { transition: none; }
+}
+.card:is(.s-starting, .s-stopping, .s-degraded) { --card-state-color: var(--card-status-amber, var(--amber)); }
+.card.s-failed { --card-state-color: var(--card-status-red, var(--red)); }
+.card:is(.s-starting, .s-stopping, .s-degraded, .s-failed) {
+  box-shadow: inset 0 3px 0 var(--card-state-color);
+  border-color: color-mix(in srgb, var(--card-state-color) 45%, var(--card-bg, var(--bg-elev)));
+}
+.card:is(.s-starting, .s-stopping, .s-degraded, .s-failed):hover { border-color: var(--card-state-color); }
 .card :is(button, a, summary, select, input):focus-visible { outline: 2px solid var(--card-fg, var(--accent)); outline-offset: 3px; }
 .head { display: flex; flex-direction: column; gap: 8px; }
 .name-row { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
 .name-row h3 { margin: 2px 0 0; font-size: 15px; line-height: 1.45; font-weight: 600; overflow-wrap: anywhere; color: var(--card-fg, var(--text)); }
 .name-row h3, .name-row .name-edit { flex: 1; min-width: 0; }
+.name-row .name-trigger { display: block; width: 100%; padding: 0; border: 0; border-radius: 3px; background: transparent; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; }
+.name-row .name-trigger:hover:not(:disabled) { background: transparent; text-decoration: none; }
 .card .build-alert-badge { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--card-status-amber, var(--amber)); background: var(--card-panel, var(--bg)); color: var(--card-status-amber, var(--amber)); font-size: 11px; line-height: 16px; white-space: nowrap; }
 .card .build-alert-badge.failed { color: var(--card-status-red, var(--red)); border-color: var(--card-status-red, var(--red)); }
 .card .build-alert-badge:hover { background: var(--card-panel, var(--bg-elev)); text-decoration: underline; }
 .build-alert-count { font-weight: 700; }
-.drag-handle { flex: 0 0 auto; cursor: grab; user-select: none; touch-action: none; color: var(--card-muted, var(--text-faint)); }
-.card .drag-handle { padding: 3px 0; border: 0; }
+.drag-handle { flex: 0 0 auto; cursor: grab; user-select: none; touch-action: none; color: var(--card-fg, var(--text)); }
+/* Align the grip dots, rather than the SVG's internal padding, with the content edge. */
+.card .drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 4px; border: 1px solid transparent; border-radius: 6px; margin: -1px 0 0 -8px; }
+.card .drag-handle:hover, .card .drag-handle:focus-visible { background: var(--card-panel, var(--bg)); border-color: transparent; outline: none; }
 .drag-handle:active { cursor: grabbing; }
-.name-edit { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; padding: 3px 6px; }
+.name-edit { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; padding: 3px 6px; color: var(--card-fg, var(--text)); background: var(--card-panel, var(--bg)); border-color: var(--card-border, var(--border)); border-radius: 4px; }
+/* Inputs already have a border: use that edge for focus instead of a second ring. */
+.card :is(.name-edit, .group-select):focus { border-color: var(--card-muted, var(--text-dim)); outline: none; box-shadow: none; }
+.card :is(.name-edit, .group-select):focus-visible { outline: none; box-shadow: none; }
 .identity-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .card .badge { padding: 0; background: transparent; border: 0; border-radius: 0; color: var(--card-muted, var(--text-dim)); font-size: 12px; white-space: nowrap; }
-.card .badge.running { color: var(--card-status-green, var(--green)); }
-.card .badge.starting, .card .badge.degraded { color: var(--card-status-amber, var(--amber)); }
+.card .badge.running { color: var(--card-running-text, var(--green)); }
+.card .badge.starting, .card .badge.stopping, .card .badge.degraded { color: var(--card-status-amber, var(--amber)); }
 .card .badge.failed { color: var(--card-status-red, var(--red)); }
 .badge .dot { width: 6px; height: 6px; }
 .group-row { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; color: var(--card-muted, var(--text-dim)); font-size: 11px; }
-.group-row label { flex-shrink: 0; }
-.group-select { max-width: 132px; min-width: 0; padding: 3px 4px; font-size: 11px; color: var(--card-muted, var(--text-dim)); border-color: transparent; background: transparent; }
+.group-select { max-width: 132px; min-width: 0; padding: 3px 4px; font-size: 11px; color: var(--card-muted, var(--text-dim)); border-color: transparent; border-radius: 4px; background: transparent; }
 .group-select:hover { border-color: var(--card-border, var(--border)); }
-.group-select option { color: var(--text); background: var(--bg-elev); }
+.group-select option { color: var(--card-fg, var(--text)); background: var(--card-bg, var(--bg-elev)); }
 .meta { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
 .services { display: flex; flex-direction: column; gap: 5px; max-height: 61px; overflow: auto; padding: 7px 9px; margin-bottom: 4px; background: var(--card-panel, var(--bg)); border-radius: 5px; }
 .services:focus-visible { outline: 2px solid var(--card-fg, var(--accent)); outline-offset: 2px; }
 .services::-webkit-scrollbar { width: 6px; }
+.services::-webkit-scrollbar-track { background: var(--card-panel, var(--bg)); border-radius: 5px; }
+.services::-webkit-scrollbar-thumb { background: var(--card-muted, var(--text-dim)); border: 0; border-radius: 5px; min-height: 18px; }
+.services::-webkit-scrollbar-thumb:hover { background-color: var(--card-fg, var(--text)); }
+@supports not selector(::-webkit-scrollbar) {
+  .services { scrollbar-color: var(--card-muted, var(--text-dim)) var(--card-panel, var(--bg)); }
+}
 .svc-row { display: flex; align-items: center; gap: 7px; flex-shrink: 0; font-size: 11px; min-width: 0; }
 .svc-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: var(--card-muted, var(--text-faint)); }
 .svc-dot.healthy { background: var(--card-status-green, var(--green)); }
@@ -493,13 +490,13 @@ const cardStyle = computed(() => {
 .role-menu button:focus-visible, .manage-menu :is(button, input):focus-visible { outline-color: var(--accent); }
 .selected-role { margin-left: auto; }
 .role-menu .reidentify { border-top: 1px solid var(--border); border-radius: 0; margin-top: 4px; padding-top: 9px; }
-.svc-port { color: var(--card-muted, var(--text-dim)); flex-shrink: 0; min-width: 43px; }
-.svc-url { color: var(--card-link, #a9c3ef); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; text-underline-offset: 3px; text-decoration: none; }
+.svc-port { color: var(--card-muted, var(--text-dim)); flex-shrink: 0; min-width: 43px; text-align: right; }
+.svc-url { flex: 1; color: var(--card-link, #a9c3ef); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; text-underline-offset: 3px; text-decoration: none; }
 .svc-url:hover { text-decoration: underline; }
 .svc-url.dim, .meta-row.url.dim .v { color: var(--card-muted, var(--text-dim)); }
 button.dim { color: var(--card-muted, var(--text-dim)); }
 .meta-row { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
-.meta-row .k { color: var(--card-muted, var(--text-dim)); width: 28px; flex-shrink: 0; font-size: 11px; }
+.meta-row .k { color: var(--card-muted, var(--text-dim)); width: 50px; flex-shrink: 0; font-size: 11px; }
 .meta-row .v { color: var(--card-muted, var(--text-dim)); min-width: 0; word-break: break-all; font-size: 11px; line-height: 1.5; }
 .meta-row.url .v { color: var(--card-link, #a9c3ef); cursor: pointer; text-decoration: none; }
 .meta-row.url .v:hover { text-decoration: underline; }
@@ -508,7 +505,11 @@ button.dim { color: var(--card-muted, var(--text-dim)); }
 .run-actions, .utility-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; }
 .run-actions > button { min-height: 32px; padding: 6px 10px; font-size: 12px; }
+.run-actions > button.primary { background: var(--card-action-bg, #2f68cb); border-color: var(--card-action-bg, #2f68cb); color: var(--card-action-fg, #fff); }
+.run-actions > button.primary:hover:not(:disabled) { background: var(--card-action-hover, #3873d8); border-color: var(--card-action-hover, #3873d8); }
+.run-actions > button:focus-visible { outline-color: var(--card-fg, var(--accent-hover)); }
 .run-actions > button:not(.primary) { color: var(--card-fg, var(--text)); background: var(--card-panel, var(--bg-elev-2)); border-color: var(--card-border, var(--border)); }
+.run-actions > button:not(.primary):hover:not(:disabled) { border-color: var(--card-muted, var(--accent)); }
 .run-actions > button.stop-btn { border-color: var(--card-muted, var(--text-dim)); }
 .run-actions > button.release-btn { margin-inline-start: auto; color: var(--card-muted, var(--text-dim)); background: transparent; border-color: transparent; }
 .utility-actions { gap: 5px; }
@@ -521,18 +522,31 @@ button.dim { color: var(--card-muted, var(--text-dim)); }
 }
 .manage { position: relative; margin-left: auto; }
 .manage summary { display: flex; align-items: center; justify-content: flex-end; gap: 5px; padding: 6px 0 6px 6px; color: var(--card-muted, var(--text-dim)); font-size: 11px; cursor: pointer; list-style: none; border-radius: 3px; }
+.manage > summary { width: 30px; height: 28px; justify-content: center; padding: 5px; border: 1px solid transparent; border-radius: 8px; }
+.manage > summary:hover, .manage[open] > summary { background: var(--card-panel, var(--bg-elev-2)); border-color: var(--card-muted, var(--text-dim)); }
+.manage > summary:focus-visible { outline-color: var(--card-fg, var(--accent-hover)); }
 .manage summary::-webkit-details-marker { display: none; }
 .manage summary[aria-disabled='true'] { opacity: .45; cursor: not-allowed; }
-.manage[open] summary { color: var(--card-fg, var(--text)); }
-.manage-menu { right: 0; bottom: calc(100% + 6px); min-width: 210px; }
-.manage-menu > button.delete-action { color: var(--red); border-top: 1px solid var(--border); margin-top: 4px; padding-top: 10px; border-radius: 0; }
+.manage[open] > summary { color: var(--card-fg, var(--text)); }
+.manage-menu { right: 0; bottom: calc(100% + 6px); min-width: 210px; background: var(--card-bg, var(--bg-elev)); color: var(--card-fg, var(--text)); border-color: var(--card-border, var(--border)); }
+.manage-menu > button, .runtime-details > summary { justify-content: flex-start; gap: 9px; text-align: left; color: var(--card-fg, var(--text)); }
+.runtime-details > summary { padding: 8px; font-size: 12px; }
+.manage-menu > button:hover, .runtime-details > summary:hover { background: var(--card-panel, var(--bg-elev-2)); color: var(--card-fg, var(--text)); }
+.manage-menu :is(button, input, summary):focus-visible { outline-color: var(--card-fg, var(--accent)); }
+.runtime-details > summary > :last-child { margin-left: auto; }
+.runtime-details[open] > summary > :last-child { transform: rotate(180deg); }
+.runtime-details dl { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; margin: 4px 8px 10px; font-size: 11px; }
+.runtime-details dt { color: var(--card-muted, var(--text-dim)); }.runtime-details dd { margin: 0; color: var(--card-fg, var(--text)); }
+.manage-menu > button.delete-action { color: #ff0000; background: transparent; border: 0; margin-top: 4px; padding: 8px; border-radius: 4px; }
+.manage-menu > button.delete-action:hover { color: #ff0000; background: var(--card-panel, var(--bg-elev-2)); }
 .color-menu { display: flex; flex-direction: column; gap: 9px; padding: 8px; }
 .palette { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .actions .swatch { width: 21px; height: 21px; border-radius: 4px; border: 1px solid rgba(255,255,255,.25); cursor: pointer; padding: 0; }
 .swatch.active { outline: 2px solid var(--accent); outline-offset: 2px; }
-.custom-color { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+.custom-color { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--card-muted, var(--text-dim)); cursor: pointer; }
 .custom-color input[type='color'] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: none; }
-.clear-color { background: none; border: 0; padding: 4px; font-size: 12px; color: var(--text-dim); }
+.color-menu .clear-color { justify-content: flex-start; text-align: left; background: none; border: 0; padding: 4px; font-size: 12px; color: var(--card-muted, var(--text-dim)); }
+.color-menu .clear-color:hover { background: var(--card-panel, var(--bg-elev-2)); border-color: var(--card-border, var(--border)); }
 .startup-error { font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .startup-error > summary { display: flex; align-items: center; gap: 7px; padding: 2px 0; border-radius: 3px; cursor: pointer; list-style: none; }
 .startup-error > summary::-webkit-details-marker { display: none; }

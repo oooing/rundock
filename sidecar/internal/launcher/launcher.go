@@ -29,10 +29,6 @@ type Launcher struct {
 	Diagnostics  *diagnostics.Service
 	startProcess func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
 
-	// 停止用配置（从 settings 读）
-	graceSeconds int
-	urlTimeout   time.Duration
-
 	// 每个 appID 的活跃编排上下文，停止时取用
 	mu   sync.Mutex
 	runs map[string]*runState
@@ -49,7 +45,7 @@ type runState struct {
 	candidateURLs []string // 从日志解析到的候选 URL（供服务发现优先使用）
 }
 
-// New 创建 launcher，并从 settings 读入 grace period / url timeout。
+// New 创建 launcher。运行参数在每次操作时读取，保存后无需重启后台。
 func New(s *store.Store, m *app.Manager, hub *logbus.Hub, reg *adapter.Registry) *Launcher {
 	_ = reconcileDeclaredRoles(s)
 	l := &Launcher{
@@ -57,8 +53,6 @@ func New(s *store.Store, m *app.Manager, hub *logbus.Hub, reg *adapter.Registry)
 		runs:         map[string]*runState{},
 		startProcess: proc.StartWithConPTY,
 	}
-	l.graceSeconds, _ = strconv.Atoi(s.GetSetting("grace_period_seconds", "8"))
-	l.urlTimeout = durationFromSetting(s, "url_discover_timeout_seconds", 30)
 	return l
 }
 
@@ -104,7 +98,9 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		return fmt.Errorf("app already running: %s", appID)
 	}
 
-	readiness, err := readStartupReadiness(a.EntryScript, l.urlTimeout)
+	urlTimeout := durationFromSetting(l.Store, "url_discover_timeout_seconds", 30)
+	gracePeriod := durationFromSetting(l.Store, "grace_period_seconds", 8)
+	readiness, err := readStartupReadiness(a.EntryScript, urlTimeout)
 	if err != nil {
 		return fmt.Errorf("启动就绪配置: %w", err)
 	}
@@ -129,8 +125,8 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		_ = l.Store.UpdateApp(a)
 	}
 
-	// 启动前：清理该 app 上次运行遗留的 service 记录（避免累积重复）
-	oldSvcs, _ := l.Store.ListServicesByApp(appID)
+	// Retain the last known services even when this attempt fails before discovery.
+	oldSvcs, _ := l.Store.ListLatestServicesByApp(appID)
 	// 快照用户手动标注的角色（按端口），以便重启后还原到新 run 的服务上。
 	manualRoles := map[int]string{}
 	for _, s := range oldSvcs {
@@ -138,7 +134,9 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 			manualRoles[s.Port] = s.Role
 		}
 	}
-	_ = l.Store.DeleteServicesByApp(appID)
+	if err := l.Store.PruneServiceHistory(appID); err != nil {
+		return fmt.Errorf("retain service history: %w", err)
+	}
 
 	// 启动前端口快照（用于事后只看本进程树新增端口）
 	beforePorts := probe.SnapshotListeners()
@@ -180,7 +178,7 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	collector.Info(fmt.Sprintf("[启动] cmd=%s args=%v preparedByAdapter=%v", cmd, args, preparedByAdapter))
 	collector.Debug(fmt.Sprintf("[启动] portHints=%v healthUrl=%q envKeys=%v", a.PortHints, a.HealthURL, envKeys))
 	collector.Debug(fmt.Sprintf("[启动] 启动前系统监听端口数=%d urlDiscoverTimeout=%s grace=%ds",
-		len(beforePorts), l.urlTimeout, l.graceSeconds))
+		len(beforePorts), urlTimeout, int(gracePeriod/time.Second)))
 
 	// 先占位 runState：日志回调可能在 spawn 返回前就打出 URL，不能丢。
 	rs := &runState{collector: collector, cancel: cancel, exitDone: make(chan struct{})}
@@ -813,11 +811,12 @@ func (l *Launcher) Stop(appID string) (err error) {
 		}
 		return nil // 幂等：应用已停止，直接返回成功
 	}
+	gracePeriod := durationFromSetting(l.Store, "grace_period_seconds", 8)
 	col := rs.collector
 	rt, _ := l.Manager.Registry.Get(appID)
 	if rt != nil {
 		if col != nil {
-			col.Info(fmt.Sprintf("[停止] 开始停止 pid=%d grace=%ds", rs.rootPID, l.graceSeconds))
+			col.Info(fmt.Sprintf("[停止] 开始停止 pid=%d grace=%ds", rs.rootPID, int(gracePeriod/time.Second)))
 		}
 		l.Manager.Transition(rt, app.StatusStopping, nil)
 	}
@@ -882,7 +881,7 @@ func (l *Launcher) Stop(appID string) (err error) {
 	} else if col != nil {
 		col.Debug("[停止] 已发送优雅停止信号（Ctrl+C）")
 	}
-	if wait(time.Duration(l.graceSeconds) * time.Second) {
+	if wait(gracePeriod) {
 		return finish()
 	}
 
@@ -935,7 +934,7 @@ func (l *Launcher) StopAll() int {
 		}()
 	}
 	// 总超时：单个 Stop 最多 grace+几秒，这里给充裕上限
-	deadline := time.NewTimer(time.Duration(l.graceSeconds)*time.Second + 5*time.Second)
+	deadline := time.NewTimer(durationFromSetting(l.Store, "grace_period_seconds", 8) + 5*time.Second)
 	defer deadline.Stop()
 	stopped := 0
 	for i := 0; i < len(runnings); i++ {

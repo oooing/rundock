@@ -128,6 +128,7 @@ onUnmounted(() => {
       </header>
 
       <div class="d-body" ref="bodyRef">
+        <p v-if="app?.runtimeCheck?.state === 'running'" class="no-logs">{{ tr('当前仅显示已保存的历史日志，未连接到现有进程的实时输出。') }}</p>
         <div v-if="filtered.length === 0 && !loading" class="no-logs">{{ tr("暂无日志") }}</div>
         <div
           v-for="l in filtered"

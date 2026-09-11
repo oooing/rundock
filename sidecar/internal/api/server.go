@@ -18,6 +18,7 @@ import (
 	"github.com/launcher-sidecar/internal/launcher"
 	"github.com/launcher-sidecar/internal/logbus"
 	"github.com/launcher-sidecar/internal/publisher"
+	"github.com/launcher-sidecar/internal/recovery"
 	"github.com/launcher-sidecar/internal/releaseconfig"
 	"github.com/launcher-sidecar/internal/store"
 )
@@ -38,6 +39,8 @@ type Server struct {
 	httpSrv           *http.Server
 	cloudCancel       context.CancelFunc
 	cloudDone         chan struct{}
+	runtimeMonitor    *runtimeMonitor
+	runtimeDone       chan struct{}
 }
 
 // New 组装 server。Launcher 由外部创建后注入（依赖 store/hub/registry）。
@@ -110,6 +113,10 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 	cloudCtx, cloudCancel := context.WithCancel(context.Background())
 	s.cloudCancel = cloudCancel
 	s.cloudDone = make(chan struct{})
+	s.runtimeMonitor = &runtimeMonitor{gate: make(chan struct{}, 1), read: recovery.ReadRuntimeSnapshot}
+	s.Launcher.BeforeStart = s.checkBeforeStart
+	s.runtimeDone = make(chan struct{})
+	go func() { defer close(s.runtimeDone); s.monitorRuntime(cloudCtx) }()
 	go func() { defer close(s.cloudDone); s.Publisher.MonitorCloudBuilds(cloudCtx) }()
 	go func() {
 		if err := s.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -124,6 +131,9 @@ func (s *Server) Shutdown() error {
 	if s.cloudCancel != nil {
 		s.cloudCancel()
 		<-s.cloudDone
+		if s.runtimeDone != nil {
+			<-s.runtimeDone
+		}
 	}
 	var shutdownErr error
 	if s.httpSrv != nil {

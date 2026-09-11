@@ -464,7 +464,7 @@ onUnmounted(() => {
         <div class="spinner"></div>
         <div>
           <div class="quitting-title">{{ keepProjectsOnQuit ? tr("正在退出软件…") : tr("正在关闭服务并退出…") }}</div>
-          <div class="quitting-sub">{{ keepProjectsOnQuit ? tr("项目继续在后台运行，下次打开可继续管理。") : tr("请稍等，正在停止所有正在运行的项目服务。") }}</div>
+          <div class="quitting-sub">{{ keepProjectsOnQuit ? tr("项目继续在后台运行，下次打开可继续管理。") : tr("请稍等，正在停止由本后台启动的项目服务。") }}</div>
         </div>
       </div>
     </div>

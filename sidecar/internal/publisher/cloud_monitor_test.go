@@ -13,6 +13,184 @@ import (
 	"github.com/launcher-sidecar/internal/store"
 )
 
+func TestCloudFailureSupersededByNewerExternalRelease(t *testing.T) {
+	now := time.Now().UTC()
+	run := &store.ReleaseRun{ID: "old-release", CreateTag: true, CommitSHA: "old-sha", TagName: "web-server/v2.0.27", CreatedAt: now.Add(-time.Hour).Format(time.RFC3339)}
+	old := githubWorkflowRun{ID: 34493579418, Attempt: 1, Name: "Build Container Image", Path: ".github/workflows/container-image.yml", HeadSHA: run.CommitSHA, HeadBranch: run.TagName, Event: "push", Status: "completed", Conclusion: "failure", CreatedAt: now.Add(-time.Hour)}
+	newer := old
+	newer.ID, newer.HeadSHA, newer.HeadBranch, newer.Conclusion, newer.CreatedAt = 34498516838, "new-sha", "web-server/v2.0.28", "success", now.Add(-time.Minute)
+	for _, tc := range []struct {
+		name   string
+		change func(*githubWorkflowRun)
+		want   string
+	}{
+		{"new version from another instance", func(*githubWorkflowRun) {}, "superseded"},
+		{"other target sharing workflow", func(c *githubWorkflowRun) { c.HeadBranch = "android/v2.0.28" }, "failed"},
+		{"different workflow", func(c *githubWorkflowRun) { c.Path = ".github/workflows/other.yml" }, "failed"},
+		{"older version published later", func(c *githubWorkflowRun) { c.HeadBranch = "web-server/v2.0.9" }, "failed"},
+		{"pending", func(c *githubWorkflowRun) { c.Status, c.Conclusion = "in_progress", "" }, "failed"},
+		{"new failure", func(c *githubWorkflowRun) { c.Conclusion = "failure" }, "failed"},
+		{"skipped", func(c *githubWorkflowRun) { c.Conclusion = "skipped" }, "failed"},
+		{"unrelated event", func(c *githubWorkflowRun) { c.Event = "pull_request" }, "failed"},
+		{"old creation", func(c *githubWorkflowRun) { c.CreatedAt = old.CreatedAt.Add(-time.Minute) }, "failed"},
+		{"prerelease is not stable recovery", func(c *githubWorkflowRun) { c.HeadBranch += "-beta.1" }, "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := newer
+			tc.change(&candidate)
+			read := func(_ context.Context, endpoint string, out any) error {
+				if strings.Contains(endpoint, "/jobs?") {
+					return errors.New("no logs")
+				}
+				candidates := []githubWorkflowRun{old}
+				if !strings.Contains(endpoint, "head_sha=") {
+					candidates = append(candidates, candidate)
+				}
+				*out.(*githubRunList) = githubRunList{Total: len(candidates), Runs: candidates}
+				return nil
+			}
+			build := &store.CloudBuild{}
+			if err := (&Service{}).inspectCloudBuild(context.Background(), read, "oooing/ingLocalPlay", run, &executionPlan{}, build, now); err != nil {
+				t.Fatal(err)
+			}
+			if build.State != tc.want || (build.AlertKey == "") != (tc.want == "superseded") {
+				t.Fatalf("%+v", build)
+			}
+			if tc.want == "superseded" && build.URL != "https://github.com/oooing/ingLocalPlay/actions/runs/34498516838" {
+				t.Fatal(build.URL)
+			}
+		})
+	}
+	t.Run("remaining failure retains its own details link", func(t *testing.T) {
+		other := old
+		other.ID, other.Path = old.ID-1, ".github/workflows/other.yml"
+		read := func(_ context.Context, endpoint string, out any) error {
+			if strings.Contains(endpoint, "/jobs?") {
+				return errors.New("no logs")
+			}
+			candidates := []githubWorkflowRun{old, other}
+			if !strings.Contains(endpoint, "head_sha=") {
+				candidates = []githubWorkflowRun{newer}
+			}
+			*out.(*githubRunList) = githubRunList{Total: len(candidates), Runs: candidates}
+			return nil
+		}
+		build := &store.CloudBuild{}
+		if err := (&Service{}).inspectCloudBuild(context.Background(), read, "oooing/ingLocalPlay", run, &executionPlan{}, build, now); err != nil {
+			t.Fatal(err)
+		}
+		if build.State != "failed" || build.AlertKey != "old-release:34493579417:1" || build.URL != "https://github.com/oooing/ingLocalPlay/actions/runs/34493579417" {
+			t.Fatalf("%+v", build)
+		}
+	})
+	t.Run("partial workflow recovery and latest rerun", func(t *testing.T) {
+		other := old
+		other.ID, other.Path = old.ID+1, ".github/workflows/other.yml"
+		// Newest rerun of the higher version is pending: an earlier successful
+		// attempt must not erase the old failure. API order is deliberately mixed.
+		rerun := newer
+		rerun.Attempt, rerun.Status, rerun.Conclusion = 2, "in_progress", ""
+		for _, runs := range [][]githubWorkflowRun{{newer}, {rerun, newer}} {
+			read := func(_ context.Context, _ string, out any) error {
+				*out.(*githubRunList) = githubRunList{Total: len(runs), Runs: runs}
+				return nil
+			}
+			got, err := newerSuccessfulBuilds(context.Background(), read, "oooing/ingLocalPlay", []githubWorkflowRun{old, other})
+			want := 1
+			if len(runs) == 2 {
+				want = 0
+			}
+			if err != nil || len(got) != want {
+				t.Fatalf("%+v %v", got, err)
+			}
+			if _, exists := got[other.ID]; exists {
+				t.Fatal("unrelated workflow erased")
+			}
+		}
+	})
+	t.Run("pagination and unavailable evidence", func(t *testing.T) {
+		for _, offline := range []bool{false, true} {
+			read := func(_ context.Context, endpoint string, out any) error {
+				list := githubRunList{Total: 101}
+				if strings.Contains(endpoint, "page=2") {
+					if offline {
+						return errors.New("offline")
+					}
+					list.Runs = []githubWorkflowRun{newer}
+				}
+				*out.(*githubRunList) = list
+				return nil
+			}
+			got, err := newerSuccessfulBuilds(context.Background(), read, "oooing/ingLocalPlay", []githubWorkflowRun{old})
+			if (err != nil) != offline || (len(got) == 1) == offline {
+				t.Fatalf("%+v %v", got, err)
+			}
+		}
+	})
+}
+
+func TestCloudMonitorPersistsSupersededFailureAndNotifiesOnce(t *testing.T) {
+	s, repo, cleanup := newReleaseFixture(t)
+	defer cleanup()
+	plan := executionPlan{SchemaVersion: 1, RemoteURL: "https://github.com/oooing/ingLocalPlay", Automation: &releaseconfig.Automation{Provider: releaseconfig.AutomationGitHubActions, Trigger: releaseconfig.AutomationTriggerTag}}
+	raw, _ := json.Marshal(plan)
+	run := &store.ReleaseRun{ID: "obsolete", AppID: "app1", TagName: "web-server/v2.0.27", Status: "succeeded", CommitSHA: "old", ExecutionPlan: raw}
+	if err := s.store.CreateReleaseRun(run); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.SaveCloudBuild(&store.CloudBuild{ReleaseRunID: run.ID, State: "failed", AlertKey: "old-failure", CheckedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), NextCheck: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	offline := true
+	read := func(_ context.Context, endpoint string, out any) error {
+		if strings.Contains(endpoint, "/jobs?") {
+			return errors.New("no logs")
+		}
+		candidate := githubWorkflowRun{ID: 1, Attempt: 1, Path: ".github/workflows/container.yml", HeadSHA: "old", HeadBranch: run.TagName, Event: "push", Status: "completed", Conclusion: "failure", CreatedAt: now}
+		if !strings.Contains(endpoint, "head_sha=") {
+			if offline {
+				return errors.New("offline")
+			}
+			candidate.ID, candidate.HeadSHA, candidate.HeadBranch, candidate.Conclusion, candidate.CreatedAt = 2, "new", "web-server/v2.0.28", "success", now.Add(time.Minute)
+		}
+		*out.(*githubRunList) = githubRunList{Total: 1, Runs: []githubWorkflowRun{candidate}}
+		return nil
+	}
+	changes := 0
+	s.OnCloudBuildChange = func(*store.CloudBuild) { changes++ }
+	s.checkCloudBuilds(context.Background(), read, now.Add(3*time.Minute))
+	alerts, _ := s.store.CloudBuildAlerts()
+	if len(alerts) != 1 || alerts[0].AlertKey != "old-failure" || changes != 0 {
+		t.Fatalf("network erased failure: %+v changes=%d", alerts, changes)
+	}
+	offline = false
+	s.checkCloudBuilds(context.Background(), read, now.Add(6*time.Minute))
+	alerts, _ = s.store.CloudBuildAlerts()
+	b, _ := s.store.GetCloudBuild(run.ID)
+	if len(alerts) != 0 || b.State != "superseded" || changes != 1 {
+		t.Fatalf("%+v %+v changes=%d", alerts, b, changes)
+	}
+	saved, _ := s.store.GetReleaseRun(run.ID)
+	if saved.TagName != run.TagName || saved.CommitSHA != run.CommitSHA {
+		t.Fatal("release history changed")
+	}
+	if err := s.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(filepath.Join(filepath.Dir(repo), "launcher.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	s = New(reopened)
+	s.checkCloudBuilds(context.Background(), func(context.Context, string, any) error { t.Fatal("obsolete release was polled again"); return nil }, now.Add(time.Hour))
+	alerts, _ = s.store.CloudBuildAlerts()
+	if len(alerts) != 0 {
+		t.Fatal(alerts)
+	}
+}
+
 func TestCloudBuildMatchesReleaseAndShowsFailedStep(t *testing.T) {
 	now := time.Now().UTC()
 	run := &store.ReleaseRun{ID: "release", CommitSHA: "abc", TagName: "web/v2.0.25", CreateTag: true, CreatedAt: now.Add(-3 * time.Minute).Format(time.RFC3339)}

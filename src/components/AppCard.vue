@@ -7,7 +7,8 @@ import { api } from '@/api/http'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
 import { CARD_COLOR_PALETTE, getCardVisualStyle, normalizeHexColor } from '@/utils/cardColors'
-import { runningEffect } from '@/stores/motion'
+import { runningEffect, startingEffect } from '@/stores/motion'
+import StartupIndicator from './StartupIndicator.vue'
 import { cardServices } from '@/utils/cardServices'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
@@ -25,6 +26,18 @@ const emit = defineEmits<{
 }>()
 
 const a = computed(() => props.app)
+const appsStore = useAppsStore()
+const runtimeLocked = computed(() => !!a.value.runtimeCheck && a.value.runtimeCheck.state !== 'clear')
+const recheckingRuntime = ref(false)
+const runtimeError = ref('')
+async function recheckRuntime() {
+  if (recheckingRuntime.value) return
+  recheckingRuntime.value = true
+  runtimeError.value = ''
+  try { await appsStore.checkRuntime(a.value.id) }
+  catch (e: any) { runtimeError.value = e?.message || String(e) }
+  finally { recheckingRuntime.value = false }
+}
 const buildFailures = computed(() => (props.cloudAlerts || []).filter(alert => alert.state === 'failed'))
 const buildBadge = computed(() => buildFailures.value.length ? tr('构建失败') : tr('构建待确认'))
 const startupIssue = ref<StartupIssue | null>(null)
@@ -35,7 +48,7 @@ const issueDetails = ref<HTMLDetailsElement | null>(null)
 watch(recoveryError, async (error) => {
   if (error) { await nextTick(); if (issueDetails.value) issueDetails.value.open = true }
 })
-const showStartupIssue = computed(() => a.value.status === 'failed' || recovering.value)
+const showStartupIssue = computed(() => !runtimeLocked.value && (a.value.status === 'failed' || recovering.value))
 // Empty conflicts only confirm a free port after a successful ownership check.
 const portsReleased = computed(() => startupIssue.value?.code === 'port_in_use'
   && startupIssue.value.canRecover && startupIssue.value.conflicts.length === 0)
@@ -231,6 +244,7 @@ const isActive = computed(
 const urlReachable = computed(() => isActive.value)
 
 const statusLabel = computed(() => {
+  if (a.value.runtimeCheck?.state === 'conflict') return tr('端口被占用')
   if (a.value.restarting) return tr("重启中")
   const m: Record<string, string> = {
     starting: tr("启动中"),
@@ -239,6 +253,8 @@ const statusLabel = computed(() => {
     stopping: tr("停止中"),
     stopped: tr("已停止"),
     failed: tr("失败"),
+    checking: tr('正在检查'),
+    unknown: tr('状态待确认'),
   }
   return m[a.value.status] || a.value.status
 })
@@ -255,7 +271,7 @@ function healthText(h: string): string {
 
 const sortedServices = computed(() => cardServices(a.value))
 const primaryURLInServices = computed(() => sortedServices.value.some(svc => svc.url === a.value.lastUrl))
-const serviceState = (svc: ReturnType<typeof cardServices>[number]) => svc.source === 'current'
+const serviceState = (svc: ReturnType<typeof cardServices>[number]) => a.value.runtimeCheck?.state === 'running' && svc.source === 'current' ? tr('正在监听') : svc.source === 'current'
   ? healthText(svc.health) : svc.source === 'history' ? tr('上次发现') : tr('配置端口')
 
 // 打开某个服务的 URL（通过 open-url 事件，后端会用系统浏览器打开）
@@ -283,6 +299,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 
 <template>
   <article ref="cardElement" class="card card-motion" :class="['s-' + a.status]" :data-motion="a.status === 'running' && !a.restarting ? runningEffect : 'none'" :style="cardStyle" :aria-busy="a.restarting || a.status === 'starting' || undefined" @keydown="onEscape">
+    <span v-if="(a.status === 'starting' || a.restarting) && startingEffect !== 'none'" class="startup-wake" aria-hidden="true"></span>
     <header class="head">
       <div class="name-row">
         <button class="ghost icon drag-handle" :title="tr('拖动排序或移到分组；Alt + 左右方向键调整顺序')" :aria-label="tr('拖动项目')" :disabled="moving" @pointerdown.stop.prevent="emit('drag-start', $event, a.id)" @keydown.alt.left.stop.prevent="emit('reorder-key', a.id, -1)" @keydown.alt.right.stop.prevent="emit('reorder-key', a.id, 1)">
@@ -293,7 +310,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <button v-if="cloudAlerts?.length" class="build-alert-badge" :class="{ failed: buildFailures.length }" :aria-label="tr('查看 {0} 的构建提醒（{1}）', [a.name, cloudAlerts.length])" :title="tr('点击查看失败版本和构建详情')" aria-haspopup="dialog" @click.stop="emit('cloud-details', a.id)"><UiIcon name="alert-circle" :size="13" /><span>{{ buildBadge }}</span><span v-if="cloudAlerts.length > 1" class="build-alert-count">{{ cloudAlerts.length }}</span></button>
       </div>
       <div class="identity-row">
-        <span class="badge" :class="a.restarting ? 'starting' : a.status"><span class="dot"></span>{{ statusLabel }}</span>
+        <span class="badge" :class="a.restarting ? 'starting' : a.status" role="status"><StartupIndicator v-if="a.status === 'starting' || a.restarting" :effect="startingEffect" /><span v-else class="dot"></span>{{ statusLabel }}</span>
         <div class="group-row">
           <select :id="`group-${a.id}`" class="group-select" :aria-label="tr('分组')" :value="a.groupId || ''" :disabled="moving" @change="chooseGroup">
             <option value="">{{ tr('未分组') }}</option>
@@ -308,7 +325,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
       <div v-if="sortedServices.length" class="services" :tabindex="sortedServices.length > 2 ? 0 : undefined" role="region" :aria-label="tr('服务与端口')">
         <div v-for="svc in sortedServices" :key="svc.id" class="svc-row">
           <div class="role-wrap" @focusout="onMenuFocusOut">
-            <button class="role-btn" :disabled="svc.source === 'configured'" :class="{ locked: svc.roleSource === 'manual' }" :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? tr('（已锁定）') : '') + tr(' — 点击切换')" :aria-label="roleMeta(svc.role).label + tr(' — 点击切换')" :aria-expanded="roleMenuOpen === svc.id" :aria-controls="`role-menu-${a.id}-${svc.id}`" @click.stop="toggleRoleMenu(svc.id, $event)">
+            <button class="role-btn" :disabled="svc.source === 'configured' || a.runtimeCheck?.state === 'running'" :class="{ locked: svc.roleSource === 'manual' }" :title="roleMeta(svc.role).label + (svc.roleSource === 'manual' ? tr('（已锁定）') : '') + tr(' — 点击切换')" :aria-label="roleMeta(svc.role).label + tr(' — 点击切换')" :aria-expanded="roleMenuOpen === svc.id" :aria-controls="`role-menu-${a.id}-${svc.id}`" @click.stop="toggleRoleMenu(svc.id, $event)">
               <UiIcon :name="roleMeta(svc.role).icon" :size="15" />
             </button>
             <div v-if="roleMenuOpen === svc.id" :id="`role-menu-${a.id}-${svc.id}`" class="role-menu" :style="roleMenuStyle" @click.stop>
@@ -335,6 +352,13 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <span class="k">{{ tr('启动脚本') }}</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
       </div>
+      <div v-if="runtimeLocked" class="runtime-notice" role="status">
+        <UiIcon :name="a.runtimeCheck?.state === 'running' ? 'server' : 'alert-circle'" :size="15" />
+        <div><p>{{ tr(a.runtimeCheck?.message || '') }}</p>
+          <p v-for="conflict in a.runtimeCheck?.conflicts" :key="`${conflict.port}-${conflict.pid}`" class="mono">:{{ conflict.port }} · {{ conflict.name || tr('未知进程') }} · PID {{ conflict.pid }}</p>
+          <p v-if="runtimeError">{{ runtimeError }}</p>
+        </div>
+      </div>
     <button v-if="showStartupIssue" type="button" class="failure-log-link" @click="emit('log', a.id)"><UiIcon name="alert-circle" :size="18" /><strong>{{ issueTitle }}</strong><span>{{ tr('查看失败日志') }}</span><UiIcon name="arrow-right" :size="14" /></button>
     <details v-if="showStartupIssue" ref="issueDetails" class="startup-error" :class="{ pending: checkingIssue || recovering }" :aria-busy="checkingIssue || recovering">
       <summary>
@@ -358,16 +382,17 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 
     <fieldset class="actions" :disabled="recovering">
       <div class="run-actions">
-        <button v-if="recovering || (a.status === 'failed' && startupIssue?.canRecover)" class="primary" :disabled="recovering || checkingIssue" @click="recoverPorts"><UiIcon name="refresh" :size="14" />{{ recovering ? tr('处理中…') : startupIssue?.conflicts.length ? tr('释放端口并重试') : tr('重新启动') }}</button>
+        <button v-if="runtimeLocked" :disabled="recheckingRuntime || a.runtimeCheck?.state === 'checking'" @click="recheckRuntime"><UiIcon name="refresh" :size="14" />{{ recheckingRuntime || a.runtimeCheck?.state === 'checking' ? tr('正在检查') : tr('重新检查') }}</button>
+        <button v-else-if="recovering || (a.status === 'failed' && startupIssue?.canRecover)" class="primary" :disabled="recovering || checkingIssue" @click="recoverPorts"><UiIcon name="refresh" :size="14" />{{ recovering ? tr('处理中…') : startupIssue?.conflicts.length ? tr('释放端口并重试') : tr('重新启动') }}</button>
         <template v-else-if="a.restarting">
           <button class="stop-btn" disabled><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
           <button disabled><UiIcon name="refresh" :size="14" />{{ tr('重启中…') }}</button>
         </template>
         <template v-else-if="isActive">
-          <button class="stop-btn" @click="emit('stop', a.id)"><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
-          <button @click="emit('restart', a.id)"><UiIcon name="refresh" :size="14" />{{ tr('重启') }}</button>
+          <button class="stop-btn" :disabled="appsStore.operationBusy?.[a.id]" @click="emit('stop', a.id)"><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
+          <button :disabled="appsStore.operationBusy?.[a.id]" @click="emit('restart', a.id)"><UiIcon name="refresh" :size="14" />{{ tr('重启') }}</button>
         </template>
-        <button v-else class="primary" :disabled="checkingIssue" @click="emit('start', a.id)"><UiIcon :name="a.status === 'failed' ? 'refresh' : 'play'" :size="14" />{{ a.status === 'failed' ? tr('重新启动') : tr('启动') }}</button>
+        <button v-else class="primary" :disabled="checkingIssue || appsStore.operationBusy?.[a.id]" @click="emit('start', a.id)"><UiIcon :name="a.status === 'failed' ? 'refresh' : 'play'" :size="14" />{{ appsStore.operationBusy?.[a.id] ? tr('正在检查') : a.status === 'failed' ? tr('重新启动') : tr('启动') }}</button>
         <button class="ghost release-btn" :title="tr('Git 版本发布')" @click="emit('release', a.id)"><UiIcon name="upload" :size="14" />{{ tr('发布') }}</button>
       </div>
       <div class="utility-actions">
@@ -402,6 +427,10 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 </template>
 
 <style scoped>
+.runtime-notice { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; color: var(--card-muted, var(--text-dim)); font-size: 11px; line-height: 1.6; }
+.runtime-notice svg { flex: 0 0 auto; margin-top: 2px; }
+.runtime-notice p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.badge.checking, .badge.unknown { color: var(--card-status-amber, var(--amber)); }
 .services-heading { display: flex; justify-content: space-between; color: var(--card-muted, var(--text-dim)); font-size: 11px; margin-bottom: 4px; }
 .svc-source { margin-left: auto; white-space: nowrap; font-size: 10px; color: var(--card-muted, var(--text-faint)); }
 .svc-dot.inactive { background: var(--card-muted, var(--text-faint)); }
@@ -425,8 +454,11 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 }
 .card:hover { border-color: var(--card-muted, var(--text-faint)); }
 .card.s-stopped { background: var(--card-bg, color-mix(in srgb, var(--bg-elev) 62%, black)); }
+.startup-wake { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(120deg, color-mix(in srgb, var(--card-glow, var(--accent)) 16%, transparent), transparent 70%); animation: startup-wake .65s ease-out both; }
+@keyframes startup-wake { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .card { transition: none; }
+  .startup-wake { display: none; animation: none; }
 }
 .card.s-degraded { --card-state-color: var(--card-status-amber, var(--amber)); }
 .card.s-failed { --card-state-color: var(--card-status-red, var(--red)); }

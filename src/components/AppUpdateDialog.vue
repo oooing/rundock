@@ -52,7 +52,7 @@ onUnmounted(() => {
         </div>
         <p v-else-if="update.phase === 'ready'" class="ready" role="status">{{ tr('下载完成，安装包已校验') }}</p>
         <p v-else-if="installing" role="status">{{ tr('正在停止项目并打开安装程序…') }}</p>
-        <p class="install-note">{{ tr('安装时将停止所有项目并退出 RunDock，项目和分组配置会保留。') }}</p>
+        <p class="install-note">{{ tr('安装时将停止托管项目并退出 RunDock；仅监测的项目继续运行，项目和分组配置会保留。') }}</p>
         <div v-if="update.error" class="error" role="alert">
           {{ update.error }}
           <button class="link" @click="openReleases">{{ tr('查看版本下载页') }} ↗</button>

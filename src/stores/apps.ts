@@ -29,6 +29,7 @@ export const useAppsStore = defineStore('apps', () => {
   // The initial empty array is not a loaded, empty project list.
   const loading = ref(true)
   const error = ref('')
+  const operationBusy = ref<Record<string, boolean>>({})
 
   // 实时日志缓冲（按 appId），日志抽屉订阅
   const liveLogs = ref<Record<string, import('@/types').LogEntry[]>>({})
@@ -78,6 +79,8 @@ export const useAppsStore = defineStore('apps', () => {
    * confirmedScriptHash：用户确认风险后回带，让后端校验哈希是否仍匹配。
    */
   async function start(id: string, confirmedScriptHash?: string): Promise<StartResult> {
+    if (operationBusy.value[id]) throw new Error(tr('已有启停操作进行中，请稍后重试'))
+    operationBusy.value[id] = true
     try {
       const r = await api.start(id, confirmedScriptHash)
       if (!r.ok) {
@@ -87,11 +90,14 @@ export const useAppsStore = defineStore('apps', () => {
       await refreshRuntime(id)
       return { configUpdatedToast: !!r.data.configUpdated }
     } catch (e: any) {
+      await refreshRuntime(id).catch(() => {})
       error.value = e?.message || String(e)
       throw e
-    }
+    } finally { delete operationBusy.value[id] }
   }
   async function stop(id: string) {
+    if (operationBusy.value[id]) throw new Error(tr('已有启停操作进行中，请稍后重试'))
+    operationBusy.value[id] = true
     const prev = apps.value.find(a => a.id === id)?.status
     patch(id, { status: 'stopping' })
     try {
@@ -102,13 +108,15 @@ export const useAppsStore = defineStore('apps', () => {
       void refreshRuntime(id).catch(() => {})
       error.value = e?.message || String(e)
       throw e
-    }
+    } finally { delete operationBusy.value[id] }
   }
   /**
    * 重启一个 app。同 start，可能返回 confirmation。
    * confirmedScriptHash：用户确认风险后回带。
    */
   async function restart(id: string, confirmedScriptHash?: string): Promise<StartResult> {
+    if (operationBusy.value[id]) throw new Error(tr('已有启停操作进行中，请稍后重试'))
+    operationBusy.value[id] = true
     const prev = apps.value.find(a => a.id === id)?.status
     patch(id, { restarting: true })
     try {
@@ -122,9 +130,10 @@ export const useAppsStore = defineStore('apps', () => {
       return { configUpdatedToast: !!r.data.configUpdated }
     } catch (e: any) {
       patch(id, { ...(prev ? { status: prev } : {}), restarting: false })
+      await refreshRuntime(id).catch(() => {})
       error.value = e?.message || String(e)
       throw e
-    }
+    } finally { delete operationBusy.value[id] }
   }
 
   /**
@@ -150,6 +159,11 @@ export const useAppsStore = defineStore('apps', () => {
   }
   async function openDir(id: string) {
     await api.openDir(id)
+  }
+
+  async function checkRuntime(id: string) {
+    const updated = await api.checkRuntime(id)
+    patchFull(updated)
   }
 
   async function update(id: string, body: Record<string, unknown>) {
@@ -285,7 +299,7 @@ export const useAppsStore = defineStore('apps', () => {
   }
 
   return {
-    apps, loading, error, liveLogs,
+    apps, loading, error, liveLogs, operationBusy, checkRuntime,
     load, importRaw, createFromCandidate, start, stop, restart, resumeAfterConfirm, remove, rename, openURL, openDir, update, moveToGroup, setCardColor, reorderCards,
     setServiceRole, reidentifyService,
     patch, bindWS, clearLiveLogs,

@@ -15,6 +15,25 @@ import (
 
 func commandArgs(line string) []string { args, _ := windows.DecomposeCommandLine(line); return args }
 
+// Revalidate after reading listeners too, so a reused PID cannot inherit the
+// command line captured by the earlier process snapshot.
+func SameProcess(p Process) bool {
+	expected, err := strconv.ParseUint(p.Created, 10, 64)
+	if err != nil || expected == 0 {
+		return false
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(p.PID))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var created, exit, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exit, &kernel, &user) != nil {
+		return false
+	}
+	return uint64(created.HighDateTime)<<32|uint64(created.LowDateTime) == expected && exit.HighDateTime == 0 && exit.LowDateTime == 0
+}
+
 func Snapshot() ([]Process, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()

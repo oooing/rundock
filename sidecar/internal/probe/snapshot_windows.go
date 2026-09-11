@@ -3,23 +3,34 @@
 package probe
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // snapshotListenersOS 解析 `netstat -ano` 输出，提取 LISTENING 状态的 TCP 端口。
 // 不需要管理员权限；比 GetExtendedTcpTable 的实现路径简单可靠。
 // 报告指出 netstat -b（显示可执行文件）会慢且需权限，故这里只用 -ano。
 func snapshotListenersOS() []PortListener {
-	cmd := exec.Command("netstat", "-ano")
+	list, _ := SnapshotListenersChecked()
+	return list
+}
+
+// Unlike the discovery fallback, startup checks must distinguish a failed query
+// from an empty list. A timeout must not grant permission to launch a duplicate.
+func SnapshotListenersChecked() ([]PortListener, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "netstat", "-ano")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return parseNetstat(string(out))
+	return parseNetstat(string(out)), nil
 }
 
 func parseNetstat(text string) []PortListener {

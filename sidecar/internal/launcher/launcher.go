@@ -27,6 +27,7 @@ type Launcher struct {
 	Hub          *logbus.Hub
 	Registry     *adapter.Registry
 	Diagnostics  *diagnostics.Service
+	BeforeStart  func(context.Context, *store.App) error
 	startProcess func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
 
 	// 每个 appID 的活跃编排上下文，停止时取用
@@ -125,6 +126,11 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		_ = l.Store.UpdateApp(a)
 	}
 
+	if l.BeforeStart != nil {
+		if err := l.BeforeStart(ctx, a); err != nil {
+			return err
+		}
+	}
 	// Retain the last known services even when this attempt fails before discovery.
 	oldSvcs, _ := l.Store.ListLatestServicesByApp(appID)
 	// 快照用户手动标注的角色（按端口），以便重启后还原到新 run 的服务上。

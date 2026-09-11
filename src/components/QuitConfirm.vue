@@ -26,8 +26,8 @@ const emit = defineEmits<{
           <span>{{ tr("后台托管继续运行，下次打开可继续管理。") }}</span>
         </button>
         <button class="quit-option stop-projects" @click="emit('confirm', false)">
-          <strong>{{ tr("关闭所有项目并退出") }}</strong>
-          <span>{{ tr("停止运行中的项目，同时退出后台。") }}</span>
+          <strong>{{ tr("停止托管项目并退出") }}</strong>
+          <span>{{ tr("停止由本后台启动的项目；仅监测的项目继续运行。") }}</span>
         </button>
       </div>
 

@@ -49,16 +49,28 @@ test('motion selection restores across reloads, normalizes invalid values and to
   globalThis.window = { localStorage: { getItem: k => data.get(k), setItem: (k,v) => data.set(k,v) } }
   const load = () => compile('src/stores/motion.ts', { vue })
   let motion = load()
-  assert.equal(motion.runningEffect.value, 'breathe')
-  for (const effect of ['orbit', 'chase', 'ripple', 'none', 'breathe']) {
+  assert.equal(motion.startingEffect.value, 'sweep')
+  for (const effect of ['ring', 'dots', 'wave', 'none', 'sweep']) {
+    motion.setStartingEffect(effect)
+    assert.equal(load().startingEffect.value, effect)
+    assert.equal(load().runningEffect.value, 'orbit', 'startup preferences do not overwrite running effects')
+  }
+  motion.setStartingEffect('unknown')
+  assert.equal(load().startingEffect.value, 'sweep')
+  assert.equal(motion.runningEffect.value, 'orbit')
+  for (const effect of ['orbit', 'chase', 'ripple', 'sheen', 'aurora', 'corners', 'underglow', 'none', 'breathe']) {
     motion.setRunningEffect(effect)
     assert.equal(motion.runningEffect.value, effect)
     assert.equal(load().runningEffect.value, effect)
   }
   motion.setRunningEffect('unknown')
-  assert.equal(load().runningEffect.value, 'breathe')
+  assert.equal(load().runningEffect.value, 'orbit')
   globalThis.window = { localStorage: { getItem() { throw Error('denied') }, setItem() { throw Error('denied') } } }
   motion = load()
+  assert.equal(motion.startingEffect.value, 'sweep')
+  assert.equal(motion.runningEffect.value, 'orbit')
   motion.setRunningEffect('orbit')
   assert.equal(motion.runningEffect.value, 'orbit')
+  motion.setStartingEffect('dots')
+  assert.equal(motion.startingEffect.value, 'dots')
 })

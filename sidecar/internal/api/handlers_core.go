@@ -176,6 +176,8 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleReleaseConfigFile(w, r, id)
 	case "releases":
 		s.handleAppReleases(w, r, id)
+	case "runtime-check":
+		s.handleRuntimeCheck(w, r, id)
 	default:
 		// services/{sid}/role 与 services/{sid}/reidentify:多段子路径
 		if sid, sub := pathTail("services/", rest); sid != "" {

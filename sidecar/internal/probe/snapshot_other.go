@@ -2,7 +2,14 @@
 
 package probe
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
+
+func SnapshotListenersChecked() ([]PortListener, error) {
+	return nil, fmt.Errorf("当前平台不支持验证端口归属")
+}
 
 // snapshotListenersOS 非 Windows 兜底：解析 netstat -tlnp（若有）。
 func snapshotListenersOS() []PortListener {

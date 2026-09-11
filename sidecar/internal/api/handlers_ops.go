@@ -145,6 +145,17 @@ func appView(a *store.App, s *Server) map[string]any {
 	}
 	row["knownServices"] = knownServices
 	row["lastUrl"] = launcher.PreferredOpenURL(a.EntryScript, a.LastURL, services)
+	if check := s.observeRuntime(a); check != nil {
+		row["runtimeCheck"] = check
+		switch check.State {
+		case "checking", "unknown":
+			row["status"] = check.State
+		case "running":
+			row["status"], row["pid"], row["services"] = "running", check.PID, check.Services
+			// Historical URLs whose ports are no longer listening are not live entries.
+			row["lastUrl"] = launcher.PreferredOpenURL(a.EntryScript, "", check.Services)
+		}
+	}
 	return row
 }
 
@@ -188,11 +199,17 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if s.rejectUnmanagedControl(w, id) {
+		return
+	}
 	if err := s.Launcher.Stop(id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	response := map[string]any{"stopped": true}
+	if s.runtimeMonitor != nil {
+		_ = s.runtimeMonitor.refresh(r.Context())
+	}
 	if a, err := s.Store.GetApp(id); err == nil && a != nil {
 		response["app"] = appView(a, s)
 	}
@@ -229,6 +246,9 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, id string
 	}
 	_ = readJSONOptional(r, &body)
 
+	if s.rejectUnmanagedControl(w, id) {
+		return
+	}
 	// 重启预检：必须在停止旧进程之前完成（确认/同步不通过就不动旧进程）。
 	outcome, err := s.runPreflight(w, id, body.ConfirmedScriptHash)
 	if err != nil || outcome == outcomeAbort {

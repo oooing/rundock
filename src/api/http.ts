@@ -92,6 +92,7 @@ async function startReq(
 }
 
 export const api = {
+  checkRuntime: (id: string) => req<AppView>(`/api/apps/${id}/runtime-check`, { method: 'POST' }),
   discoverStartup: (path: string) => req<import('@/types').StartupDiscovery>('/api/import/discover', { method: 'POST', body: JSON.stringify({ path }) }),
   // 导入（只读分析）
   import: (scriptPath: string) =>

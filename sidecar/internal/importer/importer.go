@@ -252,7 +252,9 @@ func scanEnvFromScript(scriptAbs string) map[string]string {
 // 只提取脚本中真实出现的端口（set PORT=、命令行 -p NNNN、URL 里的 :NNNN），
 // 不再硬塞通用默认端口清单——避免每个项目都显示 5173/8000 等无关端口造成误解。
 // 实际监听端口的发现由 probe（端口快照对比）负责，端口提示仅作辅助。
-func scanPortHints(scriptAbs string) []int {
+// DeclaredListenPorts excludes arbitrary URLs (for example HTTP proxies and
+// shared databases). Those are useful display hints, not exclusive bindings.
+func DeclaredListenPorts(scriptAbs string) []int {
 	seen := map[int]bool{}
 	text := readTextBestEffort(scriptAbs)
 	// set PORT=1234 / PORT:1234 / -p 1234 / --port 1234
@@ -266,6 +268,25 @@ func scanPortHints(scriptAbs string) []int {
 			seen[p] = true
 		}
 	}
+	declarationRe := regexpMustCompile(`(?im)^\s*(?:rem\s+|::\s*|#\s*)rundock:(?:ready|open)\s+https?://(?:localhost|127\.0\.0\.1|\[::1\]):(\d{2,5})`)
+	for _, m := range declarationRe.FindAllStringSubmatch(text, -1) {
+		if p := atoiSafe(m[1]); p > 0 && p < 65536 {
+			seen[p] = true
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	return out
+}
+
+func scanPortHints(scriptAbs string) []int {
+	seen := map[int]bool{}
+	for _, p := range DeclaredListenPorts(scriptAbs) {
+		seen[p] = true
+	}
+	text := readTextBestEffort(scriptAbs)
 	// 脚本里出现的 localhost:NNNN / 127.0.0.1:NNNN / 0.0.0.0:NNNN
 	urlPortRe := regexpMustCompile(`(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{2,5})`)
 	for _, m := range urlPortRe.FindAllStringSubmatch(text, -1) {

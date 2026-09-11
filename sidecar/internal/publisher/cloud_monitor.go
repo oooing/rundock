@@ -90,10 +90,16 @@ func (s *Service) checkCloudBuilds(ctx context.Context, read githubReader, now t
 			continue
 		}
 		if old != nil {
-			if old.State == "succeeded" {
+			if old.State == "succeeded" || old.State == "superseded" {
 				continue
 			}
 			next, _ := time.Parse(time.RFC3339, old.NextCheck)
+			if old.State == "failed" && old.Errors == 0 {
+				// Older builds persisted a five-minute failure interval. Apply the
+				// current cadence immediately without bypassing network backoff.
+				checked, _ := time.Parse(time.RFC3339, old.CheckedAt)
+				next = checked.Add(cloudPollInterval)
+			}
 			if now.Before(next) {
 				continue
 			}
@@ -175,6 +181,7 @@ func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo
 		matched = append(matched, candidate)
 	}
 	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	recovered, recoveryErr := newerSuccessfulBuilds(ctx, read, repo, matched)
 	seen := map[string]bool{}
 	failures := []string{}
 	summaries := []string{}
@@ -183,6 +190,9 @@ func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo
 		seen[candidate.HeadBranch] = true
 		if len(failures) == 0 {
 			build.URL = fmt.Sprintf("https://github.com/%s/actions/runs/%d", repo, candidate.ID)
+		}
+		if _, ok := recovered[candidate.ID]; ok {
+			continue
 		}
 		if candidate.Status != "completed" && !cloudFailure(candidate.Conclusion) {
 			pending = true
@@ -230,8 +240,8 @@ func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo
 		build.State = "failed"
 		build.AlertKey = run.ID + ":" + strings.Join(failures, ",")
 		build.Summary = strings.Join(summaries, "；")
-		build.NextCheck = now.Add(5 * time.Minute).Format(time.RFC3339)
-		return nil
+		build.NextCheck = now.Add(cloudPollInterval).Format(time.RFC3339)
+		return recoveryErr
 	}
 	if len(seen) < len(tags) {
 		if !created.IsZero() && now.Sub(created) > 10*time.Minute {
@@ -244,8 +254,93 @@ func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo
 	build.State = "running"
 	if !pending && len(matched) > 0 && now.Sub(created) > 2*time.Minute {
 		build.State = "succeeded"
+		if len(recovered) > 0 {
+			// Keep the original release/history intact: its failure is obsolete,
+			// not a successful rerun of that old version.
+			build.State = "superseded"
+			build.Summary = "同一构建端的新版本已构建成功，旧版本失败提醒已自动清除。"
+			var newestID int64
+			for _, replacement := range recovered {
+				newestID = max(newestID, replacement.ID)
+			}
+			build.URL = fmt.Sprintf("https://github.com/%s/actions/runs/%d", repo, newestID)
+		}
 	}
 	return nil
+}
+
+// A newer release may have been published from another RunDock instance or
+// directly on GitHub. Do not require it to exist in this instance's database.
+// Only compare stable version tags within the same prefix AND workflow path.
+var cloudVersionTag = regexp.MustCompile(`^(.*?)(v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$`)
+
+func newerSuccessfulBuilds(ctx context.Context, read githubReader, repo string, matched []githubWorkflowRun) (map[int64]githubWorkflowRun, error) {
+	recovered := map[int64]githubWorkflowRun{}
+	failed := []githubWorkflowRun{}
+	for _, run := range matched {
+		if cloudFailure(run.Conclusion) && run.Path != "" && cloudVersionTag.MatchString(run.HeadBranch) {
+			failed = append(failed, run)
+		}
+	}
+	if len(failed) == 0 {
+		return recovered, nil
+	}
+	since := failed[0].CreatedAt
+	for _, run := range failed[1:] {
+		if run.CreatedAt.Before(since) {
+			since = run.CreatedAt
+		}
+	}
+	latest := map[int64]githubWorkflowRun{}
+	for page := 1; page <= 3; page++ {
+		var list githubRunList
+		endpoint := "repos/" + repo + "/actions/runs?event=push&per_page=100&page=" + strconv.Itoa(page)
+		if !since.IsZero() {
+			endpoint += "&created=" + url.QueryEscape(">="+since.UTC().Format(time.RFC3339))
+		}
+		if err := read(ctx, endpoint, &list); err != nil {
+			return nil, err
+		}
+		for _, candidate := range list.Runs {
+			newTag := cloudVersionTag.FindStringSubmatch(candidate.HeadBranch)
+			if candidate.Event != "push" || newTag == nil {
+				continue
+			}
+			newVersion, _ := parseSemver(newTag[2])
+			for _, old := range failed {
+				oldTag := cloudVersionTag.FindStringSubmatch(old.HeadBranch)
+				oldVersion, _ := parseSemver(oldTag[2])
+				if candidate.Path != old.Path || newTag[1] != oldTag[1] ||
+					candidate.ID <= old.ID || !candidate.CreatedAt.After(old.CreatedAt) ||
+					compareSemver(newVersion, oldVersion) <= 0 {
+					continue
+				}
+				previous, exists := latest[old.ID]
+				if exists {
+					previousTag := cloudVersionTag.FindStringSubmatch(previous.HeadBranch)
+					previousVersion, _ := parseSemver(previousTag[2])
+					comparison := compareSemver(newVersion, previousVersion)
+					if comparison < 0 || comparison == 0 && (candidate.ID < previous.ID || candidate.ID == previous.ID && candidate.Attempt <= previous.Attempt) {
+						continue
+					}
+				}
+				latest[old.ID] = candidate
+			}
+		}
+		if list.Total <= page*100 {
+			break
+		}
+		if page == 3 {
+			// Incomplete evidence must never dismiss an actionable failure.
+			return nil, fmt.Errorf("newer workflow result limit")
+		}
+	}
+	for id, candidate := range latest {
+		if candidate.Status == "completed" && candidate.Conclusion == "success" {
+			recovered[id] = candidate
+		}
+	}
+	return recovered, nil
 }
 
 func cloudFailure(value string) bool {

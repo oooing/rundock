@@ -366,7 +366,8 @@ const cloudExecutionNotice = computed(() => {
       : tr("云端目标由 GitHub Actions 构建、打包并按项目配置发布；本地目标仍按配置执行。"),
   }
 })
-const completionTitle = computed(() => cloudBuild.value?.state === 'failed' ? tr('云端构建失败') : cloudBuild.value?.state === 'succeeded' ? tr('云端构建已完成') : automationHandedOff.value ? tr('代码已上传，正在跟踪云端构建') : activeRun.value?.pushRemote
+const cloudBuildSettled = computed(() => cloudBuild.value?.state === 'succeeded' || cloudBuild.value?.state === 'superseded')
+const completionTitle = computed(() => cloudBuild.value?.state === 'superseded' ? tr('旧版本已由新构建替代') : cloudBuild.value?.state === 'failed' ? tr('云端构建失败') : cloudBuild.value?.state === 'succeeded' ? tr('云端构建已完成') : automationHandedOff.value ? tr('代码已上传，正在跟踪云端构建') : activeRun.value?.pushRemote
   ? tr("已提交到 {0}", [automationHandedOff.value ? 'GitHub' : remoteDestination.value])
   : tr("本地操作已完成"))
 const completionDescription = computed(() => {
@@ -1300,7 +1301,7 @@ async function poll() {
     if (view.run.status === 'queued' || view.run.status === 'running') schedulePoll()
     else {
       history.value = await api.listReleases(props.app.id)
-      if (view.run.status === 'succeeded' && automationHandedOff.value && cloudBuild.value?.state !== 'succeeded') schedulePoll(15000)
+      if (view.run.status === 'succeeded' && automationHandedOff.value && !cloudBuildSettled.value) schedulePoll(15000)
     }
   } catch (reason) {
     if (disposed) return
@@ -1422,12 +1423,12 @@ onBeforeUnmount(() => {
 
         <template v-if="activeRun">
           <section class="progress-block">
-            <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff && cloudBuild?.state !== 'succeeded', failed: cloudBuild?.state === 'failed' }" role="status" aria-live="polite">
-              <span class="completion-icon" aria-hidden="true">{{ cloudBuild?.state === 'failed' ? '!' : automationHandedOff && cloudBuild?.state !== 'succeeded' ? '↑' : '✓' }}</span>
+            <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff && !cloudBuildSettled, failed: cloudBuild?.state === 'failed' }" role="status" aria-live="polite">
+              <span class="completion-icon" aria-hidden="true">{{ cloudBuild?.state === 'failed' ? '!' : automationHandedOff && !cloudBuildSettled ? '↑' : '✓' }}</span>
               <h3>{{ completionTitle }}</h3>
               <p>{{ completionDescription }}</p>
               <template v-if="automationHandedOff">
-                <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span v-if="cloudBuild?.state !== 'succeeded'" class="cloud-result-pending">{{ tr('可以关闭此窗口；应用运行期间会继续跟踪，失败时提醒你。') }}</span></div>
+                <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span v-if="!cloudBuildSettled" class="cloud-result-pending">{{ tr('可以关闭此窗口；应用运行期间会继续跟踪，失败时提醒你。') }}</span></div>
                 <button v-if="automationPageUrl" type="button" class="actions-link" :disabled="openingAutomation" :aria-busy="openingAutomation" @click="openAutomationPage">{{ openingAutomation ? tr('正在打开浏览器…') : tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></button>
                 <p v-if="automationOpenError" class="field-error" role="alert">{{ automationOpenError }}</p>
               </template>

@@ -1,7 +1,7 @@
 // 类型定义，与 Go sidecar 的 JSON tag 对齐。
 
 /** App 状态机 */
-export type AppStatus = 'starting' | 'running' | 'degraded' | 'stopping' | 'stopped' | 'failed'
+export type AppStatus = 'starting' | 'running' | 'degraded' | 'stopping' | 'stopped' | 'failed' | 'checking' | 'unknown'
 
 export interface StartupIssue {
   code: 'startup_failed' | 'port_in_use'
@@ -70,6 +70,11 @@ export interface AppView {
   lastStartedAt: string | null
   lastUrl: string
   status: AppStatus
+  runtimeCheck?: {
+    state: 'clear' | 'checking' | 'unknown' | 'running' | 'conflict'
+    message?: string
+    conflicts?: { port: number; pid: number; name: string }[]
+  }
   /** 仅用于前端交互：重启请求及启动恢复期间保持为 true */
   restarting?: boolean
   runId: string
@@ -448,7 +453,7 @@ export interface CloudBuildStatus {
   appId: string
   appName: string
   version: string
-  state: 'pending' | 'running' | 'failed' | 'succeeded' | 'unavailable' | 'not_started'
+  state: 'pending' | 'running' | 'failed' | 'succeeded' | 'superseded' | 'unavailable' | 'not_started'
   summary: string
   url: string
   alertKey: string

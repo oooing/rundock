@@ -69,11 +69,11 @@ func TestLocalReleaseWorksWithoutUsableRemote(t *testing.T) {
 					t.Fatalf("local preflight: %+v %v", pf, err)
 				}
 				push := false
-				run, err := svc.Start(context.Background(), "app1", CreateRequest{
+				run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 					CreateTag: &tag, PushRemote: &push, VersionMode: "auto", TargetVersion: pf.SuggestedVersion,
 					SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 					ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-				})
+				}))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -91,7 +91,7 @@ func TestLocalReleaseWorksWithoutUsableRemote(t *testing.T) {
 	}
 }
 
-func TestPlainCommitIgnoresBrokenReleaseConfiguration(t *testing.T) {
+func TestProgressRejectsBrokenRulesWithoutMutatingWorktree(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
 	runGit(t, repo, "remote", "remove", "origin")
@@ -109,16 +109,16 @@ func TestPlainCommitIgnoresBrokenReleaseConfiguration(t *testing.T) {
 		t.Fatalf("fixture must have invalid release config: %+v", pf)
 	}
 	no := false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{CreateTag: &no, PushRemote: &no,
-		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint})
-	if err != nil {
-		t.Fatal(err)
+	before := runGit(t, repo, "rev-parse", "HEAD")
+	_, err = svc.Start(context.Background(), "app1", CreateRequest{Intent: IntentSaveProgress, CreateTag: &no, PushRemote: &no, SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint})
+	if err == nil {
+		t.Fatal("invalid rules must not be silently ignored")
 	}
-	if completed := waitRelease(t, svc, run.ID); completed.Status != "succeeded" {
-		t.Fatalf("plain commit failed: %+v", completed)
+	if runGit(t, repo, "rev-parse", "HEAD") != before {
+		t.Fatal("invalid configuration changed HEAD")
 	}
-	if got := strings.TrimSpace(runGit(t, repo, "show", "HEAD:tracked.txt")); got != "ordinary change" {
-		t.Fatalf("commit missing: %q", got)
+	if staged := runGit(t, repo, "diff", "--cached", "--name-only"); staged != "" {
+		t.Fatalf("changed index: %s", staged)
 	}
 	if got, _ := os.ReadFile(filepath.Join(repo, "package.json")); string(got) != "broken package JSON" {
 		t.Fatalf("plain commit rewrote unrelated file: %q", got)
@@ -136,8 +136,8 @@ func TestPushingPlainCommitDoesNotCheckTags(t *testing.T) {
 	runner := &networkTraceRunner{forbidTags: true}
 	svc.runner = runner
 	no, yes := false, true
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{CreateTag: &no, PushRemote: &yes,
-		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint})
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{CreateTag: &no, PushRemote: &yes,
+		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +162,9 @@ func TestLocalVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 	runner := &networkTraceRunner{}
 	svc.runner = runner
 	yes := true
-	req := CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto", TargetVersion: pf.SuggestedVersion,
+	req := acceptCandidate(t, svc, CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto", TargetVersion: pf.SuggestedVersion,
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
-		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true}
+		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true})
 	_, err = svc.Start(context.Background(), "app1", req)
 	pe, ok := err.(*Error)
 	if !ok || pe.Code != "version_plan_changed" || pe.Preflight == nil || pe.Preflight.SuggestedVersion != "1.0.3" {
@@ -180,6 +180,8 @@ func TestLocalVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 		t.Fatalf("duplicate network check: %#v", runner.calls)
 	}
 	req.TargetVersion = pe.Preflight.SuggestedVersion
+	req.StatusFingerprint = pe.Preflight.StatusFingerprint
+	req = acceptCandidate(t, svc, req)
 	run, err := svc.Start(context.Background(), "app1", req)
 	if err != nil {
 		t.Fatal(err)
@@ -220,9 +222,9 @@ func TestLocalBuildAndCloudPushRequirementWithoutRemote(t *testing.T) {
 				t.Fatalf("preflight: %+v %v", pf, err)
 			}
 			no := false
-			run, err := svc.Start(context.Background(), "app1", CreateRequest{CreateTag: &no, PushRemote: &no,
+			run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{CreateTag: &no, PushRemote: &no,
 				SelectedPaths: []string{"tracked.txt"}, SelectedTargets: []store.ReleaseTargetSelection{selection},
-				StatusFingerprint: pf.StatusFingerprint, ExternalActionsConfirmed: true})
+				StatusFingerprint: pf.StatusFingerprint, ExternalActionsConfirmed: true}))
 			if cloud {
 				if pe, ok := err.(*Error); !ok || pe.Code != "remote_push_required" {
 					t.Fatalf("cloud without upload: %#v", err)
@@ -294,6 +296,7 @@ func TestLocalNamespacedVersionChangeKeepsRequestedGroupUnmodified(t *testing.T)
 	defer cleanup()
 	cfg := validExecutorConfig(validExecutorTarget())
 	cfg.VersionGroups[0].TagPrefix = "web"
+	svc.targetRunner = &recordingTargetRunner{}
 	cfg.VersionGroups = append(cfg.VersionGroups, releaseconfig.VersionGroup{ID: "server", Name: "Server", TagPrefix: "server", CurrentVersion: "3.4.0", VersionFiles: []releaseconfig.VersionFile{}})
 	if _, err := svc.releaseConfig.Put(context.Background(), "app1", cfg); err != nil {
 		t.Fatal(err)
@@ -308,10 +311,10 @@ func TestLocalNamespacedVersionChangeKeepsRequestedGroupUnmodified(t *testing.T)
 	}
 	runGit(t, repo, "tag", "web/v1.0.2", "main")
 	yes := true
-	_, err = svc.Start(context.Background(), "app1", CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto",
+	_, err = svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto",
 		Versions:      []ReleaseVersionInput{{VersionGroupID: "product", TargetVersion: pf.SuggestedVersions["product"]}},
 		SelectedPaths: []string{"tracked.txt"}, SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Build: true}},
-		StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true})
+		StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true}))
 	pe, ok := err.(*Error)
 	if !ok || pe.Code != "version_plan_changed" || pe.Preflight == nil || pe.Preflight.SuggestedVersions["product"] != "1.0.3" {
 		t.Fatalf("namespaced drift error: %#v", err)

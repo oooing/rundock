@@ -238,10 +238,10 @@ func TestAnnotatedTagContainsFrozenNotesAndReleasePlan(t *testing.T) {
 	if err != nil || !pf.CanRelease {
 		t.Fatalf("preflight: %v %+v", err, pf.BlockingIssues)
 	}
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: "## 修复\n- 修复发布问题", ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,13 +18,16 @@ import (
 )
 
 type Service struct {
-	store         *store.Store
-	releaseConfig *releaseconfig.Service
-	runner        commandRunner
-	targetRunner  commandRunner
-	mu            sync.Mutex
-	active        map[string]bool
-	diagnostics   *diagnostics.Service
+	candidateCommand func(context.Context, string, releaseconfig.CheckProfile) (string, string, string)
+	store            *store.Store
+	releaseConfig    *releaseconfig.Service
+	runner           commandRunner
+	targetRunner     commandRunner
+	mu               sync.Mutex
+	active           map[string]bool
+	diagnostics      *diagnostics.Service
+	candidatesMu     sync.Mutex
+	candidates       map[string]*releaseCandidate
 	// Set before monitoring starts. Called only after a changed snapshot is saved.
 	OnCloudBuildChange func(*store.CloudBuild)
 }
@@ -32,7 +35,7 @@ type Service struct {
 const releasePushTimeout = 2 * time.Minute
 
 func New(st *store.Store) *Service {
-	return &Service{store: st, releaseConfig: releaseconfig.New(st), runner: execRunner{}, targetRunner: execRunner{}, active: map[string]bool{}}
+	return &Service{store: st, releaseConfig: releaseconfig.New(st), runner: execRunner{}, targetRunner: execRunner{}, active: map[string]bool{}, candidates: map[string]*releaseCandidate{}}
 }
 
 // SetDiagnostics injects the optional project-local diagnostic sink. Writing
@@ -121,6 +124,7 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 		if checkRemote && len(pf.BlockingIssues) == 0 {
 			s.checkRemote(ctx, pf, false)
 		}
+		pf.Classifications = classifyChanges(root, pf.Changes, nil, nil)
 		pf.CanRelease = len(pf.BlockingIssues) == 0
 		return pf, nil
 	}
@@ -258,6 +262,14 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 	if checkTags {
 		s.compareReleaseContent(ctx, pf, pf.remoteTags)
 	}
+	rules := []releaseconfig.FileRule{}
+	if cfg, configErr := s.releaseConfig.Get(ctx, appID); configErr == nil && cfg != nil {
+		rules = cfg.FileRules
+	}
+	pf.Classifications = classifyChanges(root, pf.Changes, rules, nil)
+	if pf.Classifications == nil {
+		pf.Classifications = []FileClassification{}
+	}
 	pf.CanRelease = len(pf.BlockingIssues) == 0
 	return pf, nil
 }
@@ -302,6 +314,21 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	if req.PushRemote != nil {
 		pushRemote = *req.PushRemote
 	}
+	intent := strings.TrimSpace(req.Intent)
+	if intent != "" && intent != IntentFormal && intent != IntentSaveProgress {
+		return nil, &Error{Code: "invalid_intent", Message: "发布意图必须是保存进度或正式发布"}
+	}
+	if intent == IntentSaveProgress {
+		createTag = false
+		req.VersionMode = VersionModeUnchanged
+		req.BuildMode = BuildModeNone
+		req.SelectedTargets = nil
+		req.CreateTag = boolPtr(false)
+		if req.PushRemote == nil {
+			pushRemote = false
+			req.PushRemote = boolPtr(false)
+		}
+	}
 	checkConfig := createTag || len(req.SelectedTargets) > 0
 	// Preparing a release is local-only. Normal (non-force) pushes enforce
 	// branch and tag conflicts when uploading, without a blocking fetch/query.
@@ -319,11 +346,14 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	if req.StatusFingerprint == "" || req.StatusFingerprint != pf.StatusFingerprint {
 		return nil, &Error{Code: "status_changed", Message: "仓库内容已变化，请重新检查后再发布"}
 	}
+	if s.repositoryBusy(pf.RepoRoot) {
+		return nil, &Error{Code: "release_in_progress", Message: "该仓库已有发布任务正在执行"}
+	}
 	if req.VersionMode == "" {
 		req.VersionMode = pf.Profile.VersionMode
 	}
-	if req.VersionMode != "auto" && req.VersionMode != "manual" {
-		return nil, &Error{Code: "invalid_version_mode", Message: "版本方式必须是自动递增或手动设置"}
+	if req.VersionMode != "auto" && req.VersionMode != "manual" && req.VersionMode != VersionModeUnchanged {
+		return nil, &Error{Code: "invalid_version_mode", Message: "版本方式必须是自动递增、手动设置或保持不变"}
 	}
 	selected, err := validateSelected(req.SelectedPaths, pf.Changes)
 	if err != nil {
@@ -332,6 +362,39 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	selectedTargets, err := validateTargetSelections(req.SelectedTargets)
 	if err != nil {
 		return nil, err
+	}
+	if intent == "" {
+		intent = IntentFormal
+	}
+	if intent == IntentFormal && strings.TrimSpace(req.CandidateID) == "" {
+		return nil, &Error{Code: "check_required", Message: "正式发布必须先构建并验收候选版本，不能省略候选标识或在发布时自动执行检查"}
+	}
+	candidateView, candErr := s.ensureReleaseCandidate(ctx, appID, req, selected, intent)
+	if candErr != nil {
+		return nil, candErr
+	}
+	if len(candidateView.SensitiveFindings) > 0 {
+		return nil, &Error{Code: "sensitive_content", Message: "候选版本含有高可信敏感内容，已脱敏阻断，不能提交或发布"}
+	}
+	if intent == IntentFormal && hasBlockingDependency(candidateView.DependencyFindings) {
+		return nil, &Error{Code: "missing_dependency", Message: "候选版本缺少确定的配套文件，或引用了不能自动加入的本地/敏感内容"}
+	}
+	if intent == IntentFormal {
+		if !candidateView.Accepted || candidateView.Status != CheckPassed {
+			if unresolved := unresolvedReview(candidateView.Classifications, selectedSet(selected), req.ManualDecisions); len(unresolved) > 0 {
+				return nil, &Error{Code: "review_required", Message: "存在需要确认的文件，正式发布前请记录纳入或排除决定"}
+			}
+			if candidateView.MutationDetected {
+				return nil, &Error{Code: "check_changed_tree", Message: "检查命令修改了候选源内容，必须重新验证"}
+			}
+			if candidateView.Status == CheckFailed {
+				return nil, &Error{Code: "checks_failed", Message: "必需检查失败，不能正式发布"}
+			}
+			if candidateView.Status == CheckUnverified || candidateView.Status == CheckCancelled || candidateView.Status == CheckPending {
+				return nil, &Error{Code: "checks_unverified", Message: "候选版本尚未通过内容绑定检查，不能正式发布"}
+			}
+			return nil, &Error{Code: "candidate_not_accepted", Message: "正式发布必须使用已验收且内容未变化的候选版本"}
+		}
 	}
 	if requiresExternalActionsConfirmation(selectedTargets) && !req.ExternalActionsConfirmed {
 		return nil, &Error{Code: "external_actions_confirmation_required", Message: "上传或部署会影响外部环境，请明确确认后再继续"}
@@ -346,6 +409,10 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	}
 	plan.RemoteURL = pf.RemoteURL
 	plan.PushRemote = &pushRemote
+	plan.CandidateID = candidateView.ID
+	plan.CandidateFingerprint = candidateView.Fingerprint
+	plan.CandidateTreeHash = candidateView.TreeHash
+	plan.Intent = intent
 	if err := validateBuildMode(req.BuildMode, plan, pushRemote); err != nil {
 		return nil, err
 	}
@@ -624,7 +691,9 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		fail("preparing", "status_changed", "仓库内容已变化，请重新检查后再发布")
 		return
 	}
-	if run.CreateTag {
+	if plan.CandidateID != "" {
+		s.log(run.ID, "event", "使用已验收候选树提交，不改写工作区未选中文件")
+	} else if run.CreateTag {
 		setStage("versioning")
 		var err error
 		if plan.usesConfiguredVersionGroups() {
@@ -659,30 +728,32 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 	}
 
 	setStage("checking")
-	checkBaseline, baselineErr := s.worktreeSnapshot(ctx, run.RepoRoot)
-	if baselineErr != nil {
-		fail("checking", "git_status_failed", "无法记录发布前检查的仓库状态")
-		return
-	}
-	if plan.BuildMode != "github" && strings.TrimSpace(checkCommand) != "" {
-		checkCtx, cancel := commandContext(ctx, 10*time.Minute)
-		out, checkErr := runCheckCommand(checkCtx, s.runner, run.RepoRoot, checkCommand)
-		cancel()
-		if strings.TrimSpace(out) != "" {
-			s.log(run.ID, "stdout", redact(out))
-		}
-		if checkErr != nil {
-			fail("checking", "checks_failed", "发布前检查命令失败")
+	if plan.CandidateID == "" {
+		checkBaseline, baselineErr := s.worktreeSnapshot(ctx, run.RepoRoot)
+		if baselineErr != nil {
+			fail("checking", "git_status_failed", "无法记录发布前检查的仓库状态")
 			return
 		}
-		afterCheck, statusErr := s.worktreeSnapshot(ctx, run.RepoRoot)
-		if statusErr != nil {
-			fail("checking", "git_status_failed", "无法检查发布前命令执行后的仓库状态")
-			return
-		}
-		if ok, changed := verifyBuildSideEffects(checkBaseline, afterCheck, nil); !ok {
-			fail("checking", "check_changed_tree", "发布前检查命令修改了仓库内容："+strings.Join(changed, "、"))
-			return
+		if plan.BuildMode != "github" && strings.TrimSpace(checkCommand) != "" {
+			checkCtx, cancel := commandContext(ctx, 10*time.Minute)
+			out, checkErr := runCheckCommand(checkCtx, s.runner, run.RepoRoot, checkCommand)
+			cancel()
+			if strings.TrimSpace(out) != "" {
+				s.log(run.ID, "stdout", redact(out))
+			}
+			if checkErr != nil {
+				fail("checking", "checks_failed", "发布前检查命令失败")
+				return
+			}
+			afterCheck, statusErr := s.worktreeSnapshot(ctx, run.RepoRoot)
+			if statusErr != nil {
+				fail("checking", "git_status_failed", "无法检查发布前命令执行后的仓库状态")
+				return
+			}
+			if ok, changed := verifyBuildSideEffects(checkBaseline, afterCheck, nil); !ok {
+				fail("checking", "check_changed_tree", "发布前检查命令修改了仓库内容："+strings.Join(changed, "、"))
+				return
+			}
 		}
 	}
 	if len(plan.Targets) > 0 {
@@ -702,29 +773,52 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 	}
 
 	setStage("committing")
-	if len(stagePaths) > 0 {
-		args := append([]string{"add", "--"}, stagePaths...)
-		// git add is not atomic: it can update the index for earlier pathspecs
-		// before a later ignored or invalid path makes the command fail. Mark the
-		// staging attempt before running it so fail() also cleans up that partial
-		// index state.
-		stagedByTool = true
-		if out, err := s.git(ctx, run.RepoRoot, args...); err != nil {
-			fail("committing", "git_add_failed", redact(out))
+	var sha string
+	if plan.CandidateID != "" {
+		if err := s.verifyAcceptedCandidate(ctx, run, plan, pf, selected); err != nil {
+			if typed, ok := err.(*Error); ok {
+				fail("committing", typed.Code, typed.Message)
+			} else {
+				fail("committing", "candidate_not_accepted", err.Error())
+			}
 			return
 		}
-	}
-	_, diffErr := s.git(ctx, run.RepoRoot, "diff", "--cached", "--quiet")
-	if diffErr != nil {
-		if out, err := s.git(ctx, run.RepoRoot, "commit", "-m", message); err != nil {
-			fail("committing", "commit_failed", redact(out))
+		committedSHA, commitErr := s.commitAcceptedCandidate(ctx, run, plan, pf, message)
+		if commitErr != nil {
+			if committedSHA != "" {
+				run.CommitSHA = committedSHA
+				committed = true
+			}
+			if typed, ok := commitErr.(*Error); ok {
+				fail("committing", typed.Code, typed.Message)
+			} else {
+				fail("committing", "commit_failed", commitErr.Error())
+			}
 			return
 		}
-	}
-	sha, err := s.git(ctx, run.RepoRoot, "rev-parse", "HEAD")
-	if err != nil {
-		fail("committing", "commit_failed", "无法读取发布提交")
-		return
+		sha = committedSHA
+	} else {
+		if len(stagePaths) > 0 {
+			args := append([]string{"add", "--"}, stagePaths...)
+			stagedByTool = true
+			if out, err := s.git(ctx, run.RepoRoot, args...); err != nil {
+				fail("committing", "git_add_failed", redact(out))
+				return
+			}
+		}
+		_, diffErr := s.git(ctx, run.RepoRoot, "diff", "--cached", "--quiet")
+		if diffErr != nil {
+			if out, err := s.git(ctx, run.RepoRoot, "commit", "-m", message); err != nil {
+				fail("committing", "commit_failed", redact(out))
+				return
+			}
+		}
+		var err error
+		sha, err = s.git(ctx, run.RepoRoot, "rev-parse", "HEAD")
+		if err != nil {
+			fail("committing", "commit_failed", "无法读取发布提交")
+			return
+		}
 	}
 	run.CommitSHA = sha
 	committed = true
@@ -1067,6 +1161,13 @@ func preTargetRetryStage(stage string) bool {
 
 func postTargetRetryStage(stage string) bool {
 	return stage == "publishing_targets" || stage == "target_publish" || stage == "target_deploy"
+}
+
+func (s *Service) repositoryBusy(repo string) bool {
+	key := gitPathKey(canonicalRepositoryPath(repo))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active[key]
 }
 
 func (s *Service) reserve(repo string) bool {

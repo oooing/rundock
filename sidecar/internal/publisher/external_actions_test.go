@@ -17,10 +17,10 @@ func TestStartRequiresExplicitExternalActionsConfirmation(t *testing.T) {
 		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	createTag := false
-	_, err = svc.Start(context.Background(), "app1", CreateRequest{
+	_, err = svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Publish: true}},
-	})
+	}))
 	pe, ok := err.(*Error)
 	if !ok || pe.Code != "external_actions_confirmation_required" {
 		t.Fatalf("Start error = %#v", err)

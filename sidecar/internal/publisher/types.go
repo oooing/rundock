@@ -24,9 +24,128 @@ type Issue struct {
 
 type FileChange struct {
 	Path    string `json:"path"`
+	OldPath string `json:"oldPath,omitempty"`
 	Status  string `json:"status"`
 	Tracked bool   `json:"tracked"`
 	Staged  bool   `json:"staged"`
+}
+
+const (
+	IntentSaveProgress = "save-progress"
+	IntentFormal       = "formal"
+
+	CategoryRecommend = "recommend"
+	CategoryLocal     = "local"
+	CategoryReview    = "review"
+	CategorySensitive = "sensitive"
+
+	DecisionInclude = "include"
+	DecisionExclude = "exclude"
+
+	CheckPending    = "pending"
+	CheckRunning    = "running"
+	CheckPassed     = "passed"
+	CheckFailed     = "failed"
+	CheckCancelled  = "cancelled"
+	CheckUnverified = "unverified"
+	CheckStale      = "stale"
+	CheckSkipped    = "skipped"
+
+	VersionModeUnchanged = "unchanged"
+	BuildModeNone        = "none"
+)
+
+type FileClassification struct {
+	Path               string   `json:"path"`
+	OldPath            string   `json:"oldPath,omitempty"`
+	Status             string   `json:"status"`
+	Tracked            bool     `json:"tracked"`
+	Category           string   `json:"category"`
+	Reasons            []string `json:"reasons"`
+	Sources            []string `json:"sources"`
+	RuleIDs            []string `json:"ruleIds,omitempty"`
+	SelectedDefault    bool     `json:"selectedDefault"`
+	BaselineKept       bool     `json:"baselineKept"`
+	Group              string   `json:"group"`
+	SensitiveKind      string   `json:"sensitiveKind,omitempty"`
+	ContentFingerprint string   `json:"contentFingerprint,omitempty"`
+}
+
+type ManualDecision struct {
+	Path               string `json:"path"`
+	Decision           string `json:"decision"`
+	Reason             string `json:"reason,omitempty"`
+	ContentFingerprint string `json:"contentFingerprint,omitempty"`
+}
+
+type SensitiveException struct {
+	Path               string `json:"path"`
+	Reason             string `json:"reason"`
+	ContentFingerprint string `json:"contentFingerprint"`
+	FindingFingerprint string `json:"findingFingerprint"`
+}
+
+type SensitiveFinding struct {
+	Column             int    `json:"column,omitempty"`
+	Fingerprint        string `json:"fingerprint"`
+	ContentFingerprint string `json:"contentFingerprint"`
+	Path               string `json:"path"`
+	Kind               string `json:"kind"`
+	Reason             string `json:"reason"`
+	Line               int    `json:"line,omitempty"`
+	Redacted           string `json:"redacted"`
+}
+
+type DependencyFinding struct {
+	Path       string `json:"path"`
+	Reference  string `json:"reference"`
+	Missing    string `json:"missing"`
+	Reason     string `json:"reason"`
+	Blocked    bool   `json:"blocked"`
+	Suggestion string `json:"suggestion,omitempty"`
+}
+
+type CheckResult struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason,omitempty"`
+	Log        string `json:"log,omitempty"`
+	Required   bool   `json:"required"`
+	DurationMS int64  `json:"durationMs,omitempty"`
+}
+
+type CandidateRequest struct {
+	StatusFingerprint   string                         `json:"statusFingerprint"`
+	SelectedPaths       []string                       `json:"selectedPaths"`
+	ManualDecisions     []ManualDecision               `json:"manualDecisions"`
+	Intent              string                         `json:"intent"`
+	TargetVersion       string                         `json:"targetVersion"`
+	Versions            []ReleaseVersionInput          `json:"versions"`
+	VersionMode         string                         `json:"versionMode"`
+	CreateTag           *bool                          `json:"createTag"`
+	PushRemote          *bool                          `json:"pushRemote"`
+	BuildMode           string                         `json:"buildMode"`
+	SelectedTargets     []store.ReleaseTargetSelection `json:"selectedTargets"`
+	SensitiveExceptions []SensitiveException           `json:"sensitiveExceptions,omitempty"`
+}
+
+type CandidateView struct {
+	ID                 string               `json:"id"`
+	Fingerprint        string               `json:"fingerprint"`
+	Status             string               `json:"status"`
+	Intent             string               `json:"intent"`
+	Classifications    []FileClassification `json:"classifications"`
+	SelectedPaths      []string             `json:"selectedPaths"`
+	SensitiveFindings  []SensitiveFinding   `json:"sensitiveFindings"`
+	DependencyFindings []DependencyFinding  `json:"dependencyFindings"`
+	CheckResults       []CheckResult        `json:"checkResults"`
+	Warnings           []string             `json:"warnings"`
+	Accepted           bool                 `json:"accepted"`
+	CanFormal          bool                 `json:"canFormal"`
+	CanSaveProgress    bool                 `json:"canSaveProgress"`
+	TreeHash           string               `json:"treeHash,omitempty"`
+	MutationDetected   bool                 `json:"mutationDetected"`
 }
 
 type CommittedFileChange struct {
@@ -58,6 +177,7 @@ type Preflight struct {
 	RemoteChecked     bool                  `json:"remoteChecked"`
 	StatusFingerprint string                `json:"statusFingerprint"`
 	Profile           *store.ReleaseProfile `json:"profile"`
+	Classifications   []FileClassification  `json:"classifications,omitempty"`
 }
 
 type CreateRequest struct {
@@ -74,6 +194,10 @@ type CreateRequest struct {
 	ExternalActionsConfirmed bool                           `json:"externalActionsConfirmed"`
 	ReleaseNotes             string                         `json:"releaseNotes"`
 	ReleaseNotesConfirmed    bool                           `json:"releaseNotesConfirmed"`
+	Intent                   string                         `json:"intent"`
+	CandidateID              string                         `json:"candidateId"`
+	ManualDecisions          []ManualDecision               `json:"manualDecisions"`
+	SensitiveExceptions      []SensitiveException           `json:"sensitiveExceptions,omitempty"`
 }
 
 type NotesDraftRequest struct {

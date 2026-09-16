@@ -10,6 +10,11 @@ const (
 
 	SourceDetected = "detected"
 	SourceFile     = "file"
+
+	RuleRecommend = "recommend"
+	RuleLocal     = "local"
+	RuleReview    = "review"
+	RuleSensitive = "sensitive"
 )
 
 // Config describes how one repository can be versioned, built, packaged and
@@ -24,7 +29,31 @@ type Config struct {
 	VersionGroups []VersionGroup `json:"versionGroups"`
 	Targets       []Target       `json:"targets"`
 	Automation    *Automation    `json:"automation,omitempty"`
+	FileRules     []FileRule     `json:"fileRules,omitempty"`
+	CheckProfiles []CheckProfile `json:"checkProfiles,omitempty"`
 	Warnings      []string       `json:"warnings"`
+}
+
+// FileRule classifies repository paths for release selection. Patterns are
+// repository-relative globs; they never rewrite .gitignore or Git tracking.
+type FileRule struct {
+	ID      string `json:"id"`
+	Pattern string `json:"pattern"`
+	Kind    string `json:"kind"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// CheckProfile is an explicitly confirmed command run against an isolated
+// candidate. Commands are never auto-discovered from hooks.
+type CheckProfile struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Command        string   `json:"command"`
+	WorkingDir     string   `json:"workingDir,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+	Required       bool     `json:"required"`
+	OS             []string `json:"os,omitempty"`
+	TargetKinds    []string `json:"targetKinds,omitempty"`
 }
 
 // Automation describes an external release pipeline. It is deliberately

@@ -47,11 +47,11 @@ func TestReleaseMultipleVersionGroupsCreatesIndependentTags(t *testing.T) {
 	}
 	svc.targetRunner = &recordingTargetRunner{}
 	createTag := true
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Build: true}, {TargetID: "server", Build: true}},
 		ReleaseNotes:    testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,8 +66,8 @@ func TestReleaseMultipleVersionGroupsCreatesIndependentTags(t *testing.T) {
 	if !reflect.DeepEqual(run.Versions, wantVersions) {
 		t.Fatalf("versions = %#v, want %#v", run.Versions, wantVersions)
 	}
-	assertFileContains(t, filepath.Join(repo, "package.json"), `"version": "1.0.1"`)
-	assertFileContains(t, filepath.Join(repo, "server/version.json"), `"version":"3.4.1"`, `"keep":true`)
+	assertCommittedContains(t, repo, "package.json", `"version": "1.0.1"`)
+	assertCommittedContains(t, repo, "server/version.json", `"version":"3.4.1"`, `"keep":true`)
 	if got, want := svc.targetRunner.(*recordingTargetRunner).Commands(), []string{"build-web-1.0.1-web/v1.0.1", "build-server-3.4.1-server/v3.4.1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands = %#v, want %#v", got, want)
 	}
@@ -85,12 +85,12 @@ func TestReleaseMultipleVersionGroupsCreatesIndependentTags(t *testing.T) {
 		t.Fatalf("second preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	svc.targetRunner.(*recordingTargetRunner).Reset()
-	run, err = svc.Start(context.Background(), "app1", CreateRequest{
+	run, err = svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, VersionMode: "manual", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		Versions:        []ReleaseVersionInput{{VersionGroupID: "product", TargetVersion: "1.2.0"}, {VersionGroupID: "server", TargetVersion: "4.0.0"}},
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Build: true}, {TargetID: "server", Build: true}},
 		ReleaseNotes:    testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +98,8 @@ func TestReleaseMultipleVersionGroupsCreatesIndependentTags(t *testing.T) {
 	if run.Status != "succeeded" || len(run.Versions) != 2 || run.Versions[0].TagName != "web/v1.2.0" || run.Versions[1].TagName != "server/v4.0.0" {
 		t.Fatalf("manual independent versions failed: %+v", run)
 	}
-	assertFileContains(t, filepath.Join(repo, "package.json"), `"version": "1.2.0"`)
-	assertFileContains(t, filepath.Join(repo, "server/version.json"), `"version":"4.0.0"`)
+	assertCommittedContains(t, repo, "package.json", `"version": "1.2.0"`)
+	assertCommittedContains(t, repo, "server/version.json", `"version":"4.0.0"`)
 }
 
 func TestSourceOnlySingleVersionGroupUsesConfiguredVersion(t *testing.T) {
@@ -140,13 +140,13 @@ func TestSourceOnlySingleVersionGroupUsesConfiguredVersion(t *testing.T) {
 		t.Fatalf("source-only preflight = version %s, files %#v", pf.SuggestedVersion, pf.VersionFiles)
 	}
 	createTag, pushRemote := true, false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		TargetVersion: pf.SuggestedVersion,
 		Versions:      []ReleaseVersionInput{{VersionGroupID: "repository", TargetVersion: pf.SuggestedVersion}},
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestSourceOnlySingleVersionGroupUsesConfiguredVersion(t *testing.T) {
 	if run.Status != "succeeded" || len(run.Versions) != 1 || run.Versions[0].VersionGroupID != "service" || run.TagName != "v3.4.1" {
 		t.Fatalf("source-only single-group release = %+v", run)
 	}
-	assertFileContains(t, filepath.Join(repo, "service/version.json"), `"version":"3.4.1"`, `"keep":true`)
+	assertCommittedContains(t, repo, "service/version.json", `"version":"3.4.1"`, `"keep":true`)
 	plan, err := parseExecutionPlan(run.ExecutionPlan)
 	if err != nil || len(plan.Targets) != 0 || len(plan.VersionGroups) != 1 || !plan.usesConfiguredVersionGroups() {
 		t.Fatalf("frozen source-only plan = %+v, err=%v", plan, err)
@@ -189,12 +189,12 @@ func TestSourceOnlyMultipleVersionGroupsStayRepositoryScoped(t *testing.T) {
 		t.Fatalf("repository-scoped preflight = version %s, files %#v", pf.SuggestedVersion, pf.VersionFiles)
 	}
 	createTag, pushRemote := true, false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto", TargetVersion: pf.SuggestedVersion,
 		Versions:      []ReleaseVersionInput{{VersionGroupID: "repository", TargetVersion: pf.SuggestedVersion}},
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,8 +202,8 @@ func TestSourceOnlyMultipleVersionGroupsStayRepositoryScoped(t *testing.T) {
 	if run.Status != "succeeded" || len(run.Versions) != 1 || run.Versions[0].VersionGroupID != "repository" || run.TagName != "v0.1.0" {
 		t.Fatalf("source-only repository release = %+v", run)
 	}
-	assertFileContains(t, filepath.Join(repo, "package.json"), `"version": "1.0.0"`)
-	assertFileContains(t, filepath.Join(repo, "server/version.json"), `"version":"3.4.0"`)
+	assertCommittedContains(t, repo, "package.json", `"version": "1.0.0"`)
+	assertCommittedContains(t, repo, "server/version.json", `"version":"3.4.0"`)
 	plan, err := parseExecutionPlan(run.ExecutionPlan)
 	if err != nil || len(plan.Targets) != 0 || len(plan.VersionGroups) != 2 || plan.NamespacedTags || plan.usesConfiguredVersionGroups() {
 		t.Fatalf("frozen repository plan = %+v, err=%v", plan, err)

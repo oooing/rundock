@@ -61,6 +61,9 @@ func TestPlanTargetsValidatesSavedManifest(t *testing.T) {
 	t.Run("detected proposal is executable without saving", func(t *testing.T) {
 		svc, repo, cleanup := newReleaseFixture(t)
 		defer cleanup()
+		if err := os.Remove(filepath.Join(repo, releaseconfig.ManifestPath)); err != nil {
+			t.Fatal(err)
+		}
 		plan, err := svc.freezeExecutionPlan(context.Background(), "app1", repo, []store.ReleaseTargetSelection{{TargetID: "node", Package: true}})
 		if err != nil {
 			t.Fatalf("plan error = %#v", err)
@@ -170,13 +173,13 @@ func TestGitPushReleasePushesTagAndHandsOffWithoutLocalBuild(t *testing.T) {
 	}
 	createTag, pushRemote := true, true
 	selection := store.ReleaseTargetSelection{TargetID: target.ID, Publish: true}
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		BuildMode: "github",
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths: []string{"tracked.txt"}, SelectedTargets: []store.ReleaseTargetSelection{selection},
 		StatusFingerprint: pf.StatusFingerprint, ExternalActionsConfirmed: true,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,12 +235,12 @@ func TestGitPushTagTargetRejectsReleaseWithoutTag(t *testing.T) {
 		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	createTag, pushRemote := false, true
-	_, err = svc.Start(context.Background(), "app1", CreateRequest{
+	_, err = svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote,
 		SelectedPaths:     []string{"tracked.txt"},
 		SelectedTargets:   []store.ReleaseTargetSelection{{TargetID: target.ID, Publish: true}},
 		StatusFingerprint: pf.StatusFingerprint, ExternalActionsConfirmed: true,
-	})
+	}))
 	pe, ok := err.(*Error)
 	if !ok || pe.Code != "cloud_tag_required" || !strings.Contains(pe.Message, "创建版本 Tag") {
 		t.Fatalf("tag-free cloud release error = %#v", err)
@@ -394,11 +397,11 @@ func TestReleaseTargetPipelineOrdersPreAndPostPushActions(t *testing.T) {
 	}
 	createTag := true
 	selection := store.ReleaseTargetSelection{TargetID: "web", Build: true, Package: true, Publish: true, Deploy: true}
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"},
 		SelectedTargets: []store.ReleaseTargetSelection{selection}, StatusFingerprint: pf.StatusFingerprint,
 		ExternalActionsConfirmed: true, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,9 +425,8 @@ func TestReleaseTargetPipelineOrdersPreAndPostPushActions(t *testing.T) {
 		texts = append(texts, log.Text)
 	}
 	assertOrderedLogText(t, texts,
-		stageText("versioning"),
 		stageText("checking"),
-		"Web："+stageText("target_check"),
+		stageText("committing"),
 		stageText("building_targets"),
 		"Web："+stageText("target_build"),
 		"Web："+stageText("target_package"),
@@ -440,36 +442,33 @@ func TestReleaseTargetPipelineOrdersPreAndPostPushActions(t *testing.T) {
 func TestTargetCheckFailureHappensBeforeVersionAndCommit(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()
-	if _, err := svc.releaseConfig.Put(context.Background(), "app1", validExecutorConfig(validExecutorTarget())); err != nil {
+	target := validExecutorTarget()
+	target.Steps.Check = "node -e \"process.exit(1)\""
+	if _, err := svc.releaseConfig.Put(context.Background(), "app1", validExecutorConfig(target)); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, repo, "add", releaseconfig.ManifestPath)
-	runGit(t, repo, "commit", "-m", "configure release targets")
-	runGit(t, repo, "push", "origin", "main")
+	runGit(t, repo, "commit", "-m", "checks")
 	writeTestFile(t, filepath.Join(repo, "tracked.txt"), "check must fail before commit\n")
-	beforeHead := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
-
-	svc.targetRunner = &recordingTargetRunner{failOnce: map[string]bool{"check-web": true}}
-	pf, err := svc.Preflight(context.Background(), "app1")
-	if err != nil || !pf.CanRelease {
-		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
-	}
-	createTag := true
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
-		CreateTag: &createTag, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"},
-		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Build: true}}, StatusFingerprint: pf.StatusFingerprint,
-		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	head := runGit(t, repo, "rev-parse", "HEAD")
+	pf, err := svc.PreflightLocal(context.Background(), "app1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	run = waitRelease(t, svc, run.ID)
-	if run.Status != "failed" || run.Stage != "target_check" || run.CommitSHA != "" {
-		t.Fatalf("failed check run = %+v", run)
+	selections := []store.ReleaseTargetSelection{{TargetID: "web", Build: true}}
+	v, err := svc.PrepareCandidate(context.Background(), "app1", CandidateRequest{Intent: IntentFormal, CreateTag: boolPtr(true), VersionMode: "auto", StatusFingerprint: pf.StatusFingerprint, SelectedPaths: []string{"tracked.txt"}, SelectedTargets: selections})
+	if err != nil {
+		t.Fatal(err)
 	}
-	afterHead := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
-	if afterHead != beforeHead {
-		t.Fatalf("target check created commit: before=%s after=%s", beforeHead, afterHead)
+	checked, err := svc.RunCandidateChecks(context.Background(), "app1", v.ID)
+	if err != nil || checked.Status != CheckFailed || checked.Accepted {
+		t.Fatalf("required check was not blocked: %+v %v", checked, err)
+	}
+	if _, err := svc.Start(context.Background(), "app1", CreateRequest{Intent: IntentFormal, CandidateID: v.ID, CreateTag: boolPtr(true), VersionMode: "auto", StatusFingerprint: pf.StatusFingerprint, SelectedPaths: []string{"tracked.txt"}, SelectedTargets: selections, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true}); err == nil {
+		t.Fatal("failed candidate was published")
+	}
+	if got := runGit(t, repo, "rev-parse", "HEAD"); got != head {
+		t.Fatal("failed check changed HEAD")
 	}
 	assertFileContains(t, filepath.Join(repo, "package.json"), `"version": "1.0.0"`)
 }
@@ -493,11 +492,11 @@ func TestReleaseRetryAfterDeployFailureDoesNotRepeatPublish(t *testing.T) {
 	}
 	createTag := false
 	selection := store.ReleaseTargetSelection{TargetID: "web", Publish: true, Deploy: true}
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, SelectedPaths: []string{"tracked.txt"},
 		SelectedTargets: []store.ReleaseTargetSelection{selection}, StatusFingerprint: pf.StatusFingerprint,
 		ExternalActionsConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

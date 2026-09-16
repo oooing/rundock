@@ -53,7 +53,7 @@ func TestLocalBuildModeExecutesWithoutRemoteUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	no := false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{BuildMode: "local", CreateTag: &no, PushRemote: &no, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"}, SelectedTargets: []store.ReleaseTargetSelection{{TargetID: target.ID, Build: true, Package: true}}, StatusFingerprint: pf.StatusFingerprint, CommitMessage: "local build"})
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{BuildMode: "local", CreateTag: &no, PushRemote: &no, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"}, SelectedTargets: []store.ReleaseTargetSelection{{TargetID: target.ID, Build: true, Package: true}}, StatusFingerprint: pf.StatusFingerprint, CommitMessage: "local build"}))
 	if err != nil {
 		t.Fatal(err)
 	}

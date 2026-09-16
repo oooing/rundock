@@ -26,3 +26,23 @@ func TestAnnotatedReleaseExample(t *testing.T) {
 		t.Fatal("accepted unknown key")
 	}
 }
+
+func TestFileRulesAndCheckProfilesRoundTrip(t *testing.T) {
+	raw := []byte(`{
+  "schemaVersion": 1,
+  "versionGroups": [],
+  "targets": [],
+  "fileRules": [{"id": "src", "pattern": "src/", "kind": "recommend", "reason": "source"}],
+  "checkProfiles": [{"id": "unit", "name": "unit", "command": "go test ./...", "required": true, "workingDir": ".", "timeoutSeconds": 60}]
+}`)
+	cfg, err := decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.FileRules) != 1 || cfg.FileRules[0].Kind != RuleRecommend || len(cfg.CheckProfiles) != 1 || !cfg.CheckProfiles[0].Required {
+		t.Fatalf("decoded %+v", cfg)
+	}
+}

@@ -60,9 +60,9 @@ function delayedPreflightFixture() {
   const state = {buildMode:ref('github'), pushRemote:ref(true), createTag:ref(true), versionMode:ref('auto'), gitOnly:ref(false),
     targetChoices:ref({windows:{selected:false,build:false,package:false,publish:true,deploy:false}}),
     preflight:ref(null),remoteName:ref('origin'),versionStrategy:ref('auto'),preReleaseCommand:ref(''),preflightStale:ref(false)}
-  const actions=load(['editedReleaseOptions','applyPreflight','defaultTargetChoice','togglePlatform','toggleGitOnly','setTargetPhase'],{
-    ...state, configuredTargets:ref([target]),normalizePreflight:value=>value,
-    platformRunnableTargets:()=>[target],phaseOptions:ref(['build','package','publish','deploy'].map(key=>({key}))),
+  const actions=load(['editedReleaseOptions','applyPreflight','defaultTargetChoice','togglePlatform','toggleGitOnly','changeReleaseIntent','selectSingleBuildPlatform','setTargetPhase'],{
+    ...state, releaseIntent:ref('formal'), checkingCandidate:ref(false), configuredTargets:ref([target]),normalizePreflight:value=>value,
+    productPlatforms:ref([{id:'windows',targets:[target]}]),platformRunnableTargets:()=>[target],phaseOptions:ref(['build','package','publish','deploy'].map(key=>({key}))),
     phaseAllowed:phase=>state.buildMode.value==='github'?phase==='publish':['build','package'].includes(phase),
     readLocalPreferences:()=>({}), syncVersionInputs(){},setDefaultCommitMessage(){},resetSelection(){},scheduleReleaseNotesDraft(){},
   })
@@ -103,5 +103,20 @@ test('untouched release options still initialize from saved preferences',async()
   assert.equal(f.state.buildMode.value,'local')
   assert.equal(f.state.createTag.value,false)
   assert.equal(f.state.versionMode.value,'manual')
-  assert.equal(f.state.targetChoices.value.windows.selected,false)
+  assert.equal(f.state.targetChoices.value.windows.selected,true)
+})
+
+test('a sole usable build platform defaults on without overriding a manual deselection',()=>{
+  const target={id:'web'}, platform={targets:[target]}, choices=ref({web:{selected:false}}),editedReleaseOptions=new Set()
+  const productPlatforms=ref([platform]),gitOnly=ref(false)
+  const {selectSingleBuildPlatform}=load(['selectSingleBuildPlatform'],{productPlatforms,gitOnly,editedReleaseOptions,targetChoices:choices,platformRunnableTargets:p=>p.targets})
+  selectSingleBuildPlatform();assert.equal(choices.value.web.selected,true)
+  choices.value.web.selected=false;editedReleaseOptions.add('targets')
+  selectSingleBuildPlatform();assert.equal(choices.value.web.selected,false)
+  editedReleaseOptions.clear();gitOnly.value=true
+  selectSingleBuildPlatform();assert.equal(choices.value.web.selected,false)
+  gitOnly.value=false;productPlatforms.value=[platform,{targets:[{id:'mobile'}]}]
+  selectSingleBuildPlatform();assert.equal(choices.value.web.selected,false)
+  productPlatforms.value=[{targets:[]}]
+  selectSingleBuildPlatform();assert.equal(choices.value.web.selected,false)
 })

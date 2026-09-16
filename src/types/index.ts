@@ -284,6 +284,8 @@ export interface ReleaseAutomation {
  * `.launcher/release.yaml`；source/repoRoot/configPath 是只读来源信息。
  */
 export interface ReleaseConfig {
+	fileRules?: ReleaseFileRule[]
+	checkProfiles?: ReleaseCheckProfile[]
   schemaVersion: number
   source?: 'file' | 'detected'
   repoRoot?: string
@@ -313,6 +315,7 @@ export interface ReleaseCommittedFileChange {
 }
 
 export interface ReleasePreflight {
+	classifications?: ReleaseFileClassification[]
   repoRoot: string
   branch: string
   headSha: string
@@ -461,7 +464,11 @@ export interface CloudBuildStatus {
 }
 
 export interface CreateReleaseBody {
-  buildMode: 'github' | 'local'
+  intent?: 'formal' | 'save-progress'
+  candidateId?: string
+  manualDecisions?: ReleaseManualDecision[]
+  sensitiveExceptions?: ReleaseSensitiveException[]
+  buildMode: 'github' | 'local' | 'none'
   targetVersion: string
   versions: Array<{ versionGroupId: string; targetVersion: string }>
   createTag: boolean
@@ -474,6 +481,25 @@ export interface CreateReleaseBody {
   releaseNotesConfirmed: boolean
   statusFingerprint: string
   externalActionsConfirmed: boolean
+}
+
+export type ReleaseFileCategory = 'recommend' | 'local' | 'review' | 'sensitive'
+export interface ReleaseFileRule { id: string; pattern: string; kind: ReleaseFileCategory; reason?: string }
+export interface ReleaseCheckProfile { id: string; name: string; command: string; workingDir?: string; timeoutSeconds?: number; required: boolean; os?: string[]; targetKinds?: string[] }
+export interface ReleaseFileClassification {
+  path: string; oldPath?: string; status: string; tracked: boolean; category: ReleaseFileCategory
+  selectedDefault: boolean; reasons: string[]; sources: string[]; ruleIds?: string[]; group: string
+  contentFingerprint: string; baselineKept: boolean
+}
+export interface ReleaseManualDecision { path: string; decision: 'include' | 'exclude'; contentFingerprint: string; reason?: string }
+export interface ReleaseSensitiveException { path: string; findingFingerprint: string; contentFingerprint: string; reason: string }
+export type ReleaseCandidateRequest = Pick<CreateReleaseBody, 'intent'|'targetVersion'|'versions'|'createTag'|'pushRemote'|'versionMode'|'buildMode'|'selectedTargets'|'selectedPaths'|'statusFingerprint'|'manualDecisions'|'sensitiveExceptions'>
+export interface ReleaseCandidate {
+  id: string; fingerprint: string; status: string; intent: string; accepted: boolean; canFormal: boolean; canSaveProgress: boolean
+  classifications: ReleaseFileClassification[]; selectedPaths: string[]; warnings: string[]; mutationDetected: boolean; treeHash: string
+  sensitiveFindings: Array<{path:string;kind:string;reason:string;line?:number;redacted:string;fingerprint:string;contentFingerprint:string}>
+  dependencyFindings: Array<{path:string;reference:string;missing:string;reason:string;blocked:boolean;suggestion?:string}>
+  checkResults: Array<{id:string;name:string;status:string;reason?:string;log?:string;required:boolean;durationMs?:number}>
 }
 
 /** 配置导出快照 */

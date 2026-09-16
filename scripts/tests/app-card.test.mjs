@@ -54,8 +54,35 @@ test('failed card has a direct icon button for this project log, outside collaps
     assert.deepEqual(calls,['failed-project'])
     assert.ok(nodes.some(el=>el.type==='button'&&el.props['aria-label']==='查看日志'), 'regular log icon remains available')
     assert.ok(nodes.some(el=>el.text==='启动脚本'))
-    assert.equal(nodes.filter(el=>el.props.class==='svc-row').length,2)
+    assert.equal(nodes.filter(el=>el.props.class==='svc-row').length,0, 'configured hints are not discovered services')
     assert.ok(!nodes.some(el=>el.text==='可以重新启动'), 'free port must not make a failed start look successful')
+    const service = (port, role = 'unknown') => ({ id: String(port), port, role, url: `http://localhost:${port}`, health: 'healthy' })
+    const liveServices = [service(9100, 'frontend'), service(18009, 'backend'), service(8081)]
+    fixture.knownServices = [service(8009, 'backend'), ...liveServices]
+    fixture.portHints = [18009, 9100, 8081, 7890]
+    for (const status of ['starting', 'running', 'degraded', 'stopping']) {
+      fixture.status = status
+      fixture.services = liveServices
+      await vue.nextTick()
+      const rendered = all(root)
+      const rows = rendered.filter(el => el.props.class === 'svc-row')
+      assert.equal(rows.length, 3, status + ' counts only current services')
+      const heading = rendered.find(el => el.props.class === 'services-heading')
+      assert.ok(all(heading).some(el => el.text === '3'))
+      const details = rendered.find(el => el.props.class === 'runtime-details')
+      const detailNodes = all(details), detailText = detailNodes.map(el => el.text).join(' ')
+      assert.match(detailText, /8009/)
+      assert.match(detailText, /7890/)
+      assert.ok(!detailNodes.some(el => el.type === 'a'), 'historical and candidate ports are not live links')
+      fixture.services = []
+      await vue.nextTick()
+      assert.equal(all(root).filter(el => el.props.class === 'svc-row').length, 0, status + ' must not fall back to stale ports')
+    }
+    fixture.status = 'stopped'
+    await vue.nextTick()
+    const stoppedRows = all(root).filter(el => el.props.class === 'svc-row')
+    assert.equal(stoppedRows.length, 4, 'last-known addresses remain available after stopping')
+    assert.ok(stoppedRows.every(el => all(el).some(n => n.text === '上次发现')))
     for (const state of ['checking', 'unknown', 'running', 'conflict']) {
       fixture.runtimeCheck = { state, message: 'Runtime check fixture', conflicts: state === 'conflict' ? [{port:3000,pid:99,name:'other.exe'}] : [] }
       fixture.status = state === 'running' ? 'running' : state === 'conflict' ? 'stopped' : state

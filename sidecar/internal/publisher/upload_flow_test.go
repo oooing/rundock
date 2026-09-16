@@ -40,7 +40,7 @@ func TestUploadFailureKeepsLocalReleaseWithoutRemotePrecheck(t *testing.T) {
 				t.Fatal(err)
 			}
 			yes := true
-			run, err := svc.Start(context.Background(), "app1", CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto", TargetVersion: pf.SuggestedVersion, SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true})
+			run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{CreateTag: &yes, PushRemote: &yes, VersionMode: "auto", TargetVersion: pf.SuggestedVersion, SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true}))
 			if err != nil {
 				t.Fatalf("upload prevented creation of local release: %v", err)
 			}

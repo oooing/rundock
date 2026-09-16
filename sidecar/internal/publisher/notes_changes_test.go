@@ -2,11 +2,47 @@ package publisher
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDraftNotesLargeSelection(t *testing.T) {
+	svc, repo, cleanup := newReleaseFixture(t)
+	defer cleanup()
+	prepareNoteDirectories(t, repo)
+	writeTestFile(t, filepath.Join(repo, "src/components/ReleaseModal.vue"), "const original = true\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "baseline")
+	runGit(t, repo, "tag", "v1.0.0")
+	selected := []string{}
+	for i := 0; i < 450; i++ {
+		name := fmt.Sprintf("docs/%04d-%s.md", i, strings.Repeat("reference", 10))
+		writeTestFile(t, filepath.Join(repo, name), "Local documentation\n")
+		selected = append(selected, name)
+	}
+	// This tracked change lands after several batches of untracked documents.
+	selected = append(selected, "src/components/ReleaseModal.vue")
+	writeTestFile(t, filepath.Join(repo, "src/components/ReleaseModal.vue"), "const releaseNotes = true\n")
+	writeTestFile(t, filepath.Join(repo, "src/download.ts"), "const download = true\n")
+	before := runGit(t, repo, "status", "--porcelain=v1", "-uall")
+	pf, err := svc.PreflightLocal(context.Background(), "app1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := svc.DraftReleaseNotes(context.Background(), "app1", NotesDraftRequest{StatusFingerprint: pf.StatusFingerprint, SelectedPaths: selected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(draft.Text, "调整更新说明的生成与编辑") || strings.Contains(draft.Text, "下载") {
+		t.Fatal(draft.Text)
+	}
+	if after := runGit(t, repo, "status", "--porcelain=v1", "-uall"); before != after {
+		t.Fatal("draft changed repository")
+	}
+}
 
 func prepareNoteDirectories(t *testing.T, repo string) {
 	t.Helper()

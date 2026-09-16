@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/launcher-sidecar/internal/diagnostics"
@@ -17,7 +18,7 @@ func writePublisherError(w http.ResponseWriter, err error) {
 		status := http.StatusBadRequest
 		if pe.Code == "app_not_found" || pe.Code == "release_not_found" {
 			status = http.StatusNotFound
-		} else if pe.Code == "status_changed" || pe.Code == "release_in_progress" || pe.Code == "tag_exists" || pe.Code == "staged_changes" || pe.Code == "version_plan_changed" {
+		} else if pe.Code == "status_changed" || pe.Code == "release_in_progress" || pe.Code == "tag_exists" || pe.Code == "staged_changes" || pe.Code == "version_plan_changed" || pe.Code == "candidate_stale" {
 			status = http.StatusConflict
 		}
 		body := map[string]any{"error": pe.Message, "code": pe.Code}
@@ -191,6 +192,71 @@ func (s *Server) recordPublisherFailure(appID, operation string, err error, dura
 		Operation: operation, Status: "failed", DurationMS: duration.Milliseconds(),
 		ErrorCode: code, Message: message,
 	})
+}
+
+func (s *Server) handleAppReleasePrep(w http.ResponseWriter, r *http.Request) {
+	appID, rest := pathTail("/api/apps/", r.URL.Path)
+	switch {
+	case rest == "release/candidate" || strings.HasPrefix(rest, "release/candidate/"):
+		s.handleReleaseCandidate(w, r, appID, strings.TrimPrefix(rest, "release/candidate"))
+	default:
+		s.handleAppDetail(w, r)
+	}
+}
+
+func (s *Server) handleReleaseCandidate(w http.ResponseWriter, r *http.Request, appID, rest string) {
+	rest = strings.TrimPrefix(rest, "/")
+	switch {
+	case rest != "" && r.Method == http.MethodGet:
+		view, err := s.Publisher.GetCandidate(appID, rest)
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	case rest == "" && r.Method == http.MethodPost:
+		var body publisher.CandidateRequest
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+			return
+		}
+		view, err := s.Publisher.PrepareCandidate(r.Context(), appID, body)
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	case rest == "check" && r.Method == http.MethodPost:
+		var body struct {
+			CandidateID string `json:"candidateId"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+			return
+		}
+		view, err := s.Publisher.RunCandidateChecks(r.Context(), appID, body.CandidateID)
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	case rest == "cancel" && r.Method == http.MethodPost:
+		var body struct {
+			CandidateID string `json:"candidateId"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+			return
+		}
+		view, err := s.Publisher.CancelCandidate(appID, body.CandidateID)
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *Server) handleReleaseDetail(w http.ResponseWriter, r *http.Request) {

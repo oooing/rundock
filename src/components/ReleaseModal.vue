@@ -4,6 +4,10 @@ import { tr } from '@/i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/http'
 import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
+import ReleaseSafetyPanel from './ReleaseSafetyPanel.vue'
+import ReleaseSafetySettings from './ReleaseSafetySettings.vue'
+import { reconcileReleaseSelection, recommendedReleaseSelection } from '@/utils/releaseSafety'
+import type { ReleaseCandidate, ReleaseCandidateRequest, ReleaseManualDecision, ReleaseFileClassification, ReleaseFileRule, ReleaseCheckProfile } from '@/types'
 import ReleaseVersionChange from './ReleaseVersionChange.vue'
 import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
 import { releaseContentState } from '@/utils/releaseContent'
@@ -50,6 +54,7 @@ const phaseOptions = computed<Array<{ key: ExecutionPhase; label: string; hint: 
 const loading = ref(true)
 const savingProfile = ref(false)
 const publishing = ref(false)
+const autoSubmitting = ref(false)
 const unstaging = ref(false)
 const unstageNotice = ref('')
 const error = ref('')
@@ -58,6 +63,99 @@ const versionPlanNotice = ref('')
 const preflight = ref<ReleasePreflight | null>(null)
 const history = ref<ReleaseRun[]>([])
 const selected = ref<Record<string, boolean>>({})
+const releaseIntent = ref<'formal'|'save-progress'>('formal')
+const manualDecisions = ref<ReleaseManualDecision[]>([])
+const sensitiveExceptions = ref<NonNullable<ReleaseCandidateRequest['sensitiveExceptions']>>([])
+const candidate = ref<ReleaseCandidate|null>(null)
+const checkingCandidate = ref(false)
+const candidateSignature = ref('')
+const safetySettingsDirty = ref(false)
+let candidatePoll: ReturnType<typeof setTimeout>|null = null
+let candidateEpoch = 0
+let candidateAbort:AbortController|null = null
+const safetyFiles = computed(()=>candidate.value && !candidateStale.value ? candidate.value.classifications : preflight.value?.classifications || [])
+const candidateRequest = computed<ReleaseCandidateRequest>(()=>({
+  intent:releaseIntent.value, statusFingerprint:preflight.value?.statusFingerprint||'', selectedPaths:selectedPaths.value,
+  manualDecisions:manualDecisions.value, sensitiveExceptions:sensitiveExceptions.value, targetVersion:createTag.value?primaryTargetVersion.value:'',
+  versions:createTag.value?plannedVersions.value.map(version=>({versionGroupId:version.versionGroupId,targetVersion:version.targetVersion})):[],
+  createTag:createTag.value, pushRemote:pushRemote.value, versionMode:versionMode.value,
+  buildMode:gitOnly.value?'none':buildMode.value, selectedTargets:selectedTargets.value,
+}))
+const currentCandidateSignature = computed(()=>JSON.stringify(candidateRequest.value))
+const submissionPlanSignature = computed(()=>{
+  const {statusFingerprint: _statusFingerprint, ...plan} = candidateRequest.value
+  return JSON.stringify({plan, commitMessage:commitMessage.value, releaseNotes:createTag.value?releaseNotes.value:''})
+})
+const candidateStale = computed(()=>!!candidate.value && candidateSignature.value!==currentCandidateSignature.value)
+const candidateReady = computed(()=>!checkingCandidate.value && !candidateStale.value && !!candidate.value && (releaseIntent.value==='formal'?candidate.value.accepted:candidate.value.canSaveProgress && candidate.value.status==='ready'))
+function chooseSafetyFile(file:ReleaseFileClassification,included:boolean){
+  if(file.category==='sensitive' && included)return
+  selected.value={...selected.value,[file.path]:included}
+  manualDecisions.value=[...manualDecisions.value.filter(item=>item.path!==file.path),{path:file.path,decision:included?'include':'exclude',contentFingerprint:file.contentFingerprint}]
+}
+function adoptRecommended(){selected.value=recommendedReleaseSelection(safetyFiles.value);manualDecisions.value=[]}
+function recordSensitiveException(finding:ReleaseCandidate['sensitiveFindings'][number],reason:string){
+  sensitiveExceptions.value=[...sensitiveExceptions.value.filter(item=>item.findingFingerprint!==finding.fingerprint),{path:finding.path,findingFingerprint:finding.fingerprint,contentFingerprint:finding.contentFingerprint,reason:reason.trim()}]
+  void inspectCandidate()
+}
+function changeReleaseIntent(intent:'formal'|'save-progress'){
+  if (checkingCandidate.value) return
+  const enteringRelease = intent==='formal' && releaseIntent.value!==intent
+  editedReleaseOptions.add('targets');editedReleaseOptions.add('tag');editedReleaseOptions.add('version')
+  releaseIntent.value=intent
+  gitOnly.value=intent==='save-progress'
+  if(intent==='save-progress'){
+    editedReleaseOptions.add('targets');editedReleaseOptions.add('push');editedReleaseOptions.add('tag');editedReleaseOptions.add('version')
+    gitOnly.value=true;createTag.value=false;pushRemote.value=false
+    for (const choice of Object.values(targetChoices.value)) choice.selected = false
+  }else{versionMode.value='auto';createTag.value=true}
+  if (enteringRelease) selectSingleBuildPlatform(true)
+  setDefaultCommitMessage()
+}
+async function refreshSafety(){
+  try{applyPreflight(await api.releasePreflight(props.app.id,false),false,true)}catch(reason){error.value=messageOf(reason)}
+}
+async function inspectCandidate(){
+  if(checkingCandidate.value || !preflight.value)return false
+  checkingCandidate.value=true;error.value='';const epoch=++candidateEpoch
+  const controller=new AbortController();candidateAbort=controller
+  try{
+    await api.saveReleaseProfile(props.app.id,profileBody())
+    if(disposed || epoch!==candidateEpoch)return false
+    const fresh=await api.releasePreflight(props.app.id,false)
+    if(disposed || epoch!==candidateEpoch)return false
+    applyPreflight(fresh,false,true)
+    const request=JSON.parse(JSON.stringify(candidateRequest.value)) as ReleaseCandidateRequest
+    const signature=JSON.stringify(request)
+    const prepared=await api.prepareReleaseCandidate(props.app.id,request,controller.signal)
+    if(disposed || epoch!==candidateEpoch)return false
+    candidate.value=prepared;candidateSignature.value=signature
+    if(request.intent==='save-progress')return prepared.canSaveProgress && prepared.status==='ready'
+    if(prepared.sensitiveFindings.length || prepared.dependencyFindings.some(item=>item.blocked))return false
+    candidate.value={...prepared,status:'running'}
+    const poll=async()=>{try{const view=await api.getReleaseCandidate(props.app.id,prepared.id);if(checkingCandidate.value && epoch===candidateEpoch && !disposed)candidate.value=view}catch{}finally{if(checkingCandidate.value && epoch===candidateEpoch && !disposed)candidatePoll=setTimeout(poll,800)}}
+    candidatePoll=setTimeout(poll,800)
+    const checked=await api.checkReleaseCandidate(props.app.id,prepared.id)
+    if(disposed || epoch!==candidateEpoch)return false
+    candidate.value=checked
+    return checked.accepted
+  }catch(reason){if(!disposed && epoch===candidateEpoch){error.value=messageOf(reason);if(candidate.value)candidate.value={...candidate.value,status:'stale',accepted:false,canSaveProgress:false}};return false}
+  finally{if(epoch===candidateEpoch){candidateAbort=null;checkingCandidate.value=false;if(candidatePoll)clearTimeout(candidatePoll)}}
+}
+async function cancelCandidate(){
+  const epoch=++candidateEpoch
+  candidateAbort?.abort();candidateAbort=null
+  if(candidatePoll)clearTimeout(candidatePoll)
+  if(candidate.value){try{const view=await api.cancelReleaseCandidate(props.app.id,candidate.value.id);if(!disposed && epoch===candidateEpoch)candidate.value=view}catch(reason){if(!disposed && epoch===candidateEpoch)error.value=messageOf(reason)}}
+  if(!disposed && epoch===candidateEpoch)checkingCandidate.value=false
+}
+async function saveSafetyConfig(rules:ReleaseFileRule[],checks:ReleaseCheckProfile[]){
+  if(!releaseConfig.value)return
+  configSaving.value=true
+  try{const saved=await api.saveReleaseConfig(props.app.id,{...releaseConfig.value,fileRules:rules,checkProfiles:checks});applyReleaseConfig(saved);await refreshSafety()}
+  catch(reason){error.value=messageOf(reason)}finally{configSaving.value=false}
+}
+
 const versionInputs = ref<Record<string, string>>({})
 const commitMessage = ref('')
 const commitMessageDirty = ref(false)
@@ -128,7 +226,7 @@ const orderedChanges = computed(() => {
   return [...changes.filter(isAddedFile), ...changes.filter((file) => !isAddedFile(file))]
 })
 const newFiles = computed(() => preflight.value?.changes.filter(isAddedFile) || [])
-const unselectedNewFiles = computed(() => newFiles.value.filter((file) => !selected.value[file.path]))
+
 const allFilesSelected = computed(() => !!preflight.value?.changes.length && preflight.value.changes.every((file) => selected.value[file.path]))
 const configuredTargets = computed(() => releaseConfig.value?.targets || [])
 const chosenTargets = computed(() => configuredTargets.value
@@ -284,13 +382,15 @@ const blockingIssues = computed(() => (preflight.value?.blockingIssues || []).fi
 const localChecksPassed = computed(() => !!preflight.value && !blockingIssues.value.length
   && (preflight.value.canRelease || preflight.value.blockingIssues.length > 0))
 const remoteMissing = computed(() => pushRemote.value && !!preflight.value && !preflight.value.remotes.includes(remoteName.value))
-const canPublish = computed(() => {
+const canSubmit = computed(() => {
+  if (safetySettingsDirty.value) return false
   if (unstaging.value || configFileDirty.value || configEditorOpen.value || configSaving.value) return false
   if (!localChecksPassed.value || remoteMissing.value || savingProfile.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
   if (createTag.value && (!versionValid.value || releaseNotesLoading.value || (releaseNotesStale.value && !releaseNotesDirty.value) || !releaseNotes.value.trim())) return false
   if (newContentState.value !== 'new') return false
   return targetSelectionValid.value
 })
+const canPublish = computed(() => candidateReady.value && canSubmit.value)
 function canRetryRun(run: ReleaseRun | null | undefined) {
   return !!run && run.status === 'failed' && !!run.commitSha && run.errorCode !== 'build_changed_tree' && [
     'tagging', 'pushing_branch', 'pushing_tag', 'building_targets', 'publishing_targets',
@@ -568,11 +668,19 @@ function togglePlatform(platform: ProductPlatform, checked: boolean) {
   }
 }
 
+function selectSingleBuildPlatform(enteringRelease = false) {
+  if (gitOnly.value || (!enteringRelease && editedReleaseOptions.has('targets'))) return
+  if (Object.values(targetChoices.value).some(choice => choice.selected)) return
+  const available = productPlatforms.value.filter(platform => platformRunnableTargets(platform).length > 0)
+  if (available.length !== 1) return
+  for (const target of platformRunnableTargets(available[0])) {
+    const choice = targetChoices.value[target.id]
+    if (choice) choice.selected = true
+  }
+}
+
 function toggleGitOnly(checked: boolean) {
-  editedReleaseOptions.add('targets')
-  gitOnly.value = checked
-  if (!checked) return
-  for (const choice of Object.values(targetChoices.value)) choice.selected = false
+  changeReleaseIntent(checked ? 'save-progress' : 'formal')
 }
 
 const stageLabel = computed<Record<string, string>>(() => ({
@@ -697,6 +805,8 @@ function normalizeConfig(raw: ReleaseConfig): ReleaseConfig {
         ...(file.jsonPointer ? { jsonPointer: file.jsonPointer } : {}),
       })),
     })),
+    fileRules: raw.fileRules || [],
+    checkProfiles: raw.checkProfiles || [],
     targets: (raw.targets || []).map((target) => ({
       id: target.id || `target-${Date.now()}`,
       name: target.name || target.id || tr("未命名目标"),
@@ -773,13 +883,14 @@ function applyReleaseConfig(raw: ReleaseConfig, editing = false) {
   for (const target of normalized.targets) next[target.id] = targetChoices.value[target.id] || defaultTargetChoice(target)
   targetChoices.value = next
   if (!normalized.targets.length) gitOnly.value = true
+  selectSingleBuildPlatform()
   configEditorOpen.value = editing
 }
 
 function resetSelection(pf: ReleasePreflight) {
-  const next: Record<string, boolean> = {}
-  for (const file of pf.changes || []) next[file.path] = file.tracked
-  selected.value = next
+  const reconciled = reconcileReleaseSelection(pf.classifications || [], manualDecisions.value)
+  selected.value = reconciled.selected
+  manualDecisions.value = reconciled.decisions
 }
 
 function fileStatusLabel(file: ReleaseFileChange) {
@@ -917,6 +1028,7 @@ function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = tru
     if (!keepTargets) {
       buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github'
       for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
+      selectSingleBuildPlatform()
     }
     if (!keepTargets && !editedReleaseOptions.has('push')) pushRemote.value = buildMode.value === 'local' && !gitOnly.value ? false : (typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true)
     if (!editedReleaseOptions.has('tag')) createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true)
@@ -1123,7 +1235,7 @@ async function saveReleaseConfig() {
 }
 
 async function switchReleaseTab(tab: ReleaseTab, focus = false) {
-  if (publishing.value || activeRun.value) return
+  if (publishing.value || autoSubmitting.value || activeRun.value) return
   if (bodyRef.value) tabScroll[releaseTab.value] = bodyRef.value.scrollTop
   releaseTab.value = tab
   await nextTick()
@@ -1192,6 +1304,29 @@ function setRunnerOS(target: ReleaseTarget, os: string, checked: boolean) {
 }
 function setArtifacts(target: ReleaseTarget, value: string) { target.artifacts = value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }
 
+async function submitRelease() {
+  if (!canSubmit.value || autoSubmitting.value || checkingCandidate.value || disposed) return
+  autoSubmitting.value = true
+  const confirmedPlan = submissionPlanSignature.value
+  let stopped = true
+  try {
+    const checked = await inspectCandidate()
+    if (!checked || disposed || !candidateReady.value) return
+    if (confirmedPlan !== submissionPlanSignature.value || !canPublish.value) {
+      error.value = tr('发布内容已变化，请核对后再次确认。')
+      return
+    }
+    await publish()
+    stopped = false
+  } finally {
+    autoSubmitting.value = false
+    if (stopped && !disposed) {
+      await nextTick()
+      bodyRef.value?.querySelector('.candidate-result')?.scrollIntoView({block:'center'})
+    }
+  }
+}
+
 async function publish() {
   const pf = preflight.value
   if (!pf || !canPublish.value) return
@@ -1203,10 +1338,11 @@ async function publish() {
     await api.saveReleaseProfile(props.app.id, profileBody())
     rememberReleaseSession({ appId: props.app.id, submittedAt: Date.now() })
     const run = await api.createRelease(props.app.id, {
+      ...candidateRequest.value, candidateId:candidate.value?.id,
       targetVersion: createTag.value ? primaryTargetVersion.value : '',
       versions: createTag.value ? plannedVersions.value.map((version) => ({ versionGroupId: version.versionGroupId, targetVersion: version.targetVersion })) : [],
       createTag: createTag.value, versionMode: versionMode.value,
-      buildMode: buildMode.value, pushRemote: pushRemote.value,
+      buildMode: gitOnly.value ? 'none' : buildMode.value, pushRemote: pushRemote.value,
       selectedTargets: selectedTargets.value, selectedPaths: selectedPaths.value, commitMessage: commitMessage.value, statusFingerprint: pf.statusFingerprint,
       releaseNotes: createTag.value ? releaseNotes.value.trim() : '',
       releaseNotesConfirmed: createTag.value,
@@ -1231,6 +1367,7 @@ async function publish() {
 }
 
 function prepareLocalCommit() {
+  changeReleaseIntent('save-progress')
   // Change the visible plan only. The normal submit button remains the final action.
   gitOnly.value = true
   createTag.value = false
@@ -1340,6 +1477,7 @@ async function confirmSensitiveAction() {
   else if (action === 'regenerate-notes') await generateReleaseNotesDraft(true, true)
 }
 function startNew() {
+  candidate.value=null;candidateSignature.value=''
   if (pollTimer) clearTimeout(pollTimer)
   rememberReleaseSession({ appId: props.app.id })
   confirmAction.value = null
@@ -1361,6 +1499,10 @@ function startNew() {
   void load(false)
 }
 
+watch([releaseIntent,gitOnly,createTag],()=>{
+  gitOnly.value=releaseIntent.value==='save-progress'
+  createTag.value=releaseIntent.value==='formal'
+},{flush:'sync'})
 watch([buildMode, createTag, versionMode, pushRemote], rememberPreferences)
 watch(gitOnly, value => { if (!value && buildMode.value === 'local') pushRemote.value = false })
 watch(pushRemote, () => {
@@ -1389,7 +1531,10 @@ onMounted(() => {
   void load()
 })
 onBeforeUnmount(() => {
+  candidateAbort?.abort()
   disposed = true
+  if(checkingCandidate.value)void cancelCandidate()
+  if(candidatePoll)clearTimeout(candidatePoll)
   if (activeRun.value?.status === 'succeeded') rememberReleaseSession({ appId: props.app.id })
   if (pollTimer) clearTimeout(pollTimer)
   if (preferenceTimer) {
@@ -1410,11 +1555,11 @@ onBeforeUnmount(() => {
       </header>
 
       <nav v-if="!activeRun" class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onReleaseTabKeydown">
-        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="releaseTab === 'publish'" :tabindex="releaseTab === 'publish' ? 0 : -1" :disabled="publishing" @click="switchReleaseTab('publish')">{{ tr('发布') }}</button>
-        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="releaseTab === 'settings'" :tabindex="releaseTab === 'settings' ? 0 : -1" :disabled="publishing" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
+        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="releaseTab === 'publish'" :tabindex="releaseTab === 'publish' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchReleaseTab('publish')">{{ tr('发布') }}</button>
+        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="releaseTab === 'settings'" :tabindex="releaseTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
       </nav>
 
-      <div ref="bodyRef" class="m-body" :inert="publishing">
+      <div ref="bodyRef" class="m-body" :inert="publishing || autoSubmitting">
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
         <div v-if="error" class="alert error" role="alert">{{ error }}</div>
         <div v-if="versionPlanNotice" class="alert warn" role="status">{{ versionPlanNotice }}</div>
@@ -1449,7 +1594,12 @@ onBeforeUnmount(() => {
         </template>
 
         <section v-else-if="(preflight || releaseConfig) && !loading" v-show="releaseTab === 'publish'" id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="release-panel" tabindex="0">
-          <div class="release-mode-summary"><span>{{ gitOnly ? tr('仅提交代码') : buildMode === 'github' ? tr('GitHub 云端构建') : tr('本地构建') }}</span><button type="button" @click="switchReleaseTab('settings', true)">{{ tr('调整设置') }}</button></div>
+          <div class="intent-choice" :aria-label="tr('本次目的')"><button :class="{chosen:releaseIntent==='save-progress'}" :disabled="checkingCandidate" @click="changeReleaseIntent('save-progress')">{{tr('仅提交代码')}}</button><button :class="{chosen:releaseIntent==='formal'}" :disabled="checkingCandidate" @click="changeReleaseIntent('formal')">{{tr('发布版本')}}</button></div>
+          <p v-if="releaseIntent==='save-progress'" class="section-help">{{tr('只提交所选代码，不改版本、不创建 Tag、不构建或部署。')}}</p>
+          <label v-if="releaseIntent==='save-progress'" class="plain-check"><input v-model="pushRemote" type="checkbox" @change="editedReleaseOptions.add('push')" />{{tr('提交后上传')}}</label>
+          <p v-if="releaseIntent==='save-progress' && pushRemote" class="section-help">{{tr('上传可能触发仓库已有 CI。')}}</p>
+          <label v-if="releaseIntent==='save-progress'" class="full-label">{{tr('提交说明')}}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
+          <div v-if="releaseIntent==='formal'" class="release-mode-summary"><span>{{ gitOnly ? tr('仅提交代码') : buildMode === 'github' ? tr('GitHub 云端构建') : tr('本地构建') }}</span><button type="button" @click="switchReleaseTab('settings', true)">{{ tr('调整设置') }}</button></div>
           <div v-if="configFileDirty || configEditorOpen" class="alert warn settings-edit-hint">{{ tr('设置有未保存的修改，请先保存或取消修改。') }}<button type="button" @click="switchReleaseTab('settings', true)">{{ tr('前往设置') }}</button></div>
           <section v-if="blockingIssues.length" class="issues">
             <div v-for="issue in blockingIssues" :key="issue.code" class="alert" :class="issue.code === 'staged_changes' ? 'warn staged-issue' : 'error'">
@@ -1464,7 +1614,7 @@ onBeforeUnmount(() => {
           <div v-if="unstageNotice" class="alert info" role="status">{{ unstageNotice }}</div>
           <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
 
-          <section ref="platformSectionRef" class="platform-section" tabindex="-1" :aria-label="tr('选择构建端')">
+          <section v-if="releaseIntent==='formal'" ref="platformSectionRef" class="platform-section" tabindex="-1" :aria-label="tr('选择构建端')">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
             <div class="platform-grid">
               <article v-for="platform in productPlatforms" :key="platform.id" class="platform-card version-platform-card" :aria-label="platform.name"
@@ -1478,19 +1628,13 @@ onBeforeUnmount(() => {
                   <span v-if="!gitOnly && (platformSelected(platform) || platformPartiallySelected(platform))" class="chosen-mark">✓</span>
                 </button>
               </article>
-              <article class="platform-card git-card version-platform-card" :class="{ selected: gitOnly }" :aria-label="tr('仅提交代码')">
-                <button type="button" class="platform-select" :aria-pressed="gitOnly" @click="toggleGitOnly(!gitOnly)">
-                  <span class="platform-icon">⑂</span>
-                  <span class="platform-copy"><strong>{{ tr('仅提交代码') }}</strong><small>{{ createTag ? tr('同时创建 Tag') : tr('不创建 Tag') }}</small></span>
-                  <span v-if="gitOnly" class="chosen-mark">✓</span>
-                </button>
-              </article>
+
             </div>
           </section>
 
           <template v-if="preflight">
-          <section class="block release-versions" :aria-label="tr('发布版本')">
-            <div class="tag-switch-row"><h3>{{ tr('发布版本') }}</h3><label class="push-choice"><span>{{ tr('创建版本 Tag') }}</span><input :aria-label="tr('创建版本 Tag')" v-model="createTag" type="checkbox" @change="onCreateTagChange" /></label></div>
+          <section v-if="releaseIntent==='formal'" class="block release-versions" :aria-label="tr('发布版本')">
+            <div class="tag-switch-row"><h3>{{ tr('发布版本') }}</h3><small>{{ tr('创建版本 Tag') }}</small></div>
             <template v-if="createTag">
               <div class="choice-picker version-mode-picker" role="radiogroup" :aria-label="tr('版本规则')">
                 <label class="choice-option" :class="{ selected: versionMode === 'auto' }"><input v-model="versionMode" type="radio" name="release-version-mode" value="auto" @change="onVersionModeChange" /><span><strong>{{ tr('自动递增') }}</strong></span></label>
@@ -1504,23 +1648,8 @@ onBeforeUnmount(() => {
             <p v-else class="section-help">{{ tr('不创建版本 Tag') }}</p>
           </section>
 
-          <section class="file-picker">
-            <div class="section-head file-picker-head">
-              <h3>{{ tr("选择提交文件") }}</h3>
-              <div v-if="preflight.changes.length" class="file-actions">
-                <span>{{ tr("已选") }} {{ selectedPaths.length }} / {{ preflight.changes.length }}</span>
-                <button type="button" @click="selectAllFiles(!allFilesSelected)">{{ allFilesSelected ? tr("取消全选") : tr("全选") }}</button>
-              </div>
-            </div>
-            <div v-if="unselectedNewFiles.length" class="alert warn file-warning">{{ tr('还有 {0} 个新增文件未勾选，发布后远端不会包含这些文件。', [unselectedNewFiles.length]) }}</div>
-            <div v-if="!preflight.changes.length" class="muted">{{ tr("当前没有代码变更。创建 Tag 时，版本文件仍会自动更新并提交。") }}</div>
-            <div v-else class="file-list">
-              <label v-for="file in orderedChanges" :key="file.path" class="file-row" :class="{ unselected: !selected[file.path] }">
-                <input v-model="selected[file.path]" type="checkbox" :disabled="file.staged" />
-                <span class="file-status" :class="{ added: !file.tracked }">{{ fileStatusLabel(file) }}</span>
-                <code :title="file.path">{{ file.path }}</code>
-              </label>
-            </div>
+          <ReleaseSafetyPanel :intent="releaseIntent" :cloud-build="buildMode==='github'" :files="safetyFiles" :selected="selected" :decisions="manualDecisions" :candidate="candidate" :busy="checkingCandidate" :stale="candidateStale" @choose="chooseSafetyFile" @recommend="adoptRecommended" @cancel="cancelCandidate" @refresh="refreshSafety" @exception="recordSensitiveException" />
+          <section v-if="preflight.aheadCount" class="file-picker">
             <details v-if="preflight.aheadCount" class="unpushed-files">
               <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>
               <div class="unpushed-note">{{ tr("这些文件已经提交，所以不会出现在上面的待提交列表中。") }}</div>
@@ -1561,16 +1690,16 @@ onBeforeUnmount(() => {
             <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">{{ tr("所选云端构建由 Tag 触发，请开启“创建版本 Tag”。") }}</div>
             <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">{{ tr("云端构建必须上传到 GitHub。") }}</div>
             <div v-else-if="invalidChosenTargetIds.length" class="alert warn">{{ tr("请为高级目标选择操作，或改为“仅提交代码”。") }}</div>
-            <div v-else-if="targetSelectionMissing" class="alert warn target-selection-hint"><span>{{ tr("请选择发布平台或“仅提交代码”。") }}</span><button type="button" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button><button type="button" @click="toggleGitOnly(true)">{{ tr('仅提交代码') }}</button></div>
+            <div v-else-if="targetSelectionMissing" class="alert warn target-selection-hint"><span>{{ tr("请选择构建端；只需保存代码时，选择顶部的“仅提交代码”。") }}</span><button type="button" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button></div>
           </section>
           <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
           </template>
           <div v-else class="state panel-detail-loading">{{ tr("正在读取版本和代码变更…") }}</div>
         </section>
         <section v-if="!activeRun && !loading" v-show="releaseTab === 'settings'" id="release-panel-settings" role="tabpanel" aria-labelledby="release-tab-settings" class="release-panel settings-panel" tabindex="0">
-          <div class="settings-intro"><h3>{{ tr('设置') }}</h3><p>{{ tr('配置构建方式、版本规则和发布目标，完成后返回发布。') }}</p></div>
+          <div class="settings-intro"><h3>{{ tr('设置') }}</h3><p>{{ releaseIntent==='formal' ? tr('配置构建方式、版本规则和发布目标，完成后返回发布。') : tr('仅提交代码无需配置构建。文件规则可按需调整。') }}</p></div>
           <template v-if="preflight">
-          <section class="block build-mode-section">
+          <section v-if="releaseIntent==='formal'" class="block build-mode-section">
             <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
             <div class="choice-picker" role="radiogroup" :aria-label="tr('构建位置')">
               <label class="choice-option" :class="{ selected: buildMode === 'github' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'github'" :aria-label="tr('GitHub 云端构建')" @change="changeBuildMode('github')" /><span><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></span></label>
@@ -1579,14 +1708,13 @@ onBeforeUnmount(() => {
             <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地模式只执行检查、构建和打包，需要本机已安装项目依赖。') }}</p>
           </section>
 
-          <section class="block upload-settings">
+          <section v-if="releaseIntent==='formal'" class="block upload-settings">
             <h3>{{ tr('提交与上传') }}</h3>
             <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
               <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" @change="editedReleaseOptions.add('push')" />
               <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
             </label>
             <div class="button-row">
-              <button v-if="pushRemote || !gitOnly || createTag" :disabled="publishing" @click="prepareLocalCommit">{{ tr('仅提交到本机') }}</button>
             </div>
           </section>
           <section class="repo-card">
@@ -1594,7 +1722,10 @@ onBeforeUnmount(() => {
             <div class="kv"><span>{{ tr("远程地址") }}</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>{{ tr("仓库通用 Tag（不含平台 Tag）") }}</span><code>{{ preflight.latestTag || tr("还没有版本 Tag") }}</code></div>
           </section>
 
-          <section class="block config-section">
+          <details class="advanced"><summary>{{tr('高级：文件规则与检查')}}</summary>
+          <ReleaseSafetySettings v-if="releaseConfig" :code-only="releaseIntent==='save-progress'" :config="releaseConfig" :files="safetyFiles" :busy="configSaving || configEditorOpen || configFileDirty" @save="saveSafetyConfig" @dirty="safetySettingsDirty=$event" />
+          </details>
+          <section v-if="releaseIntent==='formal'" class="block config-section">
             <div class="section-head">
               <div><h3>{{ tr("发布目标") }}</h3><div class="section-help">{{ tr("自动识别项目；日常发布只需勾选本次要处理的平台。") }}</div></div>
               <div v-if="configEndpointAvailable" class="toolbar"><button @click="scanReleaseConfig" :disabled="configScanning || configSaving || configEditorOpen || configFileOpen">{{ configScanning ? tr("识别中…") : tr("重新自动识别") }}</button><button @click="openConfigEditor" :disabled="configSaving || configEditorOpen || configFileOpen">{{ configEditorOpen ? tr("正在配置") : tr("修改配置") }}</button></div>
@@ -1628,7 +1759,7 @@ onBeforeUnmount(() => {
 
             <template v-else-if="releaseConfig?.targets.length">
               <div v-if="configNeedsSaving" class="setup-callout"><span>{{ tr("当前使用自动识别结果；需要调整时再保存配置。") }}</span><button class="primary" @click="openConfigEditor">{{ tr("修改并保存") }}</button></div>
-              <label class="git-only-choice"><input type="checkbox" :checked="gitOnly" @change="toggleGitOnly(($event.target as HTMLInputElement).checked)" />{{ tr("本次仅提交代码 / 创建 Tag，不执行任何平台构建") }}</label>
+
               <div class="target-list">
                 <article v-for="target in releaseConfig.targets" :key="target.id" class="target-card" :class="{ disabled: !targetAvailable(target) || gitOnly, selected: !gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected, invalid: invalidChosenTargetIds.includes(target.id) }">
                   <header class="target-head"><label class="target-select"><input type="checkbox" :checked="!gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected" :disabled="gitOnly || !targetAvailable(target)" @change="setTargetSelected(target.id, ($event.target as HTMLInputElement).checked)" /><span><strong>{{ target.name }}</strong><small>{{ target.kind }} · {{ versionGroupName(target) }}</small></span></label><span v-if="target.detected" class="detected-badge">{{ tr("自动识别") }}</span></header>
@@ -1642,9 +1773,9 @@ onBeforeUnmount(() => {
             <div v-else-if="configEndpointAvailable" class="empty-config"><p>{{ tr("还没有配置 PC、Web、Android 或服务端等发布目标。") }}</p><button class="primary" :disabled="configScanning" @click="scanReleaseConfig">{{ configScanning ? tr("正在分析项目…") : tr("一键自动识别项目") }}</button></div>
           </section>
 
-          <section class="block"><h3>{{ tr("Git 与检查设置") }}</h3><div class="form-grid"><label>{{ tr("远程仓库") }}<select v-model="remoteName"><option v-for="remote in preflight.remotes" :key="remote" :value="remote">{{ remote }}</option></select></label><label>{{ tr("版本文件识别") }}<select v-model="versionStrategy"><option value="auto">{{ tr("自动识别") }}</option><option value="tauri">Tauri</option><option value="node">Node</option><option value="manual">{{ tr("不自动修改") }}</option></select></label></div><details class="advanced compact"><summary>{{ tr("高级：通用发布前检查命令") }}</summary><label class="full-label">{{ tr("命令（可选）") }}<small v-if="buildMode === 'github'">{{ tr('此命令只在本地模式执行') }}</small><input :disabled="buildMode === 'github'" v-model="preReleaseCommand" :placeholder="tr('例如 npm test')" /></label></details><button @click="saveAndRecheck" :disabled="savingProfile">{{ savingProfile ? tr("检查中…") : tr("保存并重新检查 Git") }}</button></section>
+          <section v-if="releaseIntent==='formal'" class="block"><h3>{{ tr("Git 与检查设置") }}</h3><div class="form-grid"><label>{{ tr("远程仓库") }}<select v-model="remoteName"><option v-for="remote in preflight.remotes" :key="remote" :value="remote">{{ remote }}</option></select></label><label>{{ tr("版本文件识别") }}<select v-model="versionStrategy"><option value="auto">{{ tr("自动识别") }}</option><option value="tauri">Tauri</option><option value="node">Node</option><option value="manual">{{ tr("不自动修改") }}</option></select></label></div><details class="advanced compact"><summary>{{ tr("高级：通用发布前检查命令") }}</summary><label class="full-label">{{ tr("命令（可选）") }}<small v-if="buildMode === 'github'">{{ tr('此命令只在本地模式执行') }}</small><input :disabled="buildMode === 'github'" v-model="preReleaseCommand" :placeholder="tr('例如 npm test')" /></label></details><button @click="saveAndRecheck" :disabled="savingProfile">{{ savingProfile ? tr("检查中…") : tr("保存并重新检查 Git") }}</button></section>
 
-          <section class="block">
+          <section v-if="releaseIntent==='formal'" class="block">
             <h3>{{ tr("版本与提交详情") }}</h3>
             <template v-if="createTag"><div class="strategy-line">{{ tr("将更新") }} {{ selectedVersionFiles.join('、') || tr("不修改版本文件") }}</div><div v-if="Object.keys(visibleCurrentVersions).length" class="current-versions"><code v-for="(version, file) in visibleCurrentVersions" :key="file">{{ file }}: {{ version || tr("未识别") }}</code></div><div v-for="version in plannedVersions" :key="version.versionGroupId" class="kv"><span>{{ version.versionGroupName }}</span><code>{{ version.tagName }}</code></div></template>
             <div v-else class="no-tag-note">{{ tr("本次不会修改版本文件，也不会创建或推送 Tag。") }}</div>
@@ -1658,11 +1789,12 @@ onBeforeUnmount(() => {
 
       <footer v-if="!activeRun && !loading && (preflight || releaseTab === 'settings')" class="m-foot" :inert="publishing">
         <span v-if="releaseTab === 'publish' && releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
-        <button :disabled="publishing" @click="emit('close')">{{ tr("取消") }}</button>
+        <button :disabled="publishing" @click="checkingCandidate ? cancelCandidate() : emit('close')">{{checkingCandidate?tr('取消检查'):tr('取消')}}</button>
         <button v-if="releaseTab === 'settings'" type="button" class="primary return-to-release" @click="switchReleaseTab('publish', true)">{{ tr('返回发布') }}</button>
         <button v-else-if="targetSelectionMissing" type="button" class="primary" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button>
         <div v-else class="publish-control">
-          <button class="primary publish-submit" :disabled="!canPublish" @click="publish()">{{ publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
+          <span v-if="checkingCandidate" class="release-content-hint" role="status">{{releaseIntent==='formal'?tr('正在自动检查，通过后继续发布。'):tr('正在自动检查，通过后继续提交。')}}</span>
+          <button class="primary publish-submit" :disabled="!canSubmit || autoSubmitting || checkingCandidate" :aria-busy="autoSubmitting" @click="submitRelease">{{checkingCandidate?tr('检查中…'):publishing ? tr("正在准备本地操作…") : createTag ? (plannedVersions.length > 1 ? tr("确认发布 {0} 个版本", [plannedVersions.length]) : tr("确认发布 {0}", [plannedTagNames[0] || ''])) : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
       </footer>
       <datalist id="target-kinds"><option value="desktop" /><option value="web" /><option value="android" /><option value="server" /><option value="custom" /></datalist><datalist id="runner-types"><option value="local" /><option value="git-push" /></datalist><datalist id="version-formats"><option value="json" /><option value="npm-lock" /><option value="cargo" /><option value="cargo-lock" /><option value="toml" /><option value="gradle" /></datalist>
@@ -1679,6 +1811,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.intent-choice{display:flex;gap:8px;margin-bottom:8px}.intent-choice button{flex:1;padding:10px;border:1px solid var(--border);background:var(--bg);font-size:13px}.intent-choice button.chosen{border-color:var(--accent);background:rgba(79,140,255,.1);color:var(--accent)}
+
 .target-selection-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .target-selection-hint > span { flex: 1 1 240px; }
 .platform-section:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

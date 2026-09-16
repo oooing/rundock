@@ -19,10 +19,22 @@ func TestDeclaredListenPortsSeparateDependenciesFromBindings(t *testing.T) {
 	if !reflect.DeepEqual(got, []int{3000, 8100, 9100, 9200}) {
 		t.Fatal(got)
 	}
-	// Display hints retain dependencies; only launch prechecks use strict bindings.
+	// Import candidates must not include shared proxy or database dependencies.
 	hints := scanPortHints(p)
 	sort.Ints(hints)
-	if !reflect.DeepEqual(hints, []int{3000, 5432, 7890, 8100, 9100, 9200}) {
+	if !reflect.DeepEqual(hints, []int{3000, 8100, 9100, 9200}) {
 		t.Fatal(hints)
+	}
+}
+
+func TestPortHintsAllowExplicitBindingsOnAnyPort(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "start.cmd")
+	if err := os.WriteFile(p, []byte("set PROXY=http://127.0.0.1:7890\nnode server --port 7890\nnode server --port 7890\nnode server --port 8009\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := scanPortHints(p)
+	sort.Ints(got)
+	if !reflect.DeepEqual(got, []int{7890, 8009}) {
+		t.Fatal(got)
 	}
 }

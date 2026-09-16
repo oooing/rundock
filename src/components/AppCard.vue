@@ -9,7 +9,7 @@ import UiIcon from '@/components/UiIcon.vue'
 import { CARD_COLOR_PALETTE, getCardVisualStyle, normalizeHexColor } from '@/utils/cardColors'
 import { runningEffect, startingEffect } from '@/stores/motion'
 import StartupIndicator from './StartupIndicator.vue'
-import { cardServices } from '@/utils/cardServices'
+import { cardServices, cardServiceDetails } from '@/utils/cardServices'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
 const emit = defineEmits<{
@@ -270,6 +270,7 @@ function healthText(h: string): string {
 }
 
 const sortedServices = computed(() => cardServices(a.value))
+const serviceDetails = computed(() => cardServiceDetails(a.value))
 const primaryURLInServices = computed(() => sortedServices.value.some(svc => svc.url === a.value.lastUrl))
 const serviceState = (svc: ReturnType<typeof cardServices>[number]) => a.value.runtimeCheck?.state === 'running' && svc.source === 'current' ? tr('正在监听') : svc.source === 'current'
   ? healthText(svc.health) : svc.source === 'history' ? tr('上次发现') : tr('配置端口')
@@ -405,6 +406,16 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
             <details class="runtime-details">
               <summary><UiIcon name="server" :size="15" />{{ tr('运行详情') }}<UiIcon name="chevron-down" :size="13" /></summary>
               <dl><dt>{{ tr('状态') }}</dt><dd>{{ statusLabel }}</dd><dt>{{ tr('进程编号（PID）') }}</dt><dd class="mono">{{ a.pid || '—' }}</dd></dl>
+              <div v-if="serviceDetails.history.length || serviceDetails.configured.length" class="service-details">
+                <div v-if="serviceDetails.history.length" class="service-detail-group">
+                  <span>{{ tr('历史端口（非本次运行）') }}</span>
+                  <span class="mono">{{ serviceDetails.history.map(svc => `:${svc.port}`).join(' · ') }}</span>
+                </div>
+                <div v-if="serviceDetails.configured.length" class="service-detail-group">
+                  <span>{{ tr('配置候选（未发现服务）') }}</span>
+                  <span class="mono">{{ serviceDetails.configured.map(svc => `:${svc.port}`).join(' · ') }}</span>
+                </div>
+              </div>
             </details>
             <button @click="startRename"><UiIcon name="edit" :size="15" />{{ tr('改名') }}</button>
             <button :aria-expanded="colorMenuOpen" :aria-controls="`colors-${a.id}`" @click="toggleColorMenu"><UiIcon name="palette" :size="15" />{{ tr('卡片背景色') }}</button>
@@ -574,6 +585,10 @@ button.dim { color: var(--card-muted, var(--text-dim)); }
 .runtime-details[open] > summary > :last-child { transform: rotate(180deg); }
 .runtime-details dl { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; margin: 4px 8px 10px; font-size: 11px; }
 .runtime-details dt { color: var(--card-muted, var(--text-dim)); }.runtime-details dd { margin: 0; color: var(--card-fg, var(--text)); }
+.service-details { max-height: 140px; overflow-y: auto; margin: 8px; padding-top: 8px; border-top: 1px solid var(--card-border, var(--border)); }
+.service-detail-group { display: grid; gap: 4px; font-size: 11px; color: var(--card-muted, var(--text-dim)); }
+.service-detail-group + .service-detail-group { margin-top: 10px; }
+.service-detail-group .mono { max-width: 210px; overflow-wrap: anywhere; color: var(--card-fg, var(--text)); }
 .manage-menu > button.delete-action { color: #ff0000; background: transparent; border: 0; margin-top: 4px; padding: 8px; border-radius: 4px; }
 .manage-menu > button.delete-action:hover { color: #ff0000; background: var(--card-panel, var(--bg-elev-2)); }
 .color-menu { display: flex; flex-direction: column; gap: 9px; padding: 8px; }

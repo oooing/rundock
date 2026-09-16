@@ -100,7 +100,9 @@ func (s *Service) Put(ctx context.Context, appID string, cfg *Config) (*Config, 
 		VersionGroups []VersionGroup `json:"versionGroups"`
 		Targets       []Target       `json:"targets"`
 		Automation    *Automation    `json:"automation,omitempty"`
-	}{manifest.SchemaVersion, manifest.VersionGroups, manifest.Targets, manifest.Automation}
+		FileRules     []FileRule     `json:"fileRules,omitempty"`
+		CheckProfiles []CheckProfile `json:"checkProfiles,omitempty"`
+	}{manifest.SchemaVersion, manifest.VersionGroups, manifest.Targets, manifest.Automation, manifest.FileRules, manifest.CheckProfiles}
 	raw, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return nil, err
@@ -242,6 +244,12 @@ func decorate(cfg *Config, source, root string, confidence float64, warnings []s
 	if cfg.Targets == nil {
 		cfg.Targets = []Target{}
 	}
+	if cfg.FileRules == nil {
+		cfg.FileRules = []FileRule{}
+	}
+	if cfg.CheckProfiles == nil {
+		cfg.CheckProfiles = []CheckProfile{}
+	}
 	ensureTagPrefixes(cfg)
 }
 
@@ -321,6 +329,20 @@ func cloneForManifest(cfg *Config) *Config {
 		}
 		if out.Targets[i].Artifacts == nil {
 			out.Targets[i].Artifacts = []string{}
+		}
+	}
+	if out.FileRules == nil {
+		out.FileRules = []FileRule{}
+	}
+	if out.CheckProfiles == nil {
+		out.CheckProfiles = []CheckProfile{}
+	}
+	for i := range out.CheckProfiles {
+		if out.CheckProfiles[i].OS == nil {
+			out.CheckProfiles[i].OS = []string{}
+		}
+		if out.CheckProfiles[i].TargetKinds == nil {
+			out.CheckProfiles[i].TargetKinds = []string{}
 		}
 	}
 	return out
@@ -471,6 +493,51 @@ func validate(cfg *Config) error {
 		}
 		if !validReleaseBranch(automation.ReleaseBranch) {
 			return errors.New("automation.releaseBranch 不是有效的 Git 分支名")
+		}
+	}
+	rules := make(map[string]struct{}, len(cfg.FileRules))
+	for i, rule := range cfg.FileRules {
+		if !idPattern.MatchString(rule.ID) {
+			return fmt.Errorf("fileRules[%d].id 无效", i)
+		}
+		if _, exists := rules[rule.ID]; exists {
+			return fmt.Errorf("文件规则 id 重复：%s", rule.ID)
+		}
+		rules[rule.ID] = struct{}{}
+		if strings.TrimSpace(rule.Pattern) == "" {
+			return fmt.Errorf("fileRules[%d].pattern 不能为空", i)
+		}
+		if err := validateRelative(strings.TrimSuffix(strings.ReplaceAll(rule.Pattern, "*", "x"), "/")); err != nil {
+			return fmt.Errorf("fileRules[%d].pattern：%w", i, err)
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Kind)) {
+		case RuleRecommend, RuleLocal, RuleReview, RuleSensitive:
+		default:
+			return fmt.Errorf("fileRules[%d].kind 仅支持 recommend、local、review 或 sensitive", i)
+		}
+	}
+	profiles := make(map[string]struct{}, len(cfg.CheckProfiles))
+	for i, profile := range cfg.CheckProfiles {
+		if !idPattern.MatchString(profile.ID) {
+			return fmt.Errorf("checkProfiles[%d].id 无效", i)
+		}
+		if _, exists := profiles[profile.ID]; exists {
+			return fmt.Errorf("检查配置 id 重复：%s", profile.ID)
+		}
+		profiles[profile.ID] = struct{}{}
+		if strings.TrimSpace(profile.Name) == "" {
+			return fmt.Errorf("checkProfiles[%d].name 不能为空", i)
+		}
+		if strings.TrimSpace(profile.Command) == "" {
+			return fmt.Errorf("checkProfiles[%d].command 不能为空", i)
+		}
+		if strings.TrimSpace(profile.WorkingDir) != "" {
+			if err := validateRelative(profile.WorkingDir); err != nil {
+				return fmt.Errorf("checkProfiles[%d].workingDir：%w", i, err)
+			}
+		}
+		if profile.TimeoutSeconds < 0 {
+			return fmt.Errorf("checkProfiles[%d].timeoutSeconds 不能为负数", i)
 		}
 	}
 	return nil

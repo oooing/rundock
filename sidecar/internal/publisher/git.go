@@ -40,6 +40,9 @@ func (execRunner) RunWithInput(ctx context.Context, dir, name string, input []by
 		args = append([]string{"-c", "credential.interactive=false", "-c", "core.askPass="}, args...)
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
+	if runtime.GOOS == "windows" && name == "cmd.exe" {
+		prepareCheckProcess(cmd)
+	}
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GIT_ASKPASS=", "SSH_ASKPASS_REQUIRE=never")
 	if networkGit && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" {
@@ -299,10 +302,12 @@ func parseChanges(raw string) []FileChange {
 				continue
 			}
 			xy, path := record[:2], record[3:]
-			appendChange(&out, xy, path)
+			oldPath := ""
 			if strings.ContainsAny(xy, "RC") && i+1 < len(records) {
 				i++ // porcelain -z 的 rename/copy 下一项是原路径。
+				oldPath = records[i]
 			}
+			appendChange(&out, xy, path, oldPath)
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 		return out
@@ -315,22 +320,24 @@ func parseChanges(raw string) []FileChange {
 		if path == "" {
 			continue
 		}
+		oldPath := ""
 		if i := strings.Index(path, " -> "); i >= 0 {
+			oldPath = strings.Trim(strings.TrimSpace(path[:i]), `"`)
 			path = path[i+4:]
 		}
-		appendChange(&out, xy, strings.Trim(path, `"`))
+		appendChange(&out, xy, strings.Trim(path, `"`), oldPath)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
 }
 
-func appendChange(out *[]FileChange, xy, path string) {
+func appendChange(out *[]FileChange, xy, path, oldPath string) {
 	if len(xy) != 2 || path == "" {
 		return
 	}
 	tracked := xy != "??"
 	staged := tracked && xy[0] != ' '
-	*out = append(*out, FileChange{Path: filepath.ToSlash(path), Status: xy, Tracked: tracked, Staged: staged})
+	*out = append(*out, FileChange{Path: filepath.ToSlash(path), OldPath: filepath.ToSlash(oldPath), Status: xy, Tracked: tracked, Staged: staged})
 }
 
 func parseCommittedChanges(raw string) []CommittedFileChange {

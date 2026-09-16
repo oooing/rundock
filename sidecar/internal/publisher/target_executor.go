@@ -41,6 +41,10 @@ type executionPlan struct {
 	VersionGroups         []planVersionGroup        `json:"versionGroups"`
 	ReleaseVersions       []store.ReleaseVersion    `json:"releaseVersions,omitempty"`
 	Targets               []planTarget              `json:"targets"`
+	CandidateID           string                    `json:"candidateId,omitempty"`
+	CandidateFingerprint  string                    `json:"candidateFingerprint,omitempty"`
+	CandidateTreeHash     string                    `json:"candidateTreeHash,omitempty"`
+	Intent                string                    `json:"intent,omitempty"`
 }
 
 func (p *executionPlan) requiresGitPush() bool {
@@ -612,6 +616,30 @@ func verifyBuildSideEffects(before, after worktreeSnapshot, allowedPatterns []st
 }
 
 func (s *Service) executeTargetChecks(ctx context.Context, run *store.ReleaseRun, plan *executionPlan) error {
+	if plan.CandidateID != "" {
+		for _, target := range plan.Targets {
+			if target.Steps.Check != "" {
+				cand := s.lookupCandidate(plan.CandidateID)
+				passed := false
+				if cand != nil {
+					cand.mu.Lock()
+					for _, check := range cand.View.CheckResults {
+						if check.ID == "target:"+target.ID && check.Status == CheckPassed {
+							passed = true
+						}
+					}
+					cand.mu.Unlock()
+				}
+				if !passed {
+					return &targetExecutionError{Stage: "target_check", Code: "checks_unverified", Message: target.Name + " 的目标检查尚未在候选中通过"}
+				}
+				if err := s.store.MarkReleaseTargetStepDone(run.ID, target.ID, "check"); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	return s.executeTargetPhaseInternal(ctx, run, plan, false, true)
 }
 
@@ -623,6 +651,20 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 	if len(plan.Targets) == 0 {
 		return nil
 	}
+	executionRoot := run.RepoRoot
+	var candidate *releaseCandidate
+	if plan.CandidateID != "" {
+		candidate = s.lookupCandidate(plan.CandidateID)
+		if candidate == nil {
+			return &targetExecutionError{Stage: "target_build", Code: "candidate_not_found", Message: "隔离候选已失效，请重新检查后开始新发布"}
+		}
+		if err := validateCandidateBytes(candidate); err != nil {
+			return &targetExecutionError{Stage: "target_build", Code: "candidate_stale", Message: err.Error()}
+		}
+		executionRoot = candidate.Work
+	}
+	artifactRun := *run
+	artifactRun.RepoRoot = executionRoot
 	headStage := "target_build"
 	if checksOnly {
 		headStage = "target_check"
@@ -669,7 +711,7 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "handed_off", "cloud_pending", "", "", true, true)
 			continue
 		}
-		workingDir, err := secureProjectPath(run.RepoRoot, target.WorkingDir, true)
+		workingDir, err := secureProjectPath(executionRoot, target.WorkingDir, true)
 		if err != nil {
 			_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", "checking", "target_working_dir_invalid", err.Error(), true, true)
 			return &targetExecutionError{Stage: "target_check", Code: "target_working_dir_invalid", Message: err.Error(), TargetID: target.ID}
@@ -678,7 +720,7 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 		for _, step := range steps {
 			stage := "target_" + step.name
 			if postPush && (step.name == "publish" || step.name == "deploy") {
-				if err := s.verifyFrozenTargetArtifacts(run, target); err != nil {
+				if err := s.verifyFrozenTargetArtifacts(&artifactRun, target); err != nil {
 					message := target.Name + " 的构建产物已变化：" + err.Error()
 					_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, "artifact_changed", message, true, true)
 					return &targetExecutionError{Stage: stage, Code: "artifact_changed", Message: message, TargetID: target.ID}
@@ -692,6 +734,11 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			stepCtx, cancel := commandContext(ctx, 10*time.Minute)
 			out, commandErr := runCheckCommand(stepCtx, s.targetRunner, workingDir, command)
 			cancel()
+			if candidate != nil {
+				if err := validateCandidateBytes(candidate); err != nil {
+					return &targetExecutionError{Stage: stage, Code: "build_changed_tree", Message: "构建命令修改了已验收的候选源码，已停止后续上传", TargetID: target.ID}
+				}
+			}
 			stepStatus, stepSeverity, stepCode, stepMessage, stepKind := "succeeded", "info", "", target.Name+" 的命令执行完成", "performance"
 			if commandErr != nil {
 				stepStatus, stepSeverity, stepCode, stepMessage, stepKind = "failed", "error", "target_step_failed", target.Name+" 的命令执行失败", "error"
@@ -738,7 +785,7 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			continue
 		}
 		if !postPush {
-			if err := s.captureTargetArtifacts(run, target, workingDir); err != nil {
+			if err := s.captureTargetArtifacts(&artifactRun, target, workingDir); err != nil {
 				_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", "artifacts", "artifact_scan_failed", err.Error(), true, true)
 				artifactStage := "target_build"
 				if target.Selection.Package {

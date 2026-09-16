@@ -49,7 +49,9 @@ func (s *Service) GetFile(ctx context.Context, appID string) (*ConfigFile, error
 			VersionGroups []VersionGroup `json:"versionGroups"`
 			Targets       []Target       `json:"targets"`
 			Automation    *Automation    `json:"automation,omitempty"`
-		}{cfg.SchemaVersion, cfg.VersionGroups, cfg.Targets, cfg.Automation}
+			FileRules     []FileRule     `json:"fileRules,omitempty"`
+			CheckProfiles []CheckProfile `json:"checkProfiles,omitempty"`
+		}{cfg.SchemaVersion, cfg.VersionGroups, cfg.Targets, cfg.Automation, cfg.FileRules, cfg.CheckProfiles}
 		raw, err = json.MarshalIndent(document, "", "  ")
 		if err != nil {
 			return nil, err

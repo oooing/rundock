@@ -89,7 +89,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/api/import/discover", s.handleDiscoverImport)
 	mux.HandleFunc("/api/apps", s.handleApps)
 	mux.HandleFunc("/api/apps/reorder", s.handleAppsReorder)
-	mux.HandleFunc("/api/apps/", s.handleAppDetail) // /api/apps/{id}...
+	mux.HandleFunc("/api/apps/", s.handleAppReleasePrep) // /api/apps/{id}...
 	mux.HandleFunc("/api/releases/", s.handleReleaseDetail)
 	mux.HandleFunc("/api/cloud-builds", s.handleCloudBuilds)
 	mux.HandleFunc("/api/groups", s.handleGroups)

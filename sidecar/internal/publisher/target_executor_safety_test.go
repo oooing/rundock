@@ -177,11 +177,11 @@ func TestSelectedVersionGroupDrivesAutoVersion(t *testing.T) {
 	}
 	svc.targetRunner = &recordingTargetRunner{}
 	createTag := true
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "mobile", Build: true}},
 		ReleaseNotes:    testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,8 +189,8 @@ func TestSelectedVersionGroupDrivesAutoVersion(t *testing.T) {
 	if run.Status != "succeeded" || run.TargetVersion != "5.0.1" || run.TagName != "mobile/v5.0.1" {
 		t.Fatalf("auto run did not use the selected mobile version group: %+v", run)
 	}
-	assertFileContains(t, filepath.Join(repo, "package.json"), `"version": "1.0.0"`)
-	assertFileContains(t, filepath.Join(repo, "mobile/package.json"), `"version":"5.0.1"`)
+	assertCommittedContains(t, repo, "package.json", `"version": "1.0.0"`)
+	assertCommittedContains(t, repo, "mobile/package.json", `"version":"5.0.1"`)
 }
 
 func TestNamespacedReleaseUsesLocalVersionWithoutRemotePrecheck(t *testing.T) {
@@ -235,23 +235,23 @@ func TestNamespacedReleaseUsesLocalVersionWithoutRemotePrecheck(t *testing.T) {
 	}
 	// Removing the network precheck does not allow downgrading the local version.
 	createTag, pushRemote := true, true
-	_, err = svc.Start(context.Background(), "app1", CreateRequest{
+	_, err = svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "manual",
 		Versions:          []ReleaseVersionInput{{VersionGroupID: "mobile", TargetVersion: "4.9.0"}},
 		SelectedPaths:     []string{"tracked.txt"},
 		SelectedTargets:   []store.ReleaseTargetSelection{{TargetID: "mobile", Build: true}},
 		StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if pe, ok := err.(*Error); !ok || pe.Code != "version_not_newer" {
 		t.Fatalf("lower manual version error = %#v", err)
 	}
 
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths:     []string{"tracked.txt"},
 		SelectedTargets:   []store.ReleaseTargetSelection{{TargetID: "mobile", Build: true}},
 		StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,11 +293,11 @@ func TestRepositoryScopedReleaseRejectsVersionGroupKeys(t *testing.T) {
 		{{VersionGroupID: "mobile", TargetVersion: "5.1.0"}},
 		{{VersionGroupID: "repository", TargetVersion: "0.1.0"}, {VersionGroupID: "mobile", TargetVersion: "5.1.0"}},
 	} {
-		_, err := svc.Start(context.Background(), "app1", CreateRequest{
+		_, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 			CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "manual", TargetVersion: "0.1.0",
 			Versions: versions, SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 			ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-		})
+		}))
 		if pe, ok := err.(*Error); !ok || pe.Code != "invalid_version_group" {
 			t.Fatalf("repository-scoped versions %#v error = %#v", versions, err)
 		}
@@ -351,17 +351,20 @@ func TestTargetCommandChangingHeadStopsRelease(t *testing.T) {
 		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	createTag, pushRemote := false, false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: target.ID, Build: true}},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	run = waitRelease(t, svc, run.ID)
-	if run.Status != "failed" || run.ErrorCode != "release_commit_changed" || run.Stage != "target_build" {
-		t.Fatalf("HEAD-changing target was not blocked: %+v", run)
+	if run.Status != "failed" || run.ErrorCode != "target_step_failed" || run.Stage != "target_build" {
+		t.Fatalf("Git write in isolated build was not blocked: %+v", run)
+	}
+	if head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")); head != run.CommitSHA {
+		t.Fatalf("build moved real HEAD: %s", head)
 	}
 	if tags := strings.TrimSpace(runGit(t, repo, "tag", "--list")); tags != "" {
 		t.Fatalf("HEAD-changing target unexpectedly created tags: %s", tags)

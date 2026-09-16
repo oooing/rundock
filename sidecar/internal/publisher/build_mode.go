@@ -8,8 +8,11 @@ func validateBuildMode(mode string, plan *executionPlan, push bool) error {
 	if mode == "" {
 		return nil
 	}
-	if mode != "github" && mode != "local" {
+	if mode != "github" && mode != "local" && mode != BuildModeNone {
 		return &Error{Code: "invalid_build_mode", Message: "请选择 GitHub 云端构建或本地构建"}
+	}
+	if mode == BuildModeNone && len(plan.Targets) > 0 {
+		return &Error{Code: "build_mode_mismatch", Message: "保存进度不能执行构建或部署目标"}
 	}
 	if len(plan.Targets) == 0 {
 		return nil

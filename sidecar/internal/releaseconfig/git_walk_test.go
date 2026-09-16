@@ -41,7 +41,7 @@ func TestGitDiscoveryHonorsIgnoreRulesAndTrackedFiles(t *testing.T) {
 	}
 	for _, dir := range []string{"code", "kept/real", "中文 空格", "tracked"} {
 		if !got[dir] {
-			t.Fatalf("missing %s: %+v", dir, got)
+			t.Fatalf("missing %s: %+v warnings=%v", dir, got, cfg.Warnings)
 		}
 		delete(got, dir)
 	}

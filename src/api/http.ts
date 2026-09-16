@@ -14,6 +14,8 @@ import type {
   ServiceRole,
   StartResponse,
   CreateReleaseBody,
+  ReleaseCandidate,
+  ReleaseCandidateRequest,
   ReleaseConfig,
   ReleaseNotesDraft,
   ReleaseNotesDraftRequest,
@@ -22,6 +24,10 @@ import type {
   ReleaseRun,
   ReleaseRunView,
 } from '@/types'
+
+function normalizeReleaseCandidate(view: ReleaseCandidate): ReleaseCandidate {
+ return {...view,classifications:view.classifications||[],selectedPaths:view.selectedPaths||[],warnings:view.warnings||[],sensitiveFindings:view.sensitiveFindings||[],dependencyFindings:view.dependencyFindings||[],checkResults:view.checkResults||[]}
+}
 
 export class ApiError extends Error {
   constructor(message: string, public code = '', public preflight?: ReleasePreflight) {
@@ -131,6 +137,10 @@ export const api = {
     req<{ acknowledged: boolean }>('/api/cloud-builds', { method: 'POST', body: JSON.stringify({ runId, alertKey }) }),
   releasePreflight: (id: string, checkRemote = false) =>
     req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, { method: 'POST' }),
+  prepareReleaseCandidate: (id: string, body: ReleaseCandidateRequest, signal?:AbortSignal) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate`, {method:'POST', body:JSON.stringify(body),signal}).then(normalizeReleaseCandidate),
+  checkReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/check`, {method:'POST', body:JSON.stringify({candidateId})}).then(normalizeReleaseCandidate),
+  cancelReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/cancel`, {method:'POST', body:JSON.stringify({candidateId})}).then(normalizeReleaseCandidate),
+  getReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/${candidateId}`).then(normalizeReleaseCandidate),
   unstageReleaseFiles: (id: string, statusFingerprint: string) =>
     req<ReleasePreflight>(`/api/apps/${id}/release/unstage`, { method: 'POST', body: JSON.stringify({ statusFingerprint }) }),
   createReleaseNotesDraft: (id: string, body: ReleaseNotesDraftRequest) =>

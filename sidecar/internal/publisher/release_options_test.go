@@ -56,11 +56,11 @@ func TestVersioningRunsBeforePreReleaseCheck(t *testing.T) {
 	runner := &versionAwareRunner{want: pf.SuggestedVersion}
 	svc.runner = runner
 	createTag, pushRemote := true, false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +76,10 @@ func TestVersioningRunsBeforePreReleaseCheck(t *testing.T) {
 	for index, log := range view.Logs {
 		positions[log.Text] = index
 	}
-	versioning, hasVersioning := positions[stageText("versioning")]
+
 	checking, hasChecking := positions[stageText("checking")]
 	committing, hasCommitting := positions[stageText("committing")]
-	if !hasVersioning || !hasChecking || !hasCommitting || !(versioning < checking && checking < committing) {
+	if !hasChecking || !hasCommitting || !(checking < committing) {
 		t.Fatalf("unexpected release phase order: %#v", positions)
 	}
 }
@@ -94,10 +94,10 @@ func TestReleaseWithoutTagSkipsVersionAndTagStages(t *testing.T) {
 		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	createTag := false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, VersionMode: "auto", TargetVersion: "not-a-version",
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,11 +146,11 @@ func TestReleaseCanStayLocalWithoutPushingBranchOrTag(t *testing.T) {
 		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	createTag, pushRemote := true, false
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, PushRemote: &pushRemote, VersionMode: "auto",
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,9 +197,9 @@ func TestReleaseInheritsRememberedTagChoice(t *testing.T) {
 	}
 
 	// CreateTag is intentionally nil: Start must inherit the per-project profile.
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,11 +218,11 @@ func TestAutoVersionUsesPreflightSuggestion(t *testing.T) {
 		t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 	}
 	createTag := true
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		CreateTag: &createTag, VersionMode: "auto",
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

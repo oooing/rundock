@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,7 +104,7 @@ func TestPreflightBlocksStagedAndChangedFingerprint(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(repo, "tracked.txt"), "changed again\n")
 	_, err = svc.Start(context.Background(), "app1", CreateRequest{
-		TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
+		Intent: IntentFormal, TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 	})
 	pe, ok := err.(*Error)
 	if !ok || pe.Code != "status_changed" {
@@ -146,11 +147,12 @@ func TestReleaseCommitsSelectedFilesAndPushesTag(t *testing.T) {
 	if pf.VersionStrategy != StrategyNode || pf.SuggestedVersion != "1.0.1" {
 		t.Fatalf("unexpected strategy/version: %s %s", pf.VersionStrategy, pf.SuggestedVersion)
 	}
-	run, err := svc.Start(context.Background(), "app1", CreateRequest{
+	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
 		TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt", "selected-new.txt"},
-		CommitMessage: "chore(release): v1.0.1", StatusFingerprint: pf.StatusFingerprint,
+		ManualDecisions: []ManualDecision{{Path: "not-selected.txt", Decision: DecisionExclude, Reason: "local scratch"}},
+		CommitMessage:   "chore(release): v1.0.1", StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,8 @@ func TestReleaseCommitsSelectedFilesAndPushesTag(t *testing.T) {
 	if got := runGit(t, repo, "show", "HEAD:selected-new.txt"); strings.TrimSpace(got) != "include me" {
 		t.Fatalf("selected untracked file was not committed: %q", got)
 	}
-	packageJSON, _ := os.ReadFile(filepath.Join(repo, "package.json"))
+	packageJSON := runGit(t, repo, "show", "HEAD:package.json")
+	assertFileContains(t, filepath.Join(repo, "package.json"), `"version": "1.0.0"`)
 	if !strings.Contains(string(packageJSON), `"version": "1.0.1"`) {
 		t.Fatalf("version not updated: %s", packageJSON)
 	}
@@ -256,7 +259,7 @@ func TestStartBlocksDuplicateTagAndConcurrentRelease(t *testing.T) {
 		if err != nil || !pf.CanRelease {
 			t.Fatalf("preflight failed: %v %+v", err, pf.BlockingIssues)
 		}
-		_, err = svc.Start(context.Background(), "app1", CreateRequest{TargetVersion: "1.0.1", VersionMode: "manual", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true})
+		_, err = svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{TargetVersion: "1.0.1", VersionMode: "manual", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true}))
 		pe, ok := err.(*Error)
 		if !ok || pe.Code != "version_not_newer" {
 			t.Fatalf("expected version_not_newer, got %#v", err)
@@ -275,7 +278,10 @@ func TestStartBlocksDuplicateTagAndConcurrentRelease(t *testing.T) {
 			t.Fatal("failed to reserve test repository")
 		}
 		defer svc.release(repo)
-		_, err = svc.Start(context.Background(), "app1", CreateRequest{TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true})
+		_, err = svc.Start(context.Background(), "app1", CreateRequest{
+			Intent: IntentFormal, TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt"},
+			StatusFingerprint: pf.StatusFingerprint, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
+		})
 		pe, ok := err.(*Error)
 		if !ok || pe.Code != "release_in_progress" {
 			t.Fatalf("expected release_in_progress, got %#v", err)
@@ -334,7 +340,11 @@ func waitRelease(t *testing.T, svc *Service, runID string) *store.ReleaseRun {
 
 func newReleaseFixture(t *testing.T) (*Service, string, func()) {
 	t.Helper()
-	base := t.TempDir()
+	base, err := os.MkdirTemp("", "rd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
 	repo := filepath.Join(base, "repo")
 	remote := filepath.Join(base, "remote.git")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -347,6 +357,16 @@ func newReleaseFixture(t *testing.T) (*Service, string, func()) {
 	writeTestFile(t, filepath.Join(repo, "package.json"), "{\n  \"name\": \"demo\",\n  \"version\": \"1.0.0\"\n}\n")
 	writeTestFile(t, filepath.Join(repo, "tracked.txt"), "initial\n")
 	writeTestFile(t, filepath.Join(repo, "start.bat"), "@echo off\r\n")
+	if err := os.MkdirAll(filepath.Join(repo, ".launcher"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(repo, ".launcher", "release.yaml"), `{
+  "schemaVersion": 1,
+  "versionGroups": [],
+  "targets": [],
+  "checkProfiles": [{"id":"fixture-ok","name":"fixture-ok","command":"cd .","required":true}]
+}
+`)
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "initial")
 	runGit(t, repo, "remote", "add", "origin", remote)
@@ -380,9 +400,114 @@ func runGit(t *testing.T, dir string, args ...string) string {
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func acceptCandidate(t *testing.T, svc *Service, req CreateRequest) CreateRequest {
+	t.Helper()
+	// Existing executor unit tests inject commandRunner doubles. Keep those
+	// checks in the isolated candidate too; integration tests use real processes.
+	svc.candidateCommand = func(ctx context.Context, root string, profile releaseconfig.CheckProfile) (string, string, string) {
+		var runner commandRunner
+		if strings.HasPrefix(profile.ID, "target:") {
+			runner = svc.targetRunner
+		}
+		if profile.ID == "legacy:pre-release" {
+			runner = svc.runner
+		}
+		if runner != nil {
+			if _, real := runner.(execRunner); !real {
+				output, err := runCheckCommand(ctx, runner, root, profile.Command)
+				if err != nil {
+					return CheckFailed, output, err.Error()
+				}
+				return CheckPassed, output, ""
+			}
+		}
+		return runProfileCommand(ctx, root, profile)
+	}
+	if req.Intent == IntentSaveProgress {
+		return req
+	}
+	req.Intent = IntentFormal
+	if req.CreateTag == nil {
+		if profile, err := svc.store.GetReleaseProfile("app1"); err == nil {
+			createTag := profile.CreateTag
+			req.CreateTag = &createTag
+		}
+	}
+	pf, err := svc.PreflightLocal(context.Background(), "app1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ensureNoopCheckProfile(t, pf.RepoRoot)
+	pf, err = svc.PreflightLocal(context.Background(), "app1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ManualDecisions = append(req.ManualDecisions, reviewExcludes(pf)...)
+	req.StatusFingerprint = pf.StatusFingerprint
+	view, err := svc.PrepareCandidate(context.Background(), "app1", CandidateRequest{
+		StatusFingerprint: req.StatusFingerprint, SelectedPaths: req.SelectedPaths, ManualDecisions: req.ManualDecisions,
+		Intent: IntentFormal, TargetVersion: req.TargetVersion, Versions: req.Versions, VersionMode: req.VersionMode,
+		CreateTag: req.CreateTag, PushRemote: req.PushRemote, BuildMode: req.BuildMode, SelectedTargets: req.SelectedTargets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Accepted {
+		view, err = svc.RunCandidateChecks(context.Background(), "app1", view.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !view.Accepted {
+		t.Fatalf("candidate not accepted: status=%s findings=%+v checks=%+v deps=%+v", view.Status, view.SensitiveFindings, view.CheckResults, view.DependencyFindings)
+	}
+	req.CandidateID = view.ID
+	return req
+}
+
+func ensureNoopCheckProfile(t *testing.T, repo string) {
+	t.Helper()
+	path := filepath.Join(repo, ".launcher", "release.yaml")
+	doc := map[string]any{"schemaVersion": 1, "versionGroups": []any{}, "targets": []any{}}
+	if raw, err := os.ReadFile(path); err == nil {
+		if json.Unmarshal(raw, &doc) != nil {
+			t.Fatalf("existing release.yaml is not JSON")
+		}
+	}
+	profiles, _ := doc["checkProfiles"].([]any)
+	for _, item := range profiles {
+		row, _ := item.(map[string]any)
+		if row["id"] == "fixture-ok" {
+			return
+		}
+	}
+	doc["checkProfiles"] = append(profiles, map[string]any{"id": "fixture-ok", "name": "fixture-ok", "command": "cd .", "required": true})
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, path, string(raw)+"\n")
+}
+
+func reviewExcludes(pf *Preflight) []ManualDecision {
+	out := []ManualDecision{}
+	for _, item := range pf.Classifications {
+		if item.Category == CategoryReview {
+			out = append(out, ManualDecision{Path: item.Path, Decision: DecisionExclude, Reason: "test-unresolved", ContentFingerprint: item.ContentFingerprint})
+		}
+	}
+	return out
 }
 
 func hasIssue(pf *Preflight, code string) bool {
@@ -392,4 +517,14 @@ func hasIssue(pf *Preflight, code string) bool {
 		}
 	}
 	return false
+}
+
+func assertCommittedContains(t *testing.T, repo, path string, values ...string) {
+	t.Helper()
+	raw := runGit(t, repo, "show", "HEAD:"+path)
+	for _, value := range values {
+		if !strings.Contains(raw, value) {
+			t.Fatalf("committed %s missing %q: %s", path, value, raw)
+		}
+	}
 }

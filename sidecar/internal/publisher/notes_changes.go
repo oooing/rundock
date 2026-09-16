@@ -13,6 +13,34 @@ const releaseNoteAdjustment = "功能调整"
 
 var noteWordBoundary = regexp.MustCompile(`([a-z])([A-Z])`)
 
+// Keep literal path arguments below Windows' process command-line limit.
+// Each batch retains the selection boundary; unselected patches are never read.
+func (s *Service) notesDiff(ctx context.Context, repo string, options, paths []string) (string, error) {
+	var result strings.Builder
+	for start := 0; ; {
+		end, size := start, 0
+		for end < len(paths) && (end == start || size+len(paths[end])+3 <= 8000) {
+			size += len(paths[end]) + 3
+			end++
+		}
+		args := append(append([]string{}, options...), "--")
+		args = append(args, paths[start:end]...)
+		raw, err := s.gitRaw(ctx, repo, args...)
+		if err != nil {
+			return "", err
+		}
+		result.WriteString(raw)
+		if raw != "" && !strings.HasSuffix(raw, "\x00") {
+			result.WriteByte('\n')
+		}
+		if end == len(paths) {
+			break
+		}
+		start = end
+	}
+	return result.String(), nil
+}
+
 // This is deliberately a coarse, local summary, not a claim to understand
 // arbitrary code. Only fixed product descriptions leave this analysis; source
 // strings, paths and credentials never become release-note bullets.
@@ -21,9 +49,7 @@ func (s *Service) releaseChangeNotes(ctx context.Context, repo string, bases, se
 	patches := map[string]string{}
 	collect := func(revisions, paths []string) error {
 		args := append([]string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z"}, revisions...)
-		args = append(args, "--")
-		args = append(args, paths...)
-		raw, err := s.gitRaw(ctx, repo, args...)
+		raw, err := s.notesDiff(ctx, repo, args, paths)
 		if err != nil {
 			return err
 		}
@@ -48,9 +74,7 @@ func (s *Service) releaseChangeNotes(ctx context.Context, repo string, bases, se
 			return nil
 		}
 		args = append([]string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0"}, revisions...)
-		args = append(args, "--")
-		args = append(args, inspect...)
-		patch, err := s.gitRaw(ctx, repo, args...)
+		patch, err := s.notesDiff(ctx, repo, args, inspect)
 		if err != nil {
 			return err
 		}

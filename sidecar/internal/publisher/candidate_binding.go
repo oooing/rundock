@@ -43,7 +43,7 @@ func normalizeCandidateRequest(req CandidateRequest, pf *Preflight) CandidateReq
 }
 
 func candidateRequestFromCreate(req CreateRequest, intent string) CandidateRequest {
-	return CandidateRequest{Intent: intent, StatusFingerprint: req.StatusFingerprint,
+	return CandidateRequest{Intent: intent, SkipChecks: req.SkipChecks, StatusFingerprint: req.StatusFingerprint,
 		SelectedPaths: req.SelectedPaths, ManualDecisions: req.ManualDecisions,
 		SensitiveExceptions: req.SensitiveExceptions, TargetVersion: req.TargetVersion,
 		Versions: req.Versions, VersionMode: req.VersionMode, CreateTag: req.CreateTag,

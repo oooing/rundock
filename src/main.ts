@@ -3,15 +3,20 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import './styles.css'
 import './cardMotion.css'
-import { locale, tr } from './i18n'
-import { setNativeLanguage } from './tauri/window'
+import { initializeLocale, locale, tr } from './i18n'
+import { getSystemLocale, setNativeLanguage } from './tauri/window'
 
-watch(locale, (language) => {
-  document.documentElement.lang = language
-  document.title = tr('RunDock 启动坞')
-  void setNativeLanguage(language)
-}, { immediate: true })
+async function bootstrap() {
+  await initializeLocale(getSystemLocale)
+  watch(locale, (language) => {
+    document.documentElement.lang = language
+    document.title = tr('RunDock 启动坞')
+    void setNativeLanguage(language)
+  }, { immediate: true })
 
-const app = createApp(App)
-app.use(createPinia())
-app.mount('#app')
+  const app = createApp(App)
+  app.use(createPinia())
+  app.mount('#app')
+}
+
+void bootstrap()

@@ -1,74 +1,83 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { tr } from '@/i18n'
+import ReleaseCheckIssues from './ReleaseCheckIssues.vue'
+import ReleaseFilePreview from './ReleaseFilePreview.vue'
 import type { ReleaseCandidate, ReleaseFileCategory, ReleaseFileClassification, ReleaseManualDecision } from '@/types'
-const props = defineProps<{intent:'formal'|'save-progress';cloudBuild?:boolean;files: ReleaseFileClassification[]; selected: Record<string,boolean>; decisions: ReleaseManualDecision[]; candidate: ReleaseCandidate|null; busy: boolean; stale: boolean}>()
-const emit = defineEmits<{choose:[file:ReleaseFileClassification,included:boolean]; recommend:[]; cancel:[]; refresh:[]; exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
-const exceptionReasons=ref<Record<string,string>>({})
+const props = withDefaults(defineProps<{appId:string;intent:'formal'|'save-progress';checksEnabled?:boolean;locked?:boolean;cloudBuild?:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean;files: ReleaseFileClassification[]; selected: Record<string,boolean>; decisions: ReleaseManualDecision[]; candidate: ReleaseCandidate|null; busy: boolean; stale: boolean}>(),{checksEnabled:true,locked:false})
+const emit = defineEmits<{'update:checksEnabled':[enabled:boolean]; choose:[file:ReleaseFileClassification,included:boolean]; recommend:[]; cancel:[]; refresh:[]; check:[]; exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
 const search=ref('')
-const advancedOpen=ref(false)
-const reviewOnly=ref(false)
+const category=ref<ReleaseFileCategory|null>(null)
+const previewPath=ref<string|null>(null)
 function reviewDecision(file:ReleaseFileClassification){
   return props.decisions.find(item=>item.path===file.path && item.contentFingerprint===file.contentFingerprint)?.decision
 }
-function openReview(){search.value='';reviewOnly.value=true;advancedOpen.value=true}
-const categories: Array<{id:ReleaseFileCategory;label:string}>= [
-  {id:'recommend',label:tr('推荐提交')},{id:'local',label:tr('本地资料')},{id:'review',label:tr('需要确认')},{id:'sensitive',label:tr('敏感阻断')},
-]
-const groups = computed(() => categories.map(category=> ({...category, files:props.files.filter(file=>file.category===category.id),
+const categories = computed<Array<{id:ReleaseFileCategory;label:string}>>(()=>[
+  {id:'review',label:tr('待确认')},{id:'recommend',label:tr('推荐提交')},{id:'local',label:tr('本地资料')},{id:'sensitive',label:tr('敏感阻断')},
+])
+const groups = computed(() => categories.value.map(category=> ({...category, files:props.files.filter(file=>file.category===category.id),
   visible:props.files.filter(file=>file.category===category.id && (file.path+' '+file.reasons.join(' ')).toLowerCase().includes(search.value.toLowerCase()))})))
 const unresolved = computed(()=>props.files.filter(file=>file.category==='review' && !props.decisions.some(decision=>decision.path===file.path && decision.contentFingerprint===file.contentFingerprint)))
+const activeCategory = computed(()=>category.value ?? (unresolved.value.length ? 'review' : 'recommend'))
+const visibleFiles = computed(()=>groups.value.find(group=>group.id===activeCategory.value)?.visible ?? [])
 const displayStatus=computed(()=>props.busy?'running':props.candidate?.intent==='formal' && (props.candidate.sensitiveFindings.length || props.candidate.dependencyFindings.some(item=>item.blocked))?'blocked':props.candidate?.status||'pending')
-function directories(files:ReleaseFileClassification[]){
-  const result=new Map<string,ReleaseFileClassification[]>()
-  for(const file of files){const dir=file.group||'.';result.set(dir,[...(result.get(dir)||[]),file])}
-  return [...result].map(([path,files])=>({path,files}))
-}
 const labels:Record<string,string>={pending:tr('提交时自动检查'),running:tr('检查中'),passed:tr('检查通过'),failed:tr('检查失败'),cancelled:tr('已取消'),unverified:tr('未验证'),stale:tr('已失效'),blocked:tr('已阻断'),ready:tr('可以提交'),skipped:tr('已跳过')}
-function excludePending(){ for(const file of unresolved.value) emit('choose',file,false) }
+function excludePending(){ category.value='review';for(const file of unresolved.value) emit('choose',file,false) }
+function chooseReview(file:ReleaseFileClassification,event:Event){
+  category.value='review'
+  const value=(event.target as HTMLSelectElement).value
+  if(value) emit('choose',file,value==='include')
+}
 </script>
 <template>
   <section class="release-safety" :aria-label="tr('发布范围与检查')">
-    <div class="safety-head"><h3>{{tr('本次文件范围')}}</h3><span>{{tr('已选')}} {{Object.values(selected).filter(Boolean).length}} / {{files.length}}</span></div>
-    <div class="category-counts"><span v-for="group in groups" :key="group.id" :class="group.id">{{group.label}} <strong>{{group.files.length}}</strong></span></div>
-    <div v-if="unresolved.length" class="review-notice"><span>{{tr('有 {0} 项用途需要确认。', [unresolved.length])}}</span><div class="scope-actions"><button class="primary" @click="openReview">{{tr('逐项确认')}}</button><button :disabled="busy" @click="excludePending">{{tr('将待确认项留在本地')}}</button></div></div>
-    <div class="scope-actions"><button :disabled="busy" @click="emit('recommend')">{{tr('采用推荐范围')}}</button><button :disabled="busy" @click="emit('refresh')">{{tr('刷新文件')}}</button></div>
-    <details class="advanced-files" :open="advancedOpen" @toggle="advancedOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('查看文件 / 高级选择')}}</summary>
-      <label class="review-filter"><input v-model="reviewOnly" type="checkbox" />{{tr('只看需要确认的文件')}}</label>
-      <input v-model="search" type="search" :placeholder="tr('搜索路径或原因')" :aria-label="tr('搜索路径或原因')" />
-      <div class="file-groups"><details v-for="group in groups.filter(group=>group.files.length && (!reviewOnly || group.id==='review'))" :key="group.id" :open="group.id==='review' || !!search">
-        <summary>{{group.label}} · {{group.files.length}}</summary>
-        <details v-for="directory in directories(group.visible)" :key="directory.path" class="directory-files" :open="reviewOnly || !!search || group.files.length<20"><summary><code>{{directory.path}}</code> · {{directory.files.length}}</summary>
-        <div v-for="file in directory.files" :key="file.path" class="scope-file">
-          <label><input type="checkbox" :checked="!!selected[file.path]" :disabled="busy || (file.category==='sensitive' && !selected[file.path])" @change="emit('choose',file,($event.target as HTMLInputElement).checked)" /><code :title="file.path">{{file.path}}</code><span>{{file.status}}</span></label>
-          <p>{{file.reasons.join('；')}}</p>
-          <p v-if="file.baselineKept && !selected[file.path]" class="baseline-note">{{tr('基线中的旧内容仍保留；取消勾选只排除本次改动。')}}</p>
-          <div v-if="file.category==='review'" class="review-choices">
-            <button :disabled="busy" :aria-pressed="reviewDecision(file)==='include'" @click="emit('choose',file,true)">{{tr('纳入本次提交')}}</button>
-            <button :disabled="busy" :aria-pressed="reviewDecision(file)==='exclude'" @click="emit('choose',file,false)">{{tr('留在本地')}}</button>
-            <small>{{reviewDecision(file)==='include'?tr('已确认纳入'):reviewDecision(file)==='exclude'?tr('已确认留在本地'):tr('尚未确认')}}</small>
+    <div class="safety-head"><h3>{{tr('提交文件')}}</h3><span>{{tr('已选 {0} 项',[Object.values(selected).filter(Boolean).length])}}</span></div>
+    <div class="category-counts" :aria-label="tr('文件分类')"><button v-for="group in groups.filter(group=>group.files.length || group.id===activeCategory)" :key="group.id" :class="group.id" :aria-pressed="activeCategory===group.id" @click="category=group.id;search=''">{{group.label}} <strong>{{group.id==='review'?unresolved.length:group.files.length}}</strong></button></div>
+    <div class="file-toolbar">
+      <input v-model="search" type="search" :placeholder="tr('搜索文件')" :aria-label="tr('搜索文件')" />
+      <button :disabled="busy" @click="emit('refresh')">{{tr('刷新')}}</button>
+      <button v-if="activeCategory==='review' && unresolved.length" :disabled="busy" @click="excludePending">{{tr('待确认项全部留本地')}}</button>
+      <button v-else :disabled="busy" @click="emit('recommend')">{{tr('采用推荐范围')}}</button>
+    </div>
+    <div class="file-groups">
+        <div v-for="file in visibleFiles" :key="file.path" class="scope-file">
+          <div class="file-row" :class="{'review-row':file.category==='review'}">
+            <input v-if="file.category!=='review'" type="checkbox" :aria-label="tr('选择文件：{0}',[file.path])" :checked="!!selected[file.path]" :disabled="busy || (file.category==='sensitive' && !selected[file.path])" @change="emit('choose',file,($event.target as HTMLInputElement).checked)" />
+            <button type="button" class="file-name" :title="tr('点击预览：{0}',[file.path])" :aria-expanded="previewPath===file.path" @click="previewPath=previewPath===file.path?null:file.path"><code>{{file.path}}</code></button>
+            <select v-if="file.category==='review'" :value="reviewDecision(file)||''" :disabled="busy" :aria-label="tr('文件处理方式：{0}',[file.path])" @change="chooseReview(file,$event)">
+              <option value="" disabled>{{tr('请选择')}}</option><option value="include">{{tr('提交')}}</option><option value="exclude">{{tr('留在本地')}}</option>
+            </select>
           </div>
+          <ReleaseFilePreview v-if="previewPath===file.path" :key="file.contentFingerprint" :app-id="appId" :path="file.path" @close="previewPath=null" />
+          <p v-if="file.category==='sensitive'" class="blocked">{{file.reasons.join('；')}}</p>
+          <p v-if="file.baselineKept && !selected[file.path]" class="baseline-note">{{tr('基线中的旧内容仍保留；取消勾选只排除本次改动。')}}</p>
         </div>
-        </details>
-      </details></div>
-    </details>
-    <div class="candidate-result" aria-live="polite">
-      <div class="safety-head"><strong>{{intent==='save-progress'?tr('提交内容检查'):tr('发布前检查')}}</strong><span :class="stale?'stale':displayStatus">{{stale?tr('已失效'):labels[displayStatus]||displayStatus}}</span></div>
-      <p>{{intent==='save-progress'?tr('提交时自动检查文件范围和敏感内容，通过后继续提交。'):tr('确认发布后自动检查文件范围、敏感内容和本地依赖，通过后继续发布。')}}</p>
-      <p v-if="stale">{{tr('文件或发布范围已变化，下次提交时会自动重新检查。')}}</p>
-      <p v-else-if="displayStatus==='blocked'" class="blocked">{{tr('检查未通过，尚未提交或上传。请查看下方具体文件和原因。')}}</p>
-      <p v-if="candidate?.accepted && !stale && !busy" class="passed">{{cloudBuild?tr('本地检查已通过。GitHub 构建会在发布后执行，结果另行显示。'):tr('发布前检查已通过。')}}</p>
-      <div v-for="finding in candidate?.sensitiveFindings||[]" :key="finding.fingerprint" class="finding blocked"><code>{{finding.path}}<template v-if="finding.line">:{{finding.line}}</template></code> · {{finding.reason}}<details><summary>{{tr('复核疑似误报')}}</summary><p>{{tr('例外只适用于当前文件内容和这一处发现，修改后自动失效。')}}</p><input v-model="exceptionReasons[finding.fingerprint]" :placeholder="tr('记录误报原因，不填写秘密原文')" /><button :disabled="busy || !exceptionReasons[finding.fingerprint]?.trim()" @click="emit('exception',finding,exceptionReasons[finding.fingerprint])">{{tr('记录本处例外并重新检查')}}</button></details></div>
-      <div v-for="finding in candidate?.dependencyFindings||[]" :key="`${finding.path}:${finding.reference}`" class="finding" :class="{blocked:finding.blocked}"><code>{{finding.path}}</code> → <code>{{finding.missing}}</code><p>{{finding.reason}}</p><p v-if="finding.suggestion">{{finding.suggestion}}</p></div>
-      <details v-for="check in intent==='formal'?candidate?.checkResults||[]:[]" :key="check.id" class="check-result" :open="['failed','unverified'].includes(check.status)"><summary><span>{{check.name}} · {{check.required?tr('必需'):tr('可选')}}</span><b :class="check.status">{{labels[check.status]||check.status}}</b></summary><p v-if="check.reason">{{check.reason}}</p><pre v-if="check.log">{{check.log}}</pre></details>
-      <details v-if="candidate?.warnings.length"><summary>{{tr('检查说明')}} · {{candidate.warnings.length}}</summary><p v-for="warning in candidate.warnings" :key="warning">{{warning}}</p></details>
-      <small v-if="candidate">{{tr('候选标识')}} <code>{{candidate.id}}</code></small>
-      <div class="scope-actions"><button v-if="busy" @click="emit('cancel')">{{tr('取消检查')}}</button></div>
+        <p v-if="!visibleFiles.length" class="empty-files">{{tr('没有匹配的文件')}}</p>
+    </div>
+    <div class="candidate-result" aria-live="polite" tabindex="-1">
+      <div class="safety-head"><label class="check-toggle"><input type="checkbox" role="switch" :checked="checksEnabled" :disabled="busy || locked" aria-describedby="release-check-help" @change="emit('update:checksEnabled',($event.target as HTMLInputElement).checked)" /><strong>{{intent==='save-progress'?tr('提交内容检查'):tr('发布前检查')}}</strong></label><span :class="!checksEnabled?'stale':stale?'stale':displayStatus">{{!checksEnabled?tr('未检查'):stale?tr('需重新检查'):displayStatus==='blocked'?tr('待处理'):labels[displayStatus]||displayStatus}}</span></div>
+      <p id="release-check-help">{{checksEnabled?tr('检查敏感信息、遗漏文件和已配置的测试，减少误传与发布失败。'):tr('不检查敏感信息、遗漏文件和测试；Git、版本校验及云端检查不受影响。')}}</p>
+      <p v-if="checksEnabled && stale">{{tr('文件或发布范围已变化，下次提交时会自动重新检查。')}}</p>
+      <p v-if="checksEnabled && candidate?.accepted && !candidate.checksSkipped && !stale && !busy" class="passed">{{cloudBuild?tr('本地检查已通过。GitHub 构建会在发布后执行，结果另行显示。'):tr('发布前检查已通过。')}}</p>
+      <ReleaseCheckIssues v-if="checksEnabled && candidate && !candidate.checksSkipped" :app-id="appId" :candidate="candidate" :files="files" :selected="selected" :busy="busy" :stale="stale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @choose="(file,included)=>emit('choose',file,included)" @check="emit('check')" @exception="(finding,reason)=>emit('exception',finding,reason)" />
     </div>
   </section>
 </template>
 <style scoped>
-.release-safety,.release-safety>*{min-width:0}.file-groups{overflow-x:hidden}.scope-file label,.scope-file code{min-width:0}.directory-files>summary code{overflow-wrap:anywhere}.review-notice .scope-actions{flex-wrap:wrap}
-.review-filter{display:flex;align-items:center;gap:7px;font-size:12px;margin-top:8px}.review-choices{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-left:24px}.scope-file .review-choices button{margin-left:0;padding:5px 8px}.review-choices button[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:var(--bg)}.review-notice{flex-wrap:wrap}
+.check-toggle{display:flex;align-items:center;gap:9px;cursor:pointer}.check-toggle input{appearance:none;width:32px;height:18px;border-radius:12px;background:var(--border);position:relative;margin:0;flex-shrink:0;cursor:pointer}.check-toggle input:checked{background:var(--accent)}.check-toggle input:before{content:'';position:absolute;width:12px;height:12px;top:3px;left:3px;border-radius:50%;background:#fff}.check-toggle input:checked:before{left:17px}.check-toggle input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.check-toggle input:disabled{opacity:.5;cursor:not-allowed}
+.release-safety,.release-safety>*{min-width:0}.file-groups{overflow-x:hidden}.scope-file label,.scope-file code{min-width:0}
+.file-row{display:flex;align-items:center;gap:8px}.scope-file .file-name{flex:1;min-width:0;text-align:left;background:none;border:0;padding:3px 0;margin:0;color:var(--text);font-size:12px}.scope-file .file-name:hover{color:var(--accent)}.scope-file .file-name code{display:block;overflow-wrap:anywhere;white-space:normal}.file-row>input{flex-shrink:0}
+.category-counts>button{padding:6px 9px;border-radius:6px;font-size:12px}.category-counts>button[aria-pressed=true]{border-color:var(--accent);background:var(--bg)}
+.file-toolbar{display:flex;gap:8px;flex-wrap:wrap}.file-toolbar input{flex:1;min-width:120px;width:0}.file-toolbar button{font-size:12px;padding:6px 9px}.review-row{display:flex;align-items:center;gap:12px;font-size:12px}.review-row select{flex:none;width:112px;padding:7px;font:inherit}.scope-file .review-row code{white-space:normal;overflow-wrap:anywhere}.empty-files{font-size:12px;color:var(--text-faint);text-align:center;padding:12px}
 .release-safety{border:1px solid var(--border);border-radius:11px;padding:14px;display:grid;gap:12px}.safety-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.safety-head h3{margin:0;font-size:15px}.safety-head span,small{font-size:11px;color:var(--text-faint)}.category-counts{display:flex;flex-wrap:wrap;gap:8px}.category-counts>span{padding:6px 9px;border-radius:6px;background:var(--bg);font-size:12px}.category-counts strong{margin-left:5px}.scope-actions{display:flex;gap:8px}.scope-actions button,.review-notice button{font-size:12px;padding:6px 9px}.review-notice{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px;border-radius:7px;background:rgba(251,191,36,.08);color:var(--amber);font-size:12px}.advanced-files summary,.file-groups summary{cursor:pointer;padding:7px 0;font-size:12px}.advanced-files>input{width:100%;margin:8px 0}.file-groups{max-height:320px;overflow:auto}.scope-file{padding:9px 5px;border-top:1px solid var(--border)}.scope-file label{display:flex;align-items:center;gap:8px;font-size:12px}.scope-file code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.scope-file p,.candidate-result p{margin:5px 0;font-size:11px;color:var(--text-faint);line-height:1.6}.scope-file p{margin-left:24px}.scope-file button{margin-left:24px;font-size:11px}.candidate-result{border-top:1px solid var(--border);padding-top:12px;display:grid;gap:8px}.candidate-result .passed,.candidate-result .ready{color:var(--green)}.candidate-result .failed,.blocked,.sensitive{color:var(--red)}.candidate-result .stale,.review,.baseline-note{color:var(--amber)}.finding{padding:8px;border:1px solid var(--border);border-radius:6px;font-size:11px;overflow-wrap:anywhere}.check-result summary{display:flex;justify-content:space-between;gap:10px;font-size:12px;cursor:pointer;padding:7px;background:var(--bg);border-radius:6px}.check-result pre{max-height:200px;overflow:auto;font-size:11px;background:var(--bg);padding:9px;white-space:pre-wrap;overflow-wrap:anywhere}
+/* Keep files visible without giving every section another enclosing card. */
+.release-safety { border: 0; border-top: 1px solid var(--border); border-radius: 0; padding: 14px 0 0; gap: 8px; }
+.file-groups { max-height: 224px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); scrollbar-gutter: stable; }
+.scope-file { padding: 6px 9px; }
+.scope-file:first-child { border-top: 0; }
+.scope-file .file-name { min-height: 24px; }
+.candidate-result { padding-top: 12px; margin-top: 4px; gap: 4px; }
+.candidate-result > p { margin: 2px 0; }
+.file-name:focus-visible,.file-toolbar button:focus-visible,.category-counts button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (pointer: coarse) { .scope-file .file-name,.file-toolbar button,.category-counts button { min-height: 44px; } }
 </style>

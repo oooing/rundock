@@ -43,6 +43,9 @@ jobs:
       - name: Test release scripts without publishing
         run: npm run test:release
 
+      - name: Test artifact cleanup safeguards
+        run: node --test scripts/tests/artifact-cleanup.test.mjs
+
       - name: Parse and validate the release plan
         id: plan
         shell: pwsh
@@ -90,7 +93,7 @@ jobs:
           name: release-plan-${{ steps.plan.outputs.tag_name }}
           path: release-plan/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   build_windows:
     name: Build Windows installers
@@ -172,7 +175,7 @@ jobs:
           name: launcher-windows-${{ needs.prepare.outputs.tag_name }}
           path: release-assets/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
           compression-level: 0
 
   publish:

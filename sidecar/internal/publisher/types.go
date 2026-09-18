@@ -116,6 +116,7 @@ type CheckResult struct {
 }
 
 type CandidateRequest struct {
+	SkipChecks          bool                           `json:"skipChecks,omitempty"`
 	StatusFingerprint   string                         `json:"statusFingerprint"`
 	SelectedPaths       []string                       `json:"selectedPaths"`
 	ManualDecisions     []ManualDecision               `json:"manualDecisions"`
@@ -131,6 +132,7 @@ type CandidateRequest struct {
 }
 
 type CandidateView struct {
+	ChecksSkipped      bool                 `json:"checksSkipped,omitempty"`
 	ID                 string               `json:"id"`
 	Fingerprint        string               `json:"fingerprint"`
 	Status             string               `json:"status"`
@@ -181,6 +183,7 @@ type Preflight struct {
 }
 
 type CreateRequest struct {
+	SkipChecks               bool                           `json:"skipChecks,omitempty"`
 	TargetVersion            string                         `json:"targetVersion"`
 	Versions                 []ReleaseVersionInput          `json:"versions"`
 	SelectedPaths            []string                       `json:"selectedPaths"`

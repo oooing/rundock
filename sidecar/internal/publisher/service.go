@@ -380,7 +380,7 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 		return nil, &Error{Code: "missing_dependency", Message: "候选版本缺少确定的配套文件，或引用了不能自动加入的本地/敏感内容"}
 	}
 	if intent == IntentFormal {
-		if !candidateView.Accepted || candidateView.Status != CheckPassed {
+		if !candidateReleaseReady(candidateView, req.SkipChecks) {
 			if unresolved := unresolvedReview(candidateView.Classifications, selectedSet(selected), req.ManualDecisions); len(unresolved) > 0 {
 				return nil, &Error{Code: "review_required", Message: "存在需要确认的文件，正式发布前请记录纳入或排除决定"}
 			}
@@ -413,6 +413,12 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	plan.CandidateFingerprint = candidateView.Fingerprint
 	plan.CandidateTreeHash = candidateView.TreeHash
 	plan.Intent = intent
+	plan.SkipChecks = req.SkipChecks
+	if plan.SkipChecks {
+		for i := range plan.Targets {
+			plan.Targets[i].Steps.Check = ""
+		}
+	}
 	if err := validateBuildMode(req.BuildMode, plan, pushRemote); err != nil {
 		return nil, err
 	}
@@ -692,7 +698,11 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		return
 	}
 	if plan.CandidateID != "" {
-		s.log(run.ID, "event", "使用已验收候选树提交，不改写工作区未选中文件")
+		if plan.SkipChecks {
+			s.log(run.ID, "event", "本次已跳过发布前检查，使用冻结的文件范围提交")
+		} else {
+			s.log(run.ID, "event", "使用已验收候选树提交，不改写工作区未选中文件")
+		}
 	} else if run.CreateTag {
 		setStage("versioning")
 		var err error

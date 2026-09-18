@@ -464,6 +464,7 @@ export interface CloudBuildStatus {
 }
 
 export interface CreateReleaseBody {
+  skipChecks?: boolean
   intent?: 'formal' | 'save-progress'
   candidateId?: string
   manualDecisions?: ReleaseManualDecision[]
@@ -491,10 +492,21 @@ export interface ReleaseFileClassification {
   selectedDefault: boolean; reasons: string[]; sources: string[]; ruleIds?: string[]; group: string
   contentFingerprint: string; baselineKept: boolean
 }
+export interface ReleaseFilePreview {
+  path: string
+  kind: 'text' | 'image' | 'unsupported'
+  size: number
+  text?: string
+  dataUrl?: string
+  truncated: boolean
+  message?: string
+}
+export interface ReleaseFindingContext { path:string; line:number; lines:Array<{number:number;text:string}>; hasMore:boolean }
 export interface ReleaseManualDecision { path: string; decision: 'include' | 'exclude'; contentFingerprint: string; reason?: string }
 export interface ReleaseSensitiveException { path: string; findingFingerprint: string; contentFingerprint: string; reason: string }
-export type ReleaseCandidateRequest = Pick<CreateReleaseBody, 'intent'|'targetVersion'|'versions'|'createTag'|'pushRemote'|'versionMode'|'buildMode'|'selectedTargets'|'selectedPaths'|'statusFingerprint'|'manualDecisions'|'sensitiveExceptions'>
+export type ReleaseCandidateRequest = Pick<CreateReleaseBody, 'skipChecks'|'intent'|'targetVersion'|'versions'|'createTag'|'pushRemote'|'versionMode'|'buildMode'|'selectedTargets'|'selectedPaths'|'statusFingerprint'|'manualDecisions'|'sensitiveExceptions'>
 export interface ReleaseCandidate {
+  checksSkipped?: boolean
   id: string; fingerprint: string; status: string; intent: string; accepted: boolean; canFormal: boolean; canSaveProgress: boolean
   classifications: ReleaseFileClassification[]; selectedPaths: string[]; warnings: string[]; mutationDetected: boolean; treeHash: string
   sensitiveFindings: Array<{path:string;kind:string;reason:string;line?:number;redacted:string;fingerprint:string;contentFingerprint:string}>

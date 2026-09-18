@@ -162,6 +162,10 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handlePorts(w, r, id)
 	case "release/preflight":
 		s.handleReleasePreflight(w, r, id)
+	case "release/file-preview":
+		s.handleReleaseFilePreview(w, r, id)
+	case "release/finding-context":
+		s.handleFindingContext(w, r, id)
 	case "release/unstage":
 		s.handleReleaseUnstage(w, r, id)
 	case "release/notes-draft":

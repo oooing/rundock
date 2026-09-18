@@ -62,6 +62,12 @@ export async function selectProjectPath(kind: 'script' | 'folder'): Promise<stri
   return invoke('select_project_path', { kind })
 }
 
+/** Read the OS display language, independent of browser language or regional formats. */
+export async function getSystemLocale(): Promise<string | null> {
+  if (!isTauri) return null
+  return invoke<string | null>('system_locale')
+}
+
 /** Sync native window/tray labels without restarting the app or its projects. */
 export async function setNativeLanguage(locale: Locale): Promise<void> {
   if (!isTauri) return

@@ -29,6 +29,7 @@ const executionPlanSchemaVersion = 1
 // starts. Retries consume this snapshot instead of a possibly edited project
 // manifest.
 type executionPlan struct {
+	SkipChecks            bool                      `json:"skipChecks,omitempty"`
 	SchemaVersion         int                       `json:"schemaVersion"`
 	BuildMode             string                    `json:"buildMode,omitempty"`
 	ConfigPath            string                    `json:"configPath"`
@@ -616,6 +617,9 @@ func verifyBuildSideEffects(before, after worktreeSnapshot, allowedPatterns []st
 }
 
 func (s *Service) executeTargetChecks(ctx context.Context, run *store.ReleaseRun, plan *executionPlan) error {
+	if plan.SkipChecks {
+		return nil
+	}
 	if plan.CandidateID != "" {
 		for _, target := range plan.Targets {
 			if target.Steps.Check != "" {

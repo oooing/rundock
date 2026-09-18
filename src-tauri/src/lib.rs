@@ -26,6 +26,7 @@ mod window_layout;
 mod desktop_exit;
 mod project_picker;
 mod app_update;
+mod system_locale;
 
 #[cfg(not(debug_assertions))]
 const SIDECAR_PORT: &str = "17654";
@@ -37,6 +38,11 @@ struct SidecarState(Mutex<Option<Child>>);
 struct UiMenu {
     show: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
+}
+
+#[tauri::command]
+fn system_locale() -> Option<&'static str> {
+    system_locale::detect()
 }
 
 /// Only changes presentation; project configuration and running processes are untouched.
@@ -346,7 +352,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_shell::init())
         .manage(app_update::UpdateState::default())
-        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, set_ui_language, project_picker::select_project_path, app_update::check_app_update, app_update::download_app_update, app_update::install_app_update])
+        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, system_locale, set_ui_language, project_picker::select_project_path, app_update::check_app_update, app_update::download_app_update, app_update::install_app_update])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

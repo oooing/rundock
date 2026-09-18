@@ -6,23 +6,42 @@ export const LOCALE_STORAGE_KEY = 'rundock.ui.locale'
 const messages: Record<string, string> = english
 
 export function normalizeLocale(value: unknown): Locale {
-  return value === 'en' ? 'en' : 'zh-CN'
+  return typeof value === 'string' && /^zh(?:[-_]|$)/i.test(value.trim()) ? 'zh-CN' : 'en'
 }
 
-function storedLocale(): Locale {
+function storedLocale(): Locale | null {
   try {
-    return normalizeLocale(window.localStorage.getItem(LOCALE_STORAGE_KEY))
+    const value = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+    return value === 'zh-CN' || value === 'en' ? value : null
   } catch {
-    return 'zh-CN'
+    return null
   }
 }
 
-const currentLocale = ref<Locale>(storedLocale())
+function browserLocale(): Locale {
+  if (typeof navigator === 'undefined') return 'en'
+  return normalizeLocale(navigator.language || navigator.languages?.[0])
+}
+
+let explicitLocale = storedLocale()
+const currentLocale = ref<Locale>(explicitLocale ?? browserLocale())
 export const locale = readonly(currentLocale)
+
+/** Resolve the desktop display language before mounting; the browser is a fallback. */
+export async function initializeLocale(getSystemLocale: () => Promise<string | null>): Promise<void> {
+  if (explicitLocale) return
+  try {
+    const systemLocale = await getSystemLocale()
+    if (!explicitLocale && systemLocale) currentLocale.value = normalizeLocale(systemLocale)
+  } catch {
+    // Language detection must not prevent startup when the native bridge is unavailable.
+  }
+}
 
 /** Language is a device preference, separate from project/release configuration. */
 export function setLocale(value: unknown): void {
   currentLocale.value = normalizeLocale(value)
+  explicitLocale = currentLocale.value
   try {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, currentLocale.value)
   } catch {

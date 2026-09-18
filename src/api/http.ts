@@ -137,6 +137,10 @@ export const api = {
     req<{ acknowledged: boolean }>('/api/cloud-builds', { method: 'POST', body: JSON.stringify({ runId, alertKey }) }),
   releasePreflight: (id: string, checkRemote = false) =>
     req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, { method: 'POST' }),
+  previewReleaseFile: (id: string, path: string, signal?: AbortSignal) =>
+    req<import('@/types').ReleaseFilePreview>(`/api/apps/${encodeURIComponent(id)}/release/file-preview?path=${encodeURIComponent(path)}`, { signal }),
+  releaseFindingContext: (id:string,candidateId:string,fingerprint:string,expanded:boolean,signal?:AbortSignal) =>
+    req<import('@/types').ReleaseFindingContext>(`/api/apps/${encodeURIComponent(id)}/release/finding-context?${new URLSearchParams({candidateId,fingerprint,expanded:String(expanded)})}`,{signal}),
   prepareReleaseCandidate: (id: string, body: ReleaseCandidateRequest, signal?:AbortSignal) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate`, {method:'POST', body:JSON.stringify(body),signal}).then(normalizeReleaseCandidate),
   checkReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/check`, {method:'POST', body:JSON.stringify({candidateId})}).then(normalizeReleaseCandidate),
   cancelReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/cancel`, {method:'POST', body:JSON.stringify({candidateId})}).then(normalizeReleaseCandidate),

@@ -107,6 +107,25 @@ func (s *Service) PrepareCandidate(ctx context.Context, appID string, req Candid
 		return nil, err
 	}
 
+	// Opt-out is explicit, request-bound and never represented as a passing check.
+	// Keep the isolated snapshot and all path/version/content binding guarantees.
+	if req.SkipChecks {
+		cand.View = CandidateView{ID: cand.ID, Fingerprint: cand.Fingerprint, Status: CheckSkipped, Intent: intent,
+			Classifications: classifications, SelectedPaths: selected, TreeHash: cand.TreeHash,
+			SensitiveFindings: []SensitiveFinding{}, DependencyFindings: []DependencyFinding{},
+			CheckResults: []CheckResult{{ID: "rundock:pre-release", Name: "发布前检查", Status: CheckSkipped, Reason: "用户关闭了本次发布前检查"}},
+			Warnings:     []string{"未检查敏感内容、文件依赖或项目测试"}, ChecksSkipped: true,
+			Accepted: intent == IntentFormal, CanFormal: intent == IntentFormal, CanSaveProgress: true}
+		if intent == IntentSaveProgress {
+			cand.View.Status = "ready"
+		}
+		if err := ctx.Err(); err != nil {
+			cand.cleanup()
+			return nil, err
+		}
+		s.storeCandidate(cand)
+		return cloneView(cand.View), nil
+	}
 	scanPaths, err := listCandidateFiles(cand.Work)
 	if err != nil {
 		cand.cleanup()
@@ -643,6 +662,7 @@ func candidateFingerprint(head string, selected []string, req CandidateRequest, 
 		parts = append(parts, string(raw))
 	}
 	plan, err := json.Marshal(struct {
+		SkipChecks    bool
 		Intent        string
 		VersionMode   string
 		BuildMode     string
@@ -651,7 +671,7 @@ func candidateFingerprint(head string, selected []string, req CandidateRequest, 
 		PushRemote    *bool
 		Versions      []ReleaseVersionInput
 		Targets       []storeReleaseTarget
-	}{req.Intent, req.VersionMode, req.BuildMode, req.TargetVersion, req.CreateTag, req.PushRemote, req.Versions, toStoreTargets(req.SelectedTargets)})
+	}{req.SkipChecks, req.Intent, req.VersionMode, req.BuildMode, req.TargetVersion, req.CreateTag, req.PushRemote, req.Versions, toStoreTargets(req.SelectedTargets)})
 	if err != nil {
 		return "", err
 	}
@@ -862,7 +882,7 @@ func (s *Service) ensureReleaseCandidate(ctx context.Context, appID string, req 
 		fp := cand.Fingerprint
 		head := cand.HeadSHA
 		cand.mu.Unlock()
-		if !view.Accepted || view.Status != CheckPassed {
+		if !candidateReleaseReady(view, req.SkipChecks) {
 			return nil, &Error{Code: "candidate_not_accepted", Message: "正式发布必须使用已检查通过的验收候选"}
 		}
 		if fp == "" || tree == "" {
@@ -892,7 +912,7 @@ func (s *Service) ensureReleaseCandidate(ctx context.Context, appID string, req 
 		StatusFingerprint: req.StatusFingerprint, SelectedPaths: selected, ManualDecisions: req.ManualDecisions,
 		Intent: intent, TargetVersion: req.TargetVersion, Versions: req.Versions, VersionMode: req.VersionMode,
 		CreateTag: req.CreateTag, PushRemote: req.PushRemote, BuildMode: req.BuildMode, SelectedTargets: req.SelectedTargets,
-		SensitiveExceptions: req.SensitiveExceptions,
+		SensitiveExceptions: req.SensitiveExceptions, SkipChecks: req.SkipChecks,
 	})
 }
 
@@ -915,7 +935,7 @@ func (s *Service) verifyAcceptedCandidate(ctx context.Context, run *store.Releas
 	if err := s.validateCandidateBinding(ctx, cand, cand.Request); err != nil {
 		return err
 	}
-	if plan.Intent == IntentFormal && (!cand.View.Accepted || cand.View.Status != CheckPassed) {
+	if plan.Intent == IntentFormal && !candidateReleaseReady(&cand.View, plan.SkipChecks) {
 		return &Error{Code: "candidate_not_accepted", Message: "正式发布必须使用已检查通过的验收候选"}
 	}
 	if plan.CandidateFingerprint != "" && cand.Fingerprint != plan.CandidateFingerprint {
@@ -932,6 +952,10 @@ func (s *Service) verifyAcceptedCandidate(ctx context.Context, run *store.Releas
 	_ = pf
 	_ = run
 	return nil
+}
+
+func candidateReleaseReady(view *CandidateView, skip bool) bool {
+	return view.Accepted && view.ChecksSkipped == skip && ((!skip && view.Status == CheckPassed) || (skip && view.Status == CheckSkipped))
 }
 
 func changeStatus(pf *Preflight, path string) string {

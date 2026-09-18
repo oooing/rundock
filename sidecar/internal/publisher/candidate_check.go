@@ -77,7 +77,7 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 		cand.mu.Unlock()
 		return nil, err
 	}
-	if cand.View.Status == CheckCancelled {
+	if cand.Request.SkipChecks || cand.View.Status == CheckCancelled {
 		view := cloneView(cand.View)
 		cand.mu.Unlock()
 		return view, nil

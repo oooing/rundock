@@ -30,11 +30,28 @@ func scanSensitiveFile(rel string, content []byte) []SensitiveFinding {
 		return nil
 	}
 	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	// Evidence is derived from the exact source being scanned, never the path alone.
+	content = []byte(strings.Join(lines, "\n"))
+	fixtures := inspectTestLiterals(rel, content)
 	out := []SensitiveFinding{}
+	offset := 0
 	for i, line := range lines {
-		out = append(out, matchSensitiveLine(rel, i+1, line)...)
+		for _, finding := range matchSensitiveLine(rel, i+1, line) {
+			column := len(line) - len(strings.TrimLeftFunc(line, unicode.IsSpace)) + finding.Column - 1
+			if finding.Kind == "github-token" && fixtures.contains(offset+column, false) {
+				matches := githubToken.FindString(line[column:])
+				if knownFixtureGitHubToken(matches) {
+					continue
+				}
+			}
+			out = append(out, finding)
+		}
+		offset += len(line) + 1
 	}
-	if location := pem.FindIndex(content); location != nil {
+	for _, location := range pem.FindAllIndex(content, -1) {
+		if fixtures.contains(location[0], true) {
+			continue
+		}
 		out = append(out, SensitiveFinding{
 			Path: rel, Kind: "private-key", Reason: "包含私钥块",
 			Line:     strings.Count(string(content[:location[0]]), "\n") + 1,

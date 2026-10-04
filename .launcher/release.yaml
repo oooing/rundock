@@ -4,7 +4,7 @@
     {
       "id": "product",
       "name": "RunDock 版本",
-      "currentVersion": "2.0.25",
+      "currentVersion": "2.0.26",
       "versionFiles": [
         {
           "path": "package.json",

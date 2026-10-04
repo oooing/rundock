@@ -398,7 +398,9 @@ func TestReleaseTargetPipelineOrdersPreAndPostPushActions(t *testing.T) {
 	createTag := true
 	selection := store.ReleaseTargetSelection{TargetID: "web", Build: true, Package: true, Publish: true, Deploy: true}
 	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
-		CreateTag: &createTag, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"},
+		// The filesystem remote is not auto-detected as GitHub; this scenario
+		// explicitly requests upload to verify the pre/post-push ordering.
+		CreateTag: &createTag, PushRemote: boolPtr(true), VersionMode: "auto", SelectedPaths: []string{"tracked.txt"},
 		SelectedTargets: []store.ReleaseTargetSelection{selection}, StatusFingerprint: pf.StatusFingerprint,
 		ExternalActionsConfirmed: true, ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,
 	}))

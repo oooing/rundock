@@ -95,7 +95,9 @@ func TestReleaseWithoutTagSkipsVersionAndTagStages(t *testing.T) {
 	}
 	createTag := false
 	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
-		CreateTag: &createTag, VersionMode: "auto", TargetVersion: "not-a-version",
+		// This fixture uses a filesystem remote, so uploading is an explicit choice
+		// rather than the GitHub-only automatic synchronization default.
+		CreateTag: &createTag, PushRemote: boolPtr(true), VersionMode: "auto", TargetVersion: "not-a-version",
 		SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 	}))
 	if err != nil {

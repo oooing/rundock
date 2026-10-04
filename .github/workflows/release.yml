@@ -194,7 +194,7 @@ jobs:
           name: schema-upgrade-${{ needs.prepare.outputs.tag_name }}
           path: outputs/acceptance/schema-upgrade-*/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 1
 
       - name: Save installers for publishing or dry-run inspection
         uses: actions/upload-artifact@v4

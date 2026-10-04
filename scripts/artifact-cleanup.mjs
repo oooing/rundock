@@ -1,9 +1,10 @@
 const DAY_MS = 24 * 60 * 60 * 1000
 const WORKFLOW = '.github/workflows/release.yml'
 
-// Plans and installers belong to one release attempt. Never touch other artifacts.
+// Plans, installers and synthetic upgrade evidence share a one-day release lifecycle.
+// Keep the name allowlist narrow: unrelated reports must never become cleanup targets.
 export function isManagedArtifact(artifact) {
-  return /^(?:release-plan|launcher-windows)-v\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(artifact.name)
+  return /^(?:release-plan|launcher-windows|schema-upgrade)-v\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(artifact.name)
 }
 
 export function wasPublished(jobs) {

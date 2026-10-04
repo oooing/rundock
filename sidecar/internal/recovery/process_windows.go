@@ -31,7 +31,7 @@ func SameProcess(p Process) bool {
 	if windows.GetProcessTimes(h, &created, &exit, &kernel, &user) != nil {
 		return false
 	}
-	return uint64(created.HighDateTime)<<32|uint64(created.LowDateTime) == expected && exit.HighDateTime == 0 && exit.LowDateTime == 0
+	return uint64(created.HighDateTime)<<32|uint64(created.LowDateTime) == expected && exit.HighDateTime == 0 && exit.LowDateTime == 0 && verifyIdentity(h, p) == nil
 }
 
 func Snapshot() ([]Process, error) {

@@ -2,14 +2,16 @@
 import { tr } from '@/i18n'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AppView, CloudBuildStatus, Group, ServiceRole, StartupIssue } from '@/types'
-import { api } from '@/api/http'
+import type { AppView, CloudBuildStatus, Group, ServiceRole } from '@/types'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
 import { CARD_COLOR_PALETTE, getCardVisualStyle, normalizeHexColor } from '@/utils/cardColors'
 import { runningEffect, startingEffect } from '@/stores/motion'
 import StartupIndicator from './StartupIndicator.vue'
 import { cardServices, cardServiceDetails } from '@/utils/cardServices'
+import { useAppStartup } from '@/composables/useAppStartup'
+import AppStartupNotice from './AppStartupNotice.vue'
+import PortResolutionDialog from './PortResolutionDialog.vue'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
 const emit = defineEmits<{
@@ -27,75 +29,11 @@ const emit = defineEmits<{
 
 const a = computed(() => props.app)
 const appsStore = useAppsStore()
-const runtimeLocked = computed(() => !!a.value.runtimeCheck && a.value.runtimeCheck.state !== 'clear')
-const recheckingRuntime = ref(false)
-const runtimeError = ref('')
-async function recheckRuntime() {
-  if (recheckingRuntime.value) return
-  recheckingRuntime.value = true
-  runtimeError.value = ''
-  try { await appsStore.checkRuntime(a.value.id) }
-  catch (e: any) { runtimeError.value = e?.message || String(e) }
-  finally { recheckingRuntime.value = false }
-}
+const { runtimeLocked, recheckingRuntime, runtimeError, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel, recheckRuntime, checkStartupIssue } = useAppStartup(a)
+const portDialog = ref<InstanceType<typeof PortResolutionDialog> | null>(null)
+const canInspectConflict = computed(() => a.value.runtimeCheck?.state === 'conflict' || (!runtimeLocked.value && a.value.status === 'failed' && portIssue.value))
 const buildFailures = computed(() => (props.cloudAlerts || []).filter(alert => alert.state === 'failed'))
 const buildBadge = computed(() => buildFailures.value.length ? tr('构建失败') : tr('构建待确认'))
-const startupIssue = ref<StartupIssue | null>(null)
-const checkingIssue = ref(false)
-const recovering = ref(false)
-const recoveryError = ref('')
-const issueDetails = ref<HTMLDetailsElement | null>(null)
-watch(recoveryError, async (error) => {
-  if (error) { await nextTick(); if (issueDetails.value) issueDetails.value.open = true }
-})
-const showStartupIssue = computed(() => !runtimeLocked.value && (a.value.status === 'failed' || recovering.value))
-// Empty conflicts only confirm a free port after a successful ownership check.
-const portsReleased = computed(() => startupIssue.value?.code === 'port_in_use'
-  && startupIssue.value.canRecover && startupIssue.value.conflicts.length === 0)
-const issueTitle = computed(() => {
-  if (recovering.value) return tr('正在重新启动…')
-  if (checkingIssue.value) return tr('正在检查失败原因…')
-  if (portsReleased.value) return tr('上次启动失败')
-  if (startupIssue.value?.conflicts.length) return tr('端口 {0} 被占用', [[...new Set(startupIssue.value.conflicts.map(conflict => conflict.port))].join('、')])
-  return tr('启动失败')
-})
-const issueDescription = computed(() => {
-  if (recovering.value) return checkingIssue.value ? tr('正在检查占用进程…') : ''
-  if (checkingIssue.value) return ''
-  if (portsReleased.value) return tr('启动脚本报告端口 {0} 被占用，当前未检测到占用；若重试仍失败，请查看日志。', [startupIssue.value!.ports.join('、')])
-  if (startupIssue.value?.reason) return tr(startupIssue.value.reason)
-  if (startupIssue.value?.canRecover && startupIssue.value.conflicts.length) return tr('将关闭本项目占用进程，再自动启动')
-  return tr('打开日志查看失败原因。')
-})
-let issueRequest = 0
-async function checkStartupIssue() {
-  const request = ++issueRequest
-  if (a.value.status !== 'failed') { startupIssue.value = null; checkingIssue.value = false; recoveryError.value = ''; return }
-  checkingIssue.value = true
-  try {
-    const result = await api.startupIssue(a.value.id)
-    if (request === issueRequest) startupIssue.value = result
-  } catch {
-    if (request === issueRequest) startupIssue.value = null
-  } finally { if (request === issueRequest) checkingIssue.value = false }
-}
-watch(() => [a.value.id, a.value.status, a.value.runId], checkStartupIssue, { immediate: true })
-async function recoverPorts() {
-  if (recovering.value) return
-  recovering.value = true
-  recoveryError.value = ''
-  try {
-    // Refresh the process identity; never submit stale PID information from a card.
-    await checkStartupIssue()
-    const issue = startupIssue.value
-    if (!issue?.canRecover) throw new Error(issue?.reason || tr('无法安全释放端口，请查看日志'))
-    await api.recoverPorts(a.value.id, issue.fingerprint)
-    await useAppsStore().load()
-  } catch (error: any) {
-    recoveryError.value = error?.message || String(error)
-    await checkStartupIssue()
-  } finally { recovering.value = false }
-}
 
 function chooseGroup(event: Event) {
   const select = event.target as HTMLSelectElement
@@ -243,22 +181,6 @@ const isActive = computed(
 // URL 仅在服务运行时才可达；停止/失败时置灰，避免点了浏览器显示无法访问造成"链接坏了"的误会。
 const urlReachable = computed(() => isActive.value)
 
-const statusLabel = computed(() => {
-  if (a.value.runtimeCheck?.state === 'conflict') return tr('端口被占用')
-  if (a.value.restarting) return tr("重启中")
-  const m: Record<string, string> = {
-    starting: tr("启动中"),
-    running: tr("运行中"),
-    degraded: tr("降级"),
-    stopping: tr("停止中"),
-    stopped: tr("已停止"),
-    failed: tr("失败"),
-    checking: tr('正在检查'),
-    unknown: tr('状态待确认'),
-  }
-  return m[a.value.status] || a.value.status
-})
-
 // 服务健康状态文本
 function healthText(h: string): string {
   const m: Record<string, string> = {
@@ -353,38 +275,13 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <span class="k">{{ tr('启动脚本') }}</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
       </div>
-      <div v-if="runtimeLocked" class="runtime-notice" role="status">
-        <UiIcon :name="a.runtimeCheck?.state === 'running' ? 'server' : 'alert-circle'" :size="15" />
-        <div><p>{{ tr(a.runtimeCheck?.message || '') }}</p>
-          <p v-for="conflict in a.runtimeCheck?.conflicts" :key="`${conflict.port}-${conflict.pid}`" class="mono">:{{ conflict.port }} · {{ conflict.name || tr('未知进程') }} · PID {{ conflict.pid }}</p>
-          <p v-if="runtimeError">{{ runtimeError }}</p>
-        </div>
-      </div>
-    <button v-if="showStartupIssue" type="button" class="failure-log-link" @click="emit('log', a.id)"><UiIcon name="alert-circle" :size="18" /><strong>{{ issueTitle }}</strong><span>{{ tr('查看失败日志') }}</span><UiIcon name="arrow-right" :size="14" /></button>
-    <details v-if="showStartupIssue" ref="issueDetails" class="startup-error" :class="{ pending: checkingIssue || recovering }" :aria-busy="checkingIssue || recovering">
-      <summary>
-        <strong>{{ tr('原因与处理') }}</strong>
-        <UiIcon class="issue-chevron" name="chevron-down" :size="13" />
-      </summary>
-      <div class="issue-content">
-        <p v-if="issueDescription">{{ issueDescription }}</p>
-        <p v-if="recoveryError" class="recovery-error" role="alert">{{ recoveryError }}</p>
-        <details v-if="startupIssue?.conflicts.length" class="conflict-details">
-          <summary>{{ tr('占用详情') }}<UiIcon name="chevron-down" :size="12" /></summary>
-          <div v-for="c in startupIssue.conflicts" :key="`${c.port}-${c.pid}`" class="mono">:{{ c.port }} · {{ c.name }} · PID {{ c.pid }}</div>
-        </details>
-        <div class="issue-links">
-          <button v-if="startupIssue?.code === 'port_in_use' && !startupIssue.canRecover" class="ghost" :disabled="recovering || checkingIssue" @click="checkStartupIssue">{{ tr('重新检查') }}</button>
-          <button class="ghost" :disabled="recovering" @click="emit('log', a.id)">{{ tr('查看日志') }}<UiIcon name="arrow-right" :size="12" /></button>
-        </div>
-      </div>
-    </details>
+      <AppStartupNotice :app="a" :locked="runtimeLocked" :issue="startupIssue" :checking="checkingIssue" :runtime-error="runtimeError" @log="emit('log', a.id)" @check="checkStartupIssue" />
     </div>
 
-    <fieldset class="actions" :disabled="recovering">
+    <fieldset class="actions" :disabled="operationBusy">
       <div class="run-actions">
-        <button v-if="runtimeLocked" :disabled="recheckingRuntime || a.runtimeCheck?.state === 'checking'" @click="recheckRuntime"><UiIcon name="refresh" :size="14" />{{ recheckingRuntime || a.runtimeCheck?.state === 'checking' ? tr('正在检查') : tr('重新检查') }}</button>
-        <button v-else-if="recovering || (a.status === 'failed' && startupIssue?.canRecover)" class="primary" :disabled="recovering || checkingIssue" @click="recoverPorts"><UiIcon name="refresh" :size="14" />{{ recovering ? tr('处理中…') : startupIssue?.conflicts.length ? tr('释放端口并重试') : tr('重新启动') }}</button>
+        <button v-if="canInspectConflict" class="primary" :disabled="checkingIssue || recheckingRuntime" aria-haspopup="dialog" @click="portDialog?.open()">{{ tr('关闭占用程序并启动') }}</button>
+        <button v-else-if="runtimeLocked" :disabled="recheckingRuntime || a.runtimeCheck?.state === 'checking'" @click="recheckRuntime"><UiIcon name="refresh" :size="14" />{{ recheckingRuntime || a.runtimeCheck?.state === 'checking' ? tr('正在检查') : tr('重新检查') }}</button>
         <template v-else-if="a.restarting">
           <button class="stop-btn" disabled><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
           <button disabled><UiIcon name="refresh" :size="14" />{{ tr('重启中…') }}</button>
@@ -401,7 +298,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <button class="ghost icon" :class="{ dim: a.lastUrl && !urlReachable }" :title="a.lastUrl ? (urlReachable ? tr('打开 URL') : tr('服务未运行，URL 可能无法访问')) : tr('暂无 URL')" :aria-label="tr('打开 URL')" :disabled="!a.lastUrl" @click="emit('open-url', a.id)"><UiIcon name="external-link" /></button>
         <button class="ghost icon" :title="tr('打开目录')" :aria-label="tr('打开目录')" @click="emit('open-dir', a.id)"><UiIcon name="folder" /></button>
         <details ref="manageDetails" class="manage" @toggle="onManageToggle" @focusout="onMenuFocusOut">
-          <summary ref="manageSummary" :title="tr('更多操作')" :aria-label="tr('更多操作')" :aria-disabled="recovering || undefined" @click="recovering && $event.preventDefault()"><UiIcon name="more-vertical" :size="18" /></summary>
+          <summary ref="manageSummary" :title="tr('更多操作')" :aria-label="tr('更多操作')" :aria-disabled="operationBusy || undefined" @click="operationBusy && $event.preventDefault()"><UiIcon name="more-vertical" :size="18" /></summary>
           <div class="manage-menu">
             <details class="runtime-details">
               <summary><UiIcon name="server" :size="15" />{{ tr('运行详情') }}<UiIcon name="chevron-down" :size="13" /></summary>
@@ -434,22 +331,15 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         </details>
       </div>
     </fieldset>
+    <PortResolutionDialog ref="portDialog" :app-id="a.id" :app-name="a.name" @busy="resolvingPorts = $event" @start="emit('start', a.id)" />
   </article>
 </template>
 
 <style scoped>
-.runtime-notice { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; color: var(--card-muted, var(--text-dim)); font-size: 11px; line-height: 1.6; }
-.runtime-notice svg { flex: 0 0 auto; margin-top: 2px; }
-.runtime-notice p { margin: 0 0 4px; overflow-wrap: anywhere; }
 .badge.checking, .badge.unknown { color: var(--card-status-amber, var(--amber)); }
 .services-heading { display: flex; justify-content: space-between; color: var(--card-muted, var(--text-dim)); font-size: 11px; margin-bottom: 4px; }
 .svc-source { margin-left: auto; white-space: nowrap; font-size: 10px; color: var(--card-muted, var(--text-faint)); }
 .svc-dot.inactive { background: var(--card-muted, var(--text-faint)); }
-.failure-log-link { width: 100%; display: flex; align-items: center; gap: 7px; padding: 10px; margin-top: 10px; text-align: left; border: 1px solid var(--card-status-red, var(--red)); border-radius: 7px; background: var(--card-panel, var(--bg)); color: var(--card-status-red, var(--red)); }
-.failure-log-link strong { flex: 1; font-size: 12px; }
-.failure-log-link span { font-size: 11px; white-space: nowrap; }
-.failure-log-link:hover { background: var(--card-panel, var(--bg-elev-2)); }
-.failure-log-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .card {
   position: relative;
   background: var(--card-bg, var(--bg-elev));
@@ -599,26 +489,6 @@ button.dim { color: var(--card-muted, var(--text-dim)); }
 .custom-color input[type='color'] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: none; }
 .color-menu .clear-color { justify-content: flex-start; text-align: left; background: none; border: 0; padding: 4px; font-size: 12px; color: var(--card-muted, var(--text-dim)); }
 .color-menu .clear-color:hover { background: var(--card-panel, var(--bg-elev-2)); border-color: var(--card-border, var(--border)); }
-.startup-error { font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.startup-error > summary { display: flex; align-items: center; gap: 7px; padding: 2px 0; border-radius: 3px; cursor: pointer; list-style: none; }
-.startup-error > summary::-webkit-details-marker { display: none; }
-.startup-error > summary strong { color: var(--card-fg, var(--text)); font-size: 12px; font-weight: 500; }
-.issue-chevron { margin-left: auto; color: var(--card-muted, var(--text-dim)); }
-.startup-error[open] > summary .issue-chevron { transform: rotate(180deg); }
-.issue-icon { color: var(--card-status-red, var(--red)); }
-.resolved .issue-icon { color: var(--card-status-green, var(--green)); }
-.pending .issue-icon { color: var(--card-muted, var(--text-dim)); }
-.issue-content { min-width: 0; padding: 4px 0 2px 23px; }
-.issue-content p { margin: 4px 0 0; color: var(--card-muted, var(--text-dim)); }
-.issue-content .recovery-error { color: var(--card-status-red, var(--red)); }
-.issue-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; }
-.issue-links > button { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; border: 0; border-radius: 2px; background: transparent; color: var(--card-muted, var(--text-dim)); font-size: 11px; }
-.issue-links > button:hover:not(:disabled) { color: var(--card-fg, var(--text)); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
-.conflict-details { margin-top: 6px; color: var(--card-muted, var(--text-dim)); font-size: 11px; }
-.conflict-details summary { display: inline-flex; align-items: center; gap: 4px; border-radius: 2px; cursor: pointer; list-style: none; }
-.conflict-details summary::-webkit-details-marker { display: none; }
-.conflict-details[open] summary .ui-icon { transform: rotate(180deg); }
-.conflict-details .mono { margin-top: 5px; }
 @media (max-width: 420px) {
   .card { padding: 15px 14px 10px; }
   .group-select { max-width: 112px; }

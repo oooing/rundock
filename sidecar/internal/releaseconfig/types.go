@@ -57,9 +57,10 @@ type CheckProfile struct {
 }
 
 // Automation describes an external release pipeline. It is deliberately
-// declarative: the launcher only pushes the frozen Git/tag plan and never
-// reads or stores GitHub credentials.
+// declarative: legacy targets hand off through Tag push; dispatch targets use
+// the credential provider with a frozen source and operation identity.
 type Automation struct {
+	Account          string `json:"account,omitempty"`
 	Provider         string `json:"provider"`
 	Workflow         string `json:"workflow"`
 	Trigger          string `json:"trigger"`
@@ -87,17 +88,21 @@ type VersionFile struct {
 }
 
 type Target struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Kind         string   `json:"kind"`
-	VersionGroup string   `json:"versionGroup"`
-	WorkingDir   string   `json:"workingDir"`
-	Runner       Runner   `json:"runner"`
-	Enabled      bool     `json:"enabled"`
-	Detected     bool     `json:"detected"`
-	Confidence   float64  `json:"confidence"`
-	Steps        Steps    `json:"steps"`
-	Artifacts    []string `json:"artifacts"`
+	Delivery      *Delivery      `json:"delivery,omitempty"`
+	Timeouts      map[string]int `json:"timeouts,omitempty"`
+	ArtifactRules []ArtifactRule `json:"artifactRules,omitempty"`
+	Verification  []Verification `json:"verification,omitempty"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Kind          string         `json:"kind"`
+	VersionGroup  string         `json:"versionGroup"`
+	WorkingDir    string         `json:"workingDir"`
+	Runner        Runner         `json:"runner"`
+	Enabled       bool           `json:"enabled"`
+	Detected      bool           `json:"detected"`
+	Confidence    float64        `json:"confidence"`
+	Steps         Steps          `json:"steps"`
+	Artifacts     []string       `json:"artifacts"`
 }
 
 type Runner struct {

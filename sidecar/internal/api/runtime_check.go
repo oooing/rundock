@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,12 +15,19 @@ import (
 // Share a bounded system snapshot across cards. Rendering never blocks on WMI;
 // start requests fresh evidence under the existing startup lock.
 type runtimeMonitor struct {
-	mu       sync.RWMutex
-	gate     chan struct{}
-	read     func() (recovery.RuntimeSnapshot, error)
-	snapshot recovery.RuntimeSnapshot
-	checked  time.Time
-	err      error
+	mu        sync.RWMutex
+	gate      chan struct{}
+	read      func() (recovery.RuntimeSnapshot, error)
+	snapshot  recovery.RuntimeSnapshot
+	checked   time.Time
+	err       error
+	diagnoses map[string]cachedPortDiagnosis
+}
+
+type cachedPortDiagnosis struct {
+	config      string
+	expires     time.Time
+	observation recovery.Observation
 }
 
 func (m *runtimeMonitor) refresh(ctx context.Context) error {
@@ -43,6 +51,7 @@ func (s *Server) observeRuntime(a *store.App) *recovery.Observation {
 	m := s.runtimeMonitor
 	m.mu.RLock()
 	snapshot, checked, err := m.snapshot, m.checked, m.err
+	cached := m.diagnoses[a.ID]
 	m.mu.RUnlock()
 	if checked.IsZero() {
 		return &recovery.Observation{State: "checking", Message: "正在检查项目进程和端口…"}
@@ -55,6 +64,9 @@ func (s *Server) observeRuntime(a *store.App) *recovery.Observation {
 		return &recovery.Observation{State: "unknown", Message: "暂时无法确认项目状态，已暂停启动，请稍后重新检查。"}
 	}
 	observation := recovery.InspectRuntime(a, known, snapshot)
+	if cached.expires.After(time.Now()) && cached.config == launchFingerprint(a) && observation.State != "running" {
+		return &cached.observation
+	}
 	return &observation
 }
 
@@ -79,10 +91,44 @@ func (s *Server) checkBeforeStart(ctx context.Context, a *store.App) error {
 	if err := s.runtimeMonitor.refresh(ctx); err != nil {
 		return fmt.Errorf("暂时无法确认项目状态，已暂停启动，请稍后重新检查。")
 	}
-	observation := s.observeRuntime(a)
-	if observation != nil && observation.State != "clear" {
+	s.runtimeMonitor.mu.RLock()
+	snapshot := s.runtimeMonitor.snapshot
+	s.runtimeMonitor.mu.RUnlock()
+	known, err := s.Store.ListLatestServicesByApp(a.ID)
+	if err != nil {
+		return fmt.Errorf("无法确认项目服务，请稍后重新检查")
+	}
+	observation := recovery.InspectRuntime(a, known, snapshot)
+	if observation.State == "running" {
 		return fmt.Errorf("%s", observation.Message)
 	}
+	denied, dualStack, err := freshBindingEvidence(a, snapshot)
+	if err != nil {
+		return err
+	}
+	reserved := append(observation.ReservedPorts, denied...)
+	if len(reserved) > 0 {
+		return fmt.Errorf("端口 %v 被 Windows 保留或拒绝绑定，关闭程序无法释放，请调整项目端口配置", reserved)
+	}
+	conflicts := append(observation.Conflicts, dualStack...)
+	if len(conflicts) > 0 {
+		result := portResolution{State: "conflict", Message: "项目端口已被其他程序占用，可查看占用程序并处理", ReservedPorts: []int{}}
+		for _, c := range conflicts {
+			name := c.Name
+			for _, p := range snapshot.Processes {
+				if p.PID == c.PID {
+					name = filepath.Base(p.Executable)
+					break
+				}
+			}
+			result.Conflicts = append(result.Conflicts, portConflict{Port: c.Port, PID: c.PID, Name: name})
+		}
+		s.cachePortDiagnosis(a, result)
+		return fmt.Errorf("%s", result.Message)
+	}
+	s.runtimeMonitor.mu.Lock()
+	delete(s.runtimeMonitor.diagnoses, a.ID)
+	s.runtimeMonitor.mu.Unlock()
 	return nil
 }
 
@@ -130,12 +176,19 @@ func (s *Server) handleRuntimeCheck(w http.ResponseWriter, r *http.Request, id s
 		writeError(w, 404, "app not found")
 		return
 	}
+	var fresh *portResolution
 	if s.runtimeMonitor != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		_ = s.runtimeMonitor.refresh(ctx)
+		if result, _, _, err := s.portEvidence(ctx, id); err == nil {
+			fresh = &result
+		}
 	}
-	writeJSON(w, 200, appView(a, s))
+	view := appView(a, s)
+	if fresh != nil {
+		view["runtimeCheck"] = fresh
+	}
+	writeJSON(w, 200, view)
 }
 
 func (s *Server) rejectUnmanagedControl(w http.ResponseWriter, id string) bool {

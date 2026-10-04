@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-03",
+  "kind": "public-summary-of-existing-acceptance",
+  "passed": true,
+  "boundary": "real isolated sidecar/SQLite + current Vue + real Node bundle/gzip build; not Android/device installation or public release",
+  "checkCount": 32,
+  "checks": [
+    "No-Git current-version real build/package/verify/download; source unchanged; final outputs only",
+    "Windows saved artifact path over 260 characters: atomic save, verified listing and exact download succeed",
+    "Package-only target works; configured GitHub delivery does not upload in files-only mode",
+    "Clean Git worktree builds without a commit, Tag, version change or push",
+    "Staged + untracked current source snapshot; original HEAD/index/status/tags unchanged",
+    "Duplicate submission returns one durable operation",
+    "Stale configuration, remote/version/path injection and unavailable targets rejected",
+    "fail: no false success, actionable error and no unverified downloadable package",
+    "missing: no false success, actionable error and no unverified downloadable package",
+    "badverify: no false success, actionable error and no unverified downloadable package",
+    "Immediate cancellation cannot become successful or execute later phases",
+    "Foreign/null browser origins, cross-run artifact IDs and path traversal denied",
+    "Legacy release URLs cannot read/cancel/sync/retry local-only tasks from a foreign origin; formal history stays separate",
+    "Backend restart: history, idempotency and exact saved artifact bytes recover without rebuilding",
+    "Injected atomic-save/DB gap: restart re-registers verified captured packages without rerunning commands or claiming task success",
+    "Injected incomplete-save/DB gap: restart cannot register or expose partially valid saved files",
+    "Saved artifact tampering becomes unavailable and download is blocked, not silently served",
+    "Windows source junction cannot escape the project into another source tree",
+    "Interrupted task is explicit after restart and is never automatically rebuilt or published",
+    "Existing formal local-only release still commits intentionally and now reliably saves/downloads final packages",
+    "Formal local no-upload storage gap: restart restores verified final files without recommitting, rebuilding or publishing",
+    "Check-enabled untagged formal build reads actual candidate version 1.2.3, not stale configured 0.0.1 or a suggested bump",
+    "Browser file fetch interrupted: clear retry/manual saved-directory fallback, without losing verified task outputs",
+    "Actual App button invokes verified native output-directory opening",
+    "Partial artifact tampering: App disables directory opening, explains why, and keeps verified individual download",
+    "Delayed real configuration response locks target editing until loaded; a selected target is not overwritten mid-click",
+    "UI close/reopen recovers running task; explicit cancel gives terminal feedback",
+    "Reopened real compiler failure after injecting 650 persisted history records: copies final diagnostics instead of the first log page",
+    "UI 409 creation error and cancel error survive background refresh until a deliberate retry",
+    "Lost accepted HTTP response: UI retains idempotency key and recovers the same task without duplicate commands",
+    "Broken current configuration + fresh browser storage: old verified tasks and downloads remain accessible",
+    "Actual ReleaseModal no-Git tab, concise in-App help, target selection, real build success and browser download"
+  ],
+  "sourceReport": {
+    "file": "local-build-1791017884303/report.json",
+    "sha256": "4f6141107389edec6b896105b5f65516153b923bd0554251d093abde2fbf2030",
+    "storage": "local ignored outputs; trace, logs and machine paths are not committed"
+  },
+  "externalSampleReports": [
+    {
+      "type": "android-local",
+      "version": "1.2.34",
+      "passed": true,
+      "sha256": "7ded7d84a89ecd641b398c0f8bc063844dd8d5ec148074d525c1449321ce24a1"
+    },
+    {
+      "type": "extension-local",
+      "version": "0.2.2",
+      "passed": true,
+      "sha256": "8541356a77b0c48391fdd443c8d9c507884ccd58bd80d48ce1ce2ddee68deca7"
+    }
+  ],
+  "exclusions": [
+    "No production install replacement",
+    "No real GitHub publish or server deployment",
+    "No Android device installation",
+    "Historical suite not rerun during document organization"
+  ]
+}

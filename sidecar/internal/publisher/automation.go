@@ -12,6 +12,12 @@ func automationHandoffApplies(run *store.ReleaseRun, plan *executionPlan) bool {
 	if run == nil || plan == nil || !run.CreateTag || !run.PushRemote {
 		return false
 	}
+	if plan.hasDelivery() {
+		return false
+	}
+	if plan.requiresDispatch() {
+		return true
+	}
 	if plan.requiresTagPush() {
 		return true
 	}

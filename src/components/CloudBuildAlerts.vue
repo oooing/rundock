@@ -5,7 +5,10 @@ import { getBaseURL } from '@/api/base'
 import { wsClient } from '@/api/ws'
 import { tr } from '@/i18n'
 import UiIcon from './UiIcon.vue'
-import type { AppView, CloudBuildStatus } from '@/types'
+import CopyErrorButton from './CopyErrorButton.vue'
+import { cloudFailureText } from '@/utils/buildFailure'
+import type { AppView } from '@/types'
+import type { CloudBuildStatus } from '@/types';
 
 const props = defineProps<{ app?: AppView | null }>()
 const emit = defineEmits<{ update: [alerts: CloudBuildStatus[]]; close: []; open: [appId: string] }>()
@@ -86,7 +89,7 @@ function close() { emit('close') }
 function trapFocus(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.stopPropagation(); close(); return }
   if (event.key !== 'Tab') return
-  const controls = dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href]')
+  const controls = dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], textarea')
   if (!controls?.length) return
   const first = controls[0], last = controls[controls.length - 1]
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
@@ -119,6 +122,7 @@ onUnmounted(() => { disposed = true; unsubscribe?.(); document.removeEventListen
         <p>{{ notice.appName }} · {{ notice.version }}</p>
         <p class="notice-summary">{{ tr(notice.summary) }}</p>
         <button @click="viewNotice">{{ tr('查看构建详情') }}<UiIcon name="arrow-right" :size="14" /></button>
+        <CopyErrorButton v-if="notice.state === 'failed'" :key="notice.alertKey" :text="cloudFailureText(notice)" />
       </div>
       <button class="close-button" :aria-label="tr('关闭提醒，保留卡片标识')" @click="closeNotice"><UiIcon name="close" :size="16" /></button>
     </aside>
@@ -130,6 +134,7 @@ onUnmounted(() => { disposed = true; unsubscribe?.(); document.removeEventListen
             <div class="build-item-heading"><strong>{{ alert.version }}</strong><span><UiIcon name="alert-circle" :size="14" />{{ alert.state === 'failed' ? tr('构建失败') : tr('构建待确认') }}</span></div>
             <p v-if="buildNumber(alert.url)" class="build-number">GitHub Actions #{{ buildNumber(alert.url) }}</p>
             <p class="build-summary">{{ tr(alert.summary) }}</p>
+            <CopyErrorButton v-if="alert.state === 'failed'" :text="cloudFailureText(alert)" />
             <div class="build-actions"><button v-if="alert.url" class="primary" @click="open(alert)">{{ tr('查看 GitHub 日志') }}<UiIcon name="external-link" :size="14" /></button><button :disabled="busy.includes(alert.alertKey)" @click="dismiss(alert)">{{ tr('标记已读') }}</button></div>
             <p v-if="errors[alert.alertKey]" class="build-error" role="alert">{{ errors[alert.alertKey] }} <a v-if="alert.url" :href="alert.url" target="_blank" rel="noopener noreferrer">{{ alert.url }}</a></p>
           </section>
@@ -142,6 +147,7 @@ onUnmounted(() => { disposed = true; unsubscribe?.(); document.removeEventListen
 </template>
 
 <style scoped>
+.copy-error-control + .build-actions { margin-top: 8px; }
 .build-notice { position: fixed; right: 24px; bottom: 24px; z-index: 240; width: min(420px, calc(100vw - 48px)); box-sizing: border-box; display: flex; align-items: flex-start; gap: 12px; padding: 18px; color: var(--text); background: var(--bg-elev); border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 12px; box-shadow: 0 12px 36px #0006; }
 .notice-icon { color: var(--red); flex-shrink: 0; }.notice-content { flex: 1; min-width: 0; }.notice-content strong { font-size: 14px; }.notice-content p { margin: 7px 0; font-size: 13px; overflow-wrap: anywhere; }.notice-content .notice-summary { color: var(--text-dim); font-size: 12px; line-height: 1.6; max-height: 76px; overflow: auto; }.notice-content button { margin-top: 5px; padding: 0; border: 0; background: transparent; color: var(--accent); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .build-overlay { position: fixed; inset: 0; z-index: 250; padding: 24px; background: #0009; display: grid; place-items: center; }

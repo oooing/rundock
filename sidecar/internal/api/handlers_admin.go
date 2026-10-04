@@ -165,6 +165,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/import-config -> 导入 JSON 快照（合并：按 id upsert）。
 func (s *Server) handleImportConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.startupMu.TryLock() {
+		writeError(w, 409, "已有启停操作进行中，请稍后重试")
+		return
+	}
+	defer s.startupMu.Unlock()
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

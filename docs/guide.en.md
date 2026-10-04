@@ -39,9 +39,22 @@ Folder discovery recommends existing startup scripts and recognizes `dev`, `star
 
 The desktop app currently targets **Windows 10/11 x64**. Installers are unsigned and may trigger SmartScreen warnings; verify their source and checksums. Actions test artifacts are not published production releases.
 
+### Handling port conflicts
+
+Cards distinguish an application listener from a Windows reservation. Choose **Close occupying applications and start**, review the application names and ports, then confirm. RunDock waits for the ports to become available before starting the project. Ending an external application can lose unsaved work; if permission is denied, exit the application normally.
+
+An already running instance is shown as running rather than started again. Windows reservations cannot be released by closing an application. RunDock leaves project ports, startup scripts and Windows reservation settings unchanged. Check this computer's excluded ranges when choosing ports for a new project; no fixed range is permanently safe on every Windows computer.
+
 ## Releasing a project
 
-Click the release button on a project card. The panel has **Release** and **Settings** tabs; everyday release actions stay in **Release**.
+Click the release button on a project card. Use **Release** for a new version, **Local build** for files only, and **Settings** for configuration.
+
+### Local build: files only
+
+Choose a local target → **Start build** → **Open artifact folder / Download**.
+Build the current source and version without commits, tags, or uploads. Git and new code changes are not required.
+Reopen recent tasks after closing the panel; saved artifacts outlive temporary source copies.
+Project commands still need their SDKs and dependencies. If no target is available, configure local steps and output paths in Settings.
 
 ### Release: targets, versions, and files
 
@@ -62,12 +75,12 @@ Current versions come from local tags and version files, not a live lookup of th
 ### Settings: build location and project configuration
 
 - **Build location**: each project defaults to GitHub cloud build. RunDock pushes code and versions for the configured GitHub workflow to build and package, without running local build commands.
-- **Local build**: runs checks, builds, and packaging on this computer without uploading or deploying. The choice is saved per project. Missing steps are shown as unavailable; RunDock never silently switches build locations.
+- **Local build location**: this is part of a formal release and still applies its selected version and commit actions; delivery is a separate choice. Use the **Local build** tab above when you only need files.
 
 - **Remote upload**: “Upload after committing” controls remote push. Cloud builds require it; local builds disable it. Code-only submissions can choose independently.
 - **Configuration files**: open the current configuration to view, edit, validate, and save it, or open the annotated example. Saving does not start a build or upload.
 
-Choose **Back to release** when finished to continue selecting versions and files.
+Build and upload preferences save automatically; advanced configuration has an explicit validate-and-save action. Switch tabs directly.
 
 Each project's targets, commands, version files, and automation settings live in [`.launcher/release.yaml`](../.launcher/release.yaml), written as JSON compatible with YAML 1.2. **Detecting a target does not mean its build, upload, or deployment steps are configured.**
 
@@ -128,7 +141,7 @@ In another terminal, start the frontend from the repository root:
 npm run dev
 ```
 
-Open `http://127.0.0.1:1421`. Development uses frontend port `1421`, backend port `17655`, and `%APPDATA%\launcher-sidecar-dev` for data. The installed application retains port `17654` and `%APPDATA%\launcher-sidecar`, so both can run together.
+Open `http://127.0.0.1:17656`. Development uses frontend port `17656`, backend port `17655`, and `%APPDATA%\launcher-sidecar-dev` for data. The installed application retains port `17654` and `%APPDATA%\launcher-sidecar`, so both can run together.
 
 Prefer [`scripts/dev.bat`](../scripts/dev.bat), either by double-clicking or importing it into the installed application. It finds Go on PATH, falling back to `%USERPROFILE%\go`. Both services share a process tree, so stopping the project card stops both. Failures exit without a keypress; logs are saved under `dev-logs` in the development data directory. Frontend edits hot-reload; Go changes require a restart.
 

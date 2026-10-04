@@ -5,9 +5,11 @@ const read = path => readFileSync(new URL('../../' + path, import.meta.url), 'ut
 
 test('development ports agree across the script, Vite, and desktop shell', () => {
   assert.match(read('scripts/dev.ps1'), /\$backendPort = 17655/);
-  assert.match(read('scripts/dev.ps1'), /\$frontendPort = 1421/);
-  assert.match(read('vite.config.ts'), /port: 1421/);
-  assert.equal(JSON.parse(read('src-tauri/tauri.conf.json')).build.devUrl, 'http://127.0.0.1:1421');
+  assert.match(read('scripts/dev.ps1'), /\$frontendPort = 17656/);
+  assert.match(read('vite.config.ts'), /port: 17656/);
+  assert.equal(JSON.parse(read('src-tauri/tauri.conf.json')).build.devUrl, 'http://127.0.0.1:17656');
+  assert.match(read('scripts/dev.bat'), /rundock:ready http:\/\/127\.0\.0\.1:17656\//);
+  assert.match(read('scripts/dev.bat'), /rundock:open http:\/\/127\.0\.0\.1:17656\//);
   assert.match(read('src/api/base.ts'), /import.meta.env.DEV \? 'http:\/\/127.0.0.1:17655' : 'http:\/\/127.0.0.1:17654'/);
 });
 

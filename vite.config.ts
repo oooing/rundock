@@ -12,7 +12,7 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
-    port: 1421,
+    port: 17656,
     host: '127.0.0.1',
     strictPort: true,
     // 开发期前端直连独立后端 127.0.0.1:17655。

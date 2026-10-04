@@ -5,7 +5,8 @@ param(
     [switch]$InstallDependencies,
     [switch]$SkipTests,
     [switch]$ValidateOnly,
-    [switch]$RequireSigned
+    [switch]$RequireSigned,
+    [string]$SourceCommit
 )
 
 Set-StrictMode -Version Latest
@@ -115,6 +116,13 @@ Write-Host "[release] 版本校验通过：$TagName"
 if ($ValidateOnly) {
     return
 }
+
+$buildCommit = $SourceCommit
+if (-not $buildCommit) {
+    $buildCommit = (& git -C $codeDirectory rev-parse HEAD | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Use -SourceCommit when building an isolated RunDock candidate.' }
+}
+if ($buildCommit -notmatch '^[a-f0-9]{40,64}$') { throw 'The build source commit is invalid.' }
 
 $go = Resolve-Tool 'go.exe' @(
     (Join-Path $env:USERPROFILE 'go/bin/go.exe'),
@@ -242,7 +250,7 @@ try {
         schemaVersion = 1
         tagName = $TagName
         version = $tagVersion
-        commit = (& git -C $codeDirectory rev-parse HEAD | Out-String).Trim()
+        commit = $buildCommit
         createdAt = [DateTimeOffset]::UtcNow.ToString('o')
         assets = $assets
     }

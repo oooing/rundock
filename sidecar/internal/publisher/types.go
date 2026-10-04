@@ -227,6 +227,7 @@ type RetryRequest struct {
 }
 
 type RunView struct {
+	Deliveries                []*store.ReleaseDelivery  `json:"deliveries"`
 	Run                       *store.ReleaseRun         `json:"run"`
 	Targets                   []*store.ReleaseTargetRun `json:"targets"`
 	Artifacts                 []*store.ReleaseArtifact  `json:"artifacts"`

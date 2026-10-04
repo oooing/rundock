@@ -169,24 +169,13 @@ test('mismatched, unsupported and non-boolean plans are blocked', () => {
 
 test('production workflow keeps dry-runs outside the publish job', () => {
   const workflow = readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8')
-  assert.match(workflow, /github\.event_name == 'push'/)
   assert.match(workflow, /needs\.prepare\.outputs\.publishes_release == 'true'/)
   assert.match(workflow, /persist-credentials: false/)
   assert.doesNotMatch(workflow, /git fetch/)
 })
 
-test('RunDock cloud target uses the action accepted by the publisher', () => {
-  const config = JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8'))
-  assert.equal(config.automation.provider, 'github-actions')
-  assert.equal(config.automation.trigger, 'tag')
-  for (const target of config.targets.filter(target => target.enabled)) {
-    assert.equal(target.runner.type, 'git-push')
-    assert.equal(target.steps.publish, 'tag-push')
-    for (const localAction of ['check', 'build', 'package', 'deploy']) {
-      assert.ok(!target.steps[localAction], `cloud target must not request ${localAction}`)
-    }
-  }
-})
+// Target dispatch/configuration contracts are exercised through the production
+// publisher and config service by TestCloudDispatchE2E / TestProjectDeliveryE2E.
 
 test('release configuration and workflow follow the migrated main branch', () => {
   const config = JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8'))

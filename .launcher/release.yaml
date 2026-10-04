@@ -48,20 +48,82 @@
       "detected": false,
       "confidence": 1,
       "steps": {
-        "publish": "tag-push"
+        "publish": "workflow-dispatch:release.yml"
       },
       "artifacts": [
         "RunDock_X.Y.Z_x64-setup.exe",
         "RunDock_X.Y.Z_x64_en-US.msi",
         "SHA256SUMS.txt"
       ]
+    },
+    {
+      "id": "local-windows",
+      "name": "Windows 安装包 · 本地",
+      "kind": "desktop",
+      "versionGroup": "product",
+      "workingDir": ".",
+      "runner": {
+        "type": "local",
+        "os": [
+          "windows"
+        ]
+      },
+      "enabled": true,
+      "detected": false,
+      "confidence": 1,
+      "steps": {
+        "check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-build.ps1 -TagName v${VERSION} -ValidateOnly",
+        "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-build.ps1 -TagName ${TAG} -SourceCommit ${COMMIT_SHA} -OutputDirectory .tmp/release-assets -InstallDependencies -SkipTests"
+      },
+      "artifacts": [
+        ".tmp/release-assets/RunDock_${VERSION}_x64-setup.exe",
+        ".tmp/release-assets/RunDock_${VERSION}_x64_en-US.msi",
+        ".tmp/release-assets/SHA256SUMS.txt",
+        ".tmp/release-assets/release-assets.json"
+      ],
+      "timeouts": {
+        "check": 120,
+        "build": 7200
+      },
+      "artifactRules": [
+        {
+          "pattern": ".tmp/release-assets/RunDock_${VERSION}_x64-setup.exe",
+          "min": 1,
+          "max": 1
+        },
+        {
+          "pattern": ".tmp/release-assets/RunDock_${VERSION}_x64_en-US.msi",
+          "min": 1,
+          "max": 1
+        },
+        {
+          "pattern": ".tmp/release-assets/SHA256SUMS.txt",
+          "min": 1,
+          "max": 1
+        }
+      ],
+      "verification": [
+        {
+          "name": "Windows x64、包内版本、源提交及现有未签名策略",
+          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-release-assets.ps1 -Version ${VERSION} -Commit ${COMMIT_SHA} -SignaturePolicy Unsigned",
+          "timeoutSeconds": 120
+        }
+      ],
+      "delivery": {
+        "provider": "github",
+        "repository": "oooing/rundock",
+        "account": "oooing",
+        "workflowPolicy": "dispatch-only",
+        "makeLatest": true
+      }
     }
   ],
   "automation": {
     "provider": "github-actions",
     "workflow": "release.yml",
-    "trigger": "tag",
+    "trigger": "dispatch",
     "releaseBranch": "master",
-    "publishesRelease": true
+    "publishesRelease": true,
+    "account": "oooing"
   }
 }

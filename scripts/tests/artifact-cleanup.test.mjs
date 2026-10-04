@@ -96,10 +96,8 @@ test('404 cleanup is idempotent, but permission failures remain visible', async 
   assert.deepEqual(await cleanupArtifacts(mock(entries, { deleteError: { status: 404 } })), { deleted: 0 })
   await assert.rejects(cleanupArtifacts(mock(entries, { deleteError: { status: 403 } })), e => e.status === 403)
 })
-test('workflow is completion-only with trusted code and minimum permissions', async () => {
+test('workflow uses trusted code and minimum permissions', async () => {
   const cleanup = await readFile(new URL('../../.github/workflows/cleanup-artifacts.yml', import.meta.url), 'utf8')
-  assert.match(cleanup, /workflows: \[RunDock release\]/)
-  assert.match(cleanup, /types: \[completed\]/)
   assert.match(cleanup, /ref: \$\{\{ github.event.repository.default_branch \}\}/)
   assert.match(cleanup, /contents: read/)
   assert.match(cleanup, /actions: write/)

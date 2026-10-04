@@ -21,12 +21,13 @@ const (
 
 // Runtime 描述一个 App 当前的运行态。仅存在于内存，进程退出或重启时更新。
 type Runtime struct {
-	AppID     string
-	RunID     string
-	PID       int
-	RootPID   int
-	Status    string
-	StartedAt time.Time
+	AppID       string
+	RunID       string
+	PID         int
+	RootPID     int
+	RootCreated string // Native creation identity captured when this run is spawned.
+	Status      string
+	StartedAt   time.Time
 
 	// ProcessHandle 由 proc 模块在启动时注入，用于停止与回收。
 	// 用 any 避免循环依赖（proc 反向依赖 app 的状态）。

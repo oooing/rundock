@@ -27,6 +27,7 @@ type githubWorkflowRun struct {
 	HeadSHA    string    `json:"head_sha"`
 	HeadBranch string    `json:"head_branch"`
 	Event      string    `json:"event"`
+	Title      string    `json:"display_title"`
 	Status     string    `json:"status"`
 	Conclusion string    `json:"conclusion"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -140,20 +141,46 @@ func (s *Service) checkCloudBuilds(ctx context.Context, read githubReader, now t
 
 func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo string, run *store.ReleaseRun, plan *executionPlan, build *store.CloudBuild, now time.Time) error {
 	tags := releaseTagNames(releaseVersionsForRun(run, plan))
+	event := "push"
+	dispatched := map[string]string{}
+	dispatchWorkflows := map[string]string{}
+	if plan.requiresDispatch() {
+		event = "workflow_dispatch"
+		tags = nil
+		for _, target := range plan.Targets {
+			if !strings.HasPrefix(target.Steps.Publish, "workflow-dispatch:") || !target.Selection.Publish {
+				continue
+			}
+			version, ok := plan.releaseVersionForGroup(target.VersionGroup)
+			if !ok {
+				return fmt.Errorf("missing cloud version")
+			}
+			marker := "rundock:" + run.ID + ":" + target.ID
+			tags = append(tags, marker)
+			dispatched[marker] = version.TagName
+			dispatchWorkflows[marker] = ".github/workflows/" + strings.TrimPrefix(target.Steps.Publish, "workflow-dispatch:")
+		}
+	}
 	matched := []githubWorkflowRun{}
 	created := parseReleaseTime(run.CreatedAt)
 	// A repository may route each version-group Tag to a different workflow.
 	// Automation.Workflow is a repository-level entry/link, not an exclusive
-	// identity for every target. Match the frozen commit + exact release Tag +
-	// push event + creation time, and aggregate all workflows for that release.
+	// identity for every target. Legacy pushes match commit + Tag + creation time;
+	// explicit dispatch also requires the exact operation marker and workflow path.
 	for page := 1; page <= 3; page++ {
 		var list githubRunList
-		endpoint := "repos/" + repo + "/actions/runs?event=push&per_page=100&head_sha=" + url.QueryEscape(run.CommitSHA) + "&page=" + strconv.Itoa(page)
+		endpoint := "repos/" + repo + "/actions/runs?event=" + event + "&per_page=100&head_sha=" + url.QueryEscape(run.CommitSHA) + "&page=" + strconv.Itoa(page)
 		if err := read(ctx, endpoint, &list); err != nil {
 			return err
 		}
 		for _, candidate := range list.Runs {
-			if candidate.HeadSHA != run.CommitSHA || candidate.Event != "push" || !contains(tags, candidate.HeadBranch) {
+			if event == "workflow_dispatch" {
+				if expected, ok := dispatched[candidate.Title]; !ok || expected != candidate.HeadBranch || candidate.Path != dispatchWorkflows[candidate.Title] {
+					continue
+				}
+				candidate.HeadBranch = candidate.Title
+			}
+			if candidate.HeadSHA != run.CommitSHA || candidate.Event != event || !contains(tags, candidate.HeadBranch) {
 				continue
 			}
 			if !created.IsZero() && candidate.CreatedAt.Before(created.Add(-time.Minute)) {

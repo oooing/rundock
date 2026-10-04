@@ -7,15 +7,36 @@ param(
 $ErrorActionPreference = 'Stop'
 $codeDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $backendPort = 17655
-$frontendPort = 1421
+# These defaults agree with Vite, Tauri and dev.bat readiness declarations.
+# No fixed range is universally safe; check the actual bind before compiling.
+$frontendPort = 17656
 $children = @()
 $exitCode = 0
 $logFiles = @()
 
 function Assert-PortFree([int]$Port) {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
+    $listener.ExclusiveAddressUse = $true
     try { $listener.Start() }
-    catch { throw "Development port $Port is occupied. Stop the existing development instance first." }
+    catch {
+        $socketError = $_.Exception
+        while ($socketError.InnerException) { $socketError = $socketError.InnerException }
+        if ($socketError -is [Net.Sockets.SocketException]) {
+            if ($socketError.SocketErrorCode -eq [Net.Sockets.SocketError]::AddressAlreadyInUse) {
+                throw "Development port $Port is in use by a running application. Close that application or the existing development instance, then retry."
+            }
+            if ($socketError.SocketErrorCode -eq [Net.Sockets.SocketError]::AccessDenied) {
+                $ranges = & netsh.exe int ipv4 show excludedportrange protocol=tcp 2>$null
+                foreach ($range in $ranges) {
+                    if ($range -match '^\s+(\d+)\s+(\d+)\s*\*?\s*$' -and $Port -ge [int]$Matches[1] -and $Port -le [int]$Matches[2]) {
+                        throw "Development port $Port is reserved by Windows. Closing applications cannot release a system-reserved port."
+                    }
+                }
+                throw "Windows denied access to development port $Port. It may be reserved or restricted; no occupying application has been identified."
+            }
+        }
+        throw "Cannot bind development port ${Port}: $($socketError.Message)"
+    }
     finally { $listener.Stop() }
 }
 

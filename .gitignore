@@ -1,13 +1,14 @@
 # 依赖
 node_modules/
-code/sidecar/dist/
+sidecar/dist/
 
 # 构建产物
 dist/
-!dist/*.exe
-!dist/*.msi
 src-tauri/target/
 src-tauri/gen/
+
+# 研发验收生成物：保留本地，不作为源码提交
+/outputs/
 
 # Go
 sidecar/launcher-sidecar

@@ -20,6 +20,7 @@ var migrationFS embed.FS
 // Store 包装 *sql.DB，提供类型化的数据访问。
 type Store struct {
 	db *sql.DB
+	dataDir string
 }
 
 // Open 打开指定路径的 SQLite 数据库并执行 migrations。
@@ -44,7 +45,8 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 
-	s := &Store{db: db}
+	absPath, _ := filepath.Abs(dbPath)
+	s := &Store{db: db, dataDir: filepath.Dir(absPath)}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)

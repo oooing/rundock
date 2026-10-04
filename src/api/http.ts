@@ -4,6 +4,7 @@ import { tr } from '@/i18n'
 import type {
   AppView,
   StartupIssue,
+  PortResolution,
   CreateAppBody,
   ExportSnapshot,
   Group,
@@ -99,18 +100,21 @@ async function startReq(
 
 export const api = {
   checkRuntime: (id: string) => req<AppView>(`/api/apps/${id}/runtime-check`, { method: 'POST' }),
-  discoverStartup: (path: string) => req<import('@/types').StartupDiscovery>('/api/import/discover', { method: 'POST', body: JSON.stringify({ path }) }),
+  discoverStartup: (path: string, signal?: AbortSignal) => req<import('@/types').StartupDiscovery>('/api/import/discover', { method: 'POST', body: JSON.stringify({ path }), signal }),
   // 导入（只读分析）
-  import: (scriptPath: string) =>
+  import: (scriptPath: string, signal?: AbortSignal) =>
     req<ImportCandidate>('/api/import', {
       method: 'POST',
       body: JSON.stringify({ scriptPath }),
+      signal,
     }),
 
   // Apps
   listApps: (signal?: AbortSignal) => req<AppView[]>('/api/apps', { signal }),
   getApp: (id: string) => req<AppView>(`/api/apps/${id}`),
   startupIssue: (id: string) => req<StartupIssue | null>(`/api/apps/${id}/startup-issue`),
+  portResolution: (id: string, signal?: AbortSignal) => req<PortResolution>(`/api/apps/${id}/port-resolution`, { method: 'POST', signal }),
+  resolvePorts: (id: string, confirmationToken: string) => req<StartResponse>(`/api/apps/${id}/resolve-ports`, { method: 'POST', body: JSON.stringify({ confirmationToken }) }),
   recoverPorts: (id: string, fingerprint: string) => req<StartResponse>(`/api/apps/${id}/recover-ports`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
   createApp: (body: CreateAppBody) =>
     req<AppView>('/api/apps', { method: 'POST', body: JSON.stringify(body) }),
@@ -168,6 +172,8 @@ export const api = {
     req<ReleaseRunView>(`/api/releases/${runId}?sinceLogId=${sinceLogId}`),
   retryRelease: (runId: string, externalActionsConfirmed = false) =>
     req<ReleaseRun>(`/api/releases/${runId}/retry`, { method: 'POST', body: JSON.stringify({ externalActionsConfirmed }) }),
+  cancelRelease: (runId: string) => req<ReleaseRunView>(`/api/releases/${runId}/cancel`, { method: 'POST' }),
+  checkReleaseSync: (runId: string) => req<ReleaseRunView>(`/api/releases/${runId}/sync`, { method: 'POST' }),
 
   // 日志/端口
   logs: (id: string, opts?: { since?: number; limit?: number; keyword?: string }) => {

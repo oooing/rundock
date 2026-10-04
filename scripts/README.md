@@ -1,34 +1,36 @@
 # scripts 说明
 
-本目录下的脚本用于启动 / 构建 RunDock。**双击即可运行**（在资源管理器里双击 `.bat` 文件）。
+本目录下的脚本用于启动、构建和验收 RunDock。文档分类见 [文档索引](../docs/README.md)。
 
 ---
 
 ## dev.bat —— 启动调试（日常用这个）
 
-**用途**：一个窗口里同时跑后端 + 前端，并自动打开浏览器。**关窗口即停**。
+**注意**：关闭开发窗口或按 `Ctrl+C`，会同时关闭开发服务及通过该实例启动的子项目。需要保留项目时，不要退出或重启开发脚本。
 
-**怎么用**：双击 `dev.bat`
+先在 `code` 目录安装前端依赖（`npm ci`），确保 Go 和 Node.js 可用，再双击 `dev.bat`。
 
-**它会自动**：
-1. 编译 Go 后端（增量，几秒）
-2. 启动后端（端口 17654）
-3. 8 秒后自动打开浏览器 http://localhost:1420
-4. 在同一窗口里跑前端（Vite）
+脚本先检查端口，编译 Go 后端，再启动后端和 Vite；两者就绪后才打开浏览器。
 
-**关闭**：直接关掉那个 cmd 窗口，或按 `Ctrl+C` —— 后端、前端、以及你通过平台启动的应用进程都会一起停。**不需要单独的停止脚本**。
+| 项目 | 开发版默认位置 |
+| --- | --- |
+| 界面 | http://127.0.0.1:17656/ |
+| 后端 | http://127.0.0.1:17655/ |
+| 数据 | `%APPDATA%\launcher-sidecar-dev\launcher.db` |
+| 日志 | `%APPDATA%\launcher-sidecar-dev\dev-logs\<每次启动的独立目录>\` |
+| 临时后端 | `sidecar\.tmp\launcher-sidecar-v2-dev.exe` |
 
-**生成的文件**：
-- `sidecar\.tmp\launcher-sidecar-v2-dev.exe` —— v2 临时后端，不覆盖 v1 的 `launcher-sidecar-dev.exe`
-- `sidecar-dev.log` —— 后端运行日志（排错时看这里）
+日志目录包含 `backend.stdout.log`、`backend.stderr.log`、`frontend.stdout.log` 和 `frontend.stderr.log`，实际路径会打印在开发窗口中。
+开发数据独立于正式版的 `%APPDATA%\launcher-sidecar`，不会覆盖正式版配置。
 
 **改代码后怎么生效**：
+
 | 你改了 | 怎么办 |
 |---|---|
 | 前端 `.vue` / `.ts` | **不用重启**，浏览器刷新即可（Vite 热更新） |
-| Go 后端 `.go` | 关掉窗口 → 重新双击 `dev.bat`（会自动重新编译） |
+| Go 后端 `.go` | 确认允许关闭该实例的子项目后，退出开发窗口 → 重新双击 `dev.bat` |
 
-若端口 17654 仍被旧 sidecar 占用，脚本会明确报错并停止，避免出现“前端是 v2、后端仍是 v1”的混用状态。
+端口被其他实例占用或被 Windows 保留时，脚本会报错并停止，不会自动结束占用程序。
 
 > 💡 建议：右键 `dev.bat` → 发送到 → 桌面快捷方式，以后从桌面双击。
 
@@ -39,24 +41,26 @@
 **用途**：把 Go 后端编译成 Tauri 要求的那个固定文件名，放到 `src-tauri\binaries\` 目录。
 
 **什么时候用**：
+
 - **只在用「方式二：Tauri 桌面应用」时才需要**
 - 且**只有你改了 Go 后端代码后**才需要重跑它
 - 如果你只用 `dev.bat`（浏览器调试），**永远不需要这个脚本**
 
 **产物**：
-```
+
+```text
 src-tauri\binaries\launcher-sidecar-x86_64-pc-windows-msvc.exe
 ```
 （文件名带 `-x86_64-pc-windows-msvc` 后缀是 Tauri 的硬性要求，不能改名）
 
-**配合 `cargo tauri dev` 用的完整流程**：
+**配合 Tauri 开发模式的完整流程**（在 `code` 目录）：
+
 ```bat
 :: 1. 改了 Go 代码 → 重新编译
 scripts\build-sidecar.bat
 
 :: 2. 启动桌面应用（Tauri 会自动拉起上面的那个 exe）
-cd ..
-cargo tauri dev
+npm run tauri -- dev
 ```
 
 ---
@@ -68,13 +72,15 @@ cargo tauri dev
 **怎么用**：推荐双击 `release-tool.hta`，确认版本后开始打包（约 3-5 分钟）。`release.bat` 是它调用的底层构建脚本；单独运行时会直接使用当前版本号。
 
 **它会自动**：
+
 1. 本地打包工具先同步 `package.json`、`package-lock.json`、Tauri 和 Cargo 的版本号
 2. 编译当前代码的 Go 后端到 Tauri binaries 目录（包含 v2 发布管理能力）
 3. 调用 `release-build.ps1` 做版本校验、测试、sidecar 健康检查和 Tauri 构建
 4. 生成 NSIS/MSI 安装包及 SHA-256 校验文件
 
 **产物**（在 `code\dist\`）：
-```
+
+```text
 RunDock_2.0.0_x64-setup.exe   ← NSIS 安装包（推荐，小）
 RunDock_2.0.0_x64_en-US.msi   ← MSI 安装包（企业部署）
 SHA256SUMS.txt                  ← 安装包完整性校验值
@@ -104,8 +110,8 @@ RunDock 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-pus
 
 | | 方式一：浏览器调试 | 方式二：Tauri 桌面应用 |
 |---|---|---|
-| **启动命令** | 双击 `dev.bat` | `scripts\build-sidecar.bat` 然后 `cargo tauri dev` |
-| **界面** | 浏览器 http://localhost:1420 | 原生桌面窗口 |
+| **启动命令** | 双击 `dev.bat` | `scripts\build-sidecar.bat` 然后 `npm run tauri -- dev` |
+| **界面** | 浏览器 http://127.0.0.1:17656/ | 原生桌面窗口 |
 | **改 Go 代码** | 重启 `dev.bat`（自动重编译） | 重跑 `build-sidecar.bat` + 重启 `tauri dev` |
 | **改前端代码** | 浏览器刷新即可 | 自动刷新 |
 | **适合场景** | **日常开发调试（推荐）** | 最终联调 / 演示 / 打包 |
@@ -115,18 +121,24 @@ RunDock 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-pus
 ## 常见问题
 
 **Q：双击 dev.bat 没反应 / 后端起不来？**
+
 - 看那个 cmd 窗口里的报错
-- 看 `sidecar-dev.log`（在 code 目录下）的内容
-- 最常见：Go 没装好，或端口 17654 被占用
+- 查看窗口打印的 `dev-logs` 目录，先看 `backend.stderr.log` 和 `frontend.stderr.log`
+- 确认已运行 `npm ci`，Go / Node.js 可用，17655 / 17656 未被占用
 
 **Q：端口被占用怎么办？**
-- 关掉所有 cmd 窗口，重开任务管理器结束残留的 `launcher-sidecar-dev.exe` / `node.exe` 进程
-- 或改 `dev.bat` 里的 `set PORT=17654` 为别的端口（同时改 `src\api\base.ts` 里的 `DEV_BASE`）
+
+- 已有开发实例运行时，直接打开上面的界面地址，不要重复启动
+- 确认占用程序身份和影响后，再决定是否关闭它；不要批量结束所有 `node.exe`
+- Windows 保留端口不能靠关闭应用释放；不要只改 `dev.bat` 的端口，前后端及桌面配置需要一致
 
 **Q：数据存在哪？**
-- `%APPDATA%\launcher-sidecar\launcher.db`（配置、运行记录、日志索引）
-- 想彻底重置：删掉这个 `.db` 文件，下次启动会自动重建
+
+- 开发版：`%APPDATA%\launcher-sidecar-dev`；正式版：`%APPDATA%\launcher-sidecar`
+- 自定义开发目录可运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev.ps1 -DataDir "D:\RunDock-dev-data"`（从 `code` 目录执行）
+- 数据目录包含数据库及任务产物；备份时保留整个目录，不要把删除数据库当作常规排错手段
 
 **Q：Go 装在哪？**
-- 本机用的是免安装版，在 `%USERPROFILE%\go`（即 `C:\Users\你的用户名\go`）
-- `dev.bat` 和 `build-sidecar.bat` 已自动配置好路径，不用手动设环境变量
+
+- 优先使用 `PATH` 中的 Go；找不到时，开发脚本尝试 `%USERPROFILE%\go\bin\go.exe`
+- Node.js 需要可从 `PATH` 找到；启动失败时按窗口提示检查环境

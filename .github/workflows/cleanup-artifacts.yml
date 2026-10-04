@@ -1,9 +1,9 @@
 name: Clean RunDock Temporary Artifacts
 
 on:
-  workflow_run:
-    workflows: [RunDock release]
-    types: [completed]
+  workflow_dispatch:
+  schedule:
+    - cron: '20 3 * * *'
 
 permissions:
   contents: read

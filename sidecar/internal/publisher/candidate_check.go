@@ -49,9 +49,10 @@ func candidateCheckProfiles(req CandidateRequest, pf *Preflight, cfg *releasecon
 		for _, selection := range req.SelectedTargets {
 			for _, target := range cfg.Targets {
 				if target.ID == selection.TargetID && strings.TrimSpace(target.Steps.Check) != "" {
-					version := plannedVersion(req, pf, target.VersionGroup, len(req.SelectedTargets))
-					command := strings.NewReplacer("${VERSION}", version, "${TARGET_ID}", target.ID).Replace(target.Steps.Check)
-					profiles = append(profiles, releaseconfig.CheckProfile{ID: "target:" + target.ID, Name: target.Name + " · 检查", Command: command, WorkingDir: target.WorkingDir, Required: true, OS: target.Runner.OS})
+					// Keep VERSION symbolic until checks consume the actual candidate
+					// bytes. A suggestion is not the version of an unchanged build.
+					command := strings.ReplaceAll(target.Steps.Check, "${TARGET_ID}", target.ID)
+					profiles = append(profiles, releaseconfig.CheckProfile{ID: "target:" + target.ID, Name: target.Name + " · 检查", Command: command, WorkingDir: target.WorkingDir, Required: true, OS: target.Runner.OS, TimeoutSeconds: target.Timeouts["check"]})
 				}
 			}
 		}
@@ -92,6 +93,14 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 		return view, nil
 	}
 	profiles := append([]releaseconfig.CheckProfile{}, cand.FrozenProfiles...)
+	profiles, versionErr := s.expandCandidateCheckVersions(ctx, cand, profiles)
+	if versionErr != nil {
+		cand.View.Status = CheckStale
+		cand.View.Accepted = false
+		cand.View.CanFormal = false
+		cand.mu.Unlock()
+		return nil, versionErr
+	}
 	automatic := append([]CheckResult{}, cand.AutomaticChecks...)
 	results := plannedCheckResults(profiles, append([]string{}, cand.TargetKinds...))
 	withAutomatic := func() []CheckResult { return append(append([]CheckResult{}, automatic...), results...) }

@@ -1,1639 +1,122 @@
 <script setup lang="ts">
+import { computed, nextTick, ref, watch } from 'vue'
 import { tr } from '@/i18n'
-
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api, ApiError } from '@/api/http'
+import { cloudFailureText, localFailureText } from '@/utils/buildFailure'
+import { releaseTargetLabel } from '@/utils/releasePresentation'
+import type { AppView } from '@/types'
+import { useReleaseModel } from './release/useReleaseModel'
 import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
 import ReleaseSafetyPanel from './ReleaseSafetyPanel.vue'
 import ReleaseSafetySettings from './ReleaseSafetySettings.vue'
-import { reconcileReleaseSelection, recommendedReleaseSelection } from '@/utils/releaseSafety'
-import type { ReleaseCandidate, ReleaseCandidateRequest, ReleaseManualDecision, ReleaseFileClassification, ReleaseFileRule, ReleaseCheckProfile } from '@/types'
+import CopyErrorButton from './CopyErrorButton.vue'
+import ReleaseDeliveryChoice from './ReleaseDeliveryChoice.vue'
+import ReleaseDeliveryStatus from './ReleaseDeliveryStatus.vue'
 import ReleaseVersionChange from './ReleaseVersionChange.vue'
-import { readReleaseSession, rememberReleaseSession } from '@/utils/releaseSession'
-import { releaseContentState } from '@/utils/releaseContent'
-import { releaseTargetLabel, isAlternateBuildTarget } from '@/utils/releasePresentation'
-import { hasReleaseIssues } from '@/utils/releaseIssues'
-import type {
-  AppView,
-  ReleaseConfig,
-  ReleaseLog,
-  ReleasePreflight,
-  ReleaseRun,
-  ReleaseArtifact,
-  ReleaseAutomationStatus,
-  ReleaseFileChange,
-  ReleaseTarget,
-  ReleaseTargetRun,
-  ReleaseTargetSteps,
-  ReleaseVersionGroup,
-  ReleaseVersionMode,
-  SelectedReleaseTarget,
-  VersionStrategy,
-} from '@/types'
-
+import LocalBuildPanel from './LocalBuildPanel.vue'
+import SavedReleaseArtifacts from './SavedReleaseArtifacts.vue'
 const props = defineProps<{ app: AppView }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
-
-type ExecutionPhase = 'build' | 'package' | 'publish' | 'deploy'
-type TargetChoice = { selected: boolean } & Record<ExecutionPhase, boolean>
-type ProductPlatformId = 'web' | 'pc' | 'android' | 'mac' | 'server' | `custom:${string}`
-type ProductPlatform = {
-  id: ProductPlatformId
-  name: string
-  icon: string
-  description: string
-  targets: ReleaseTarget[]
-  configured: boolean
-}
-
-const phaseOptions = computed<Array<{ key: ExecutionPhase; label: string; hint: string; risky: boolean }>>(() => ([
-  { key: 'build', label: tr("构建"), hint: tr("生成可运行代码"), risky: false },
-  { key: 'package', label: tr("打包"), hint: tr("生成安装包或压缩包"), risky: false },
-  { key: 'publish', label: tr("上传"), hint: tr("上传到发布平台"), risky: true },
-  { key: 'deploy', label: tr("部署上线"), hint: tr("让线上用户看到新版"), risky: true },
-]))
-
-const loading = ref(true)
-const savingProfile = ref(false)
-const publishing = ref(false)
-const autoSubmitting = ref(false)
-const unstaging = ref(false)
-const unstageNotice = ref('')
-const error = ref('')
-const errorCode = ref('')
-const versionPlanNotice = ref('')
-const preflight = ref<ReleasePreflight | null>(null)
-const history = ref<ReleaseRun[]>([])
-const selected = ref<Record<string, boolean>>({})
-const releaseIntent = ref<'formal'|'save-progress'>('formal')
-const manualDecisions = ref<ReleaseManualDecision[]>([])
-const sensitiveExceptions = ref<NonNullable<ReleaseCandidateRequest['sensitiveExceptions']>>([])
-const candidate = ref<ReleaseCandidate|null>(null)
-const checkingCandidate = ref(false)
-const checksEnabled = ref(true)
-const candidateSignature = ref('')
-// A decision batch belongs to one frozen candidate. Only explicit issue actions
-// advance this signature; unrelated edits invalidate the displayed decisions.
-const reviewSignature = ref('')
-const findingDecisions = ref<Record<string, 'allow'|'exclude'>>({})
-const resolvingReview = ref(false)
-const safetySettingsDirty = ref(false)
-let candidatePoll: ReturnType<typeof setTimeout>|null = null
-let candidateEpoch = 0
-let candidateAbort:AbortController|null = null
-const safetyFiles = computed(()=>candidate.value && !candidateStale.value ? candidate.value.classifications : preflight.value?.classifications || [])
-const candidateRequest = computed<ReleaseCandidateRequest>(()=>({
-  skipChecks:!checksEnabled.value,
-  intent:releaseIntent.value, statusFingerprint:preflight.value?.statusFingerprint||'', selectedPaths:selectedPaths.value,
-  manualDecisions:manualDecisions.value, sensitiveExceptions:sensitiveExceptions.value, targetVersion:createTag.value?primaryTargetVersion.value:'',
-  versions:createTag.value?plannedVersions.value.map(version=>({versionGroupId:version.versionGroupId,targetVersion:version.targetVersion})):[],
-  createTag:createTag.value, pushRemote:pushRemote.value, versionMode:versionMode.value,
-  buildMode:gitOnly.value?'none':buildMode.value, selectedTargets:selectedTargets.value,
-}))
-const currentCandidateSignature = computed(()=>JSON.stringify(candidateRequest.value))
-const submissionPlanSignature = computed(()=>{
-  const {statusFingerprint: _statusFingerprint, ...plan} = candidateRequest.value
-  return JSON.stringify({plan, commitMessage:commitMessage.value, releaseNotes:createTag.value?releaseNotes.value:''})
-})
-const candidateStale = computed(()=>!!candidate.value && candidateSignature.value!==currentCandidateSignature.value)
-const reviewStale = computed(()=>!!candidate.value && (['stale','cancelled'].includes(candidate.value.status) ||
-  (candidateStale.value && reviewSignature.value!==currentCandidateSignature.value)))
-const pendingFindings = computed(()=>candidate.value?.sensitiveFindings.filter(finding=>!findingDecisions.value[finding.fingerprint]) || [])
-const candidateReady = computed(()=>!checkingCandidate.value && !candidateStale.value && !!candidate.value && (releaseIntent.value==='formal'?candidate.value.accepted:candidate.value.canSaveProgress && candidate.value.status==='ready'))
-const candidateNeedsAttention = computed(()=>checksEnabled.value && hasReleaseIssues(candidate.value))
-async function showReleaseIssues(){
-  await switchReleaseTab('publish')
-  await nextTick()
-  const panel=bodyRef.value?.querySelector<HTMLElement>('.candidate-result')
-  panel?.scrollIntoView({block:'center'})
-  panel?.focus({preventScroll:true})
-}
-function chooseSafetyFile(file:ReleaseFileClassification,included:boolean){
-  if(file.category==='sensitive' && included)return
-  const reviewedFindings = !included && !reviewStale.value && !checkingCandidate.value
-    ? candidate.value?.sensitiveFindings.filter(finding=>finding.path===file.path) || [] : []
-  selected.value={...selected.value,[file.path]:included}
-  manualDecisions.value=[...manualDecisions.value.filter(item=>item.path!==file.path),{path:file.path,decision:included?'include':'exclude',contentFingerprint:file.contentFingerprint}]
-  if(reviewedFindings.length){
-    for(const finding of reviewedFindings) findingDecisions.value[finding.fingerprint]='exclude'
-    reviewSignature.value=currentCandidateSignature.value
-    continueResolvedReview()
-  }
-}
-function adoptRecommended(){selected.value=recommendedReleaseSelection(safetyFiles.value);manualDecisions.value=[]}
-function recordSensitiveException(finding:ReleaseCandidate['sensitiveFindings'][number],reason:string){
-  if(checkingCandidate.value || reviewStale.value || !reason.trim() || findingDecisions.value[finding.fingerprint] ||
-    !candidate.value?.sensitiveFindings.some(item=>item.fingerprint===finding.fingerprint && item.contentFingerprint===finding.contentFingerprint))return
-  sensitiveExceptions.value=[...sensitiveExceptions.value.filter(item=>item.findingFingerprint!==finding.fingerprint),{path:finding.path,findingFingerprint:finding.fingerprint,contentFingerprint:finding.contentFingerprint,reason:reason.trim()}]
-  findingDecisions.value[finding.fingerprint]='allow'
-  reviewSignature.value=currentCandidateSignature.value
-  continueResolvedReview()
-}
-function continueResolvedReview(){
-  if(pendingFindings.value.length || candidate.value?.dependencyFindings.some(item=>item.blocked))return
-  // Do not publish here. Validate once after the entire batch is resolved.
-  resolvingReview.value=true
-  void inspectCandidate().finally(()=>{resolvingReview.value=false})
-}
-function changeReleaseIntent(intent:'formal'|'save-progress'){
-  if (checkingCandidate.value) return
-  const enteringRelease = intent==='formal' && releaseIntent.value!==intent
-  editedReleaseOptions.add('targets');editedReleaseOptions.add('tag');editedReleaseOptions.add('version')
-  releaseIntent.value=intent
-  gitOnly.value=intent==='save-progress'
-  if(intent==='save-progress'){
-    editedReleaseOptions.add('targets');editedReleaseOptions.add('push');editedReleaseOptions.add('tag');editedReleaseOptions.add('version')
-    gitOnly.value=true;createTag.value=false;pushRemote.value=false
-    for (const choice of Object.values(targetChoices.value)) choice.selected = false
-  }else{versionMode.value='auto';createTag.value=true}
-  if (enteringRelease) selectSingleBuildPlatform(true)
-  setDefaultCommitMessage()
-}
-async function refreshSafety(){
-  try{applyPreflight(await api.releasePreflight(props.app.id,false),false,true)}catch(reason){error.value=messageOf(reason)}
-}
-async function inspectCandidate(){
-  if(checkingCandidate.value || !preflight.value)return false
-  checkingCandidate.value=true;error.value='';const epoch=++candidateEpoch
-  const controller=new AbortController();candidateAbort=controller
-  try{
-    await api.saveReleaseProfile(props.app.id,profileBody())
-    if(disposed || epoch!==candidateEpoch)return false
-    const fresh=await api.releasePreflight(props.app.id,false)
-    if(disposed || epoch!==candidateEpoch)return false
-    applyPreflight(fresh,false,true)
-    const request=JSON.parse(JSON.stringify(candidateRequest.value)) as ReleaseCandidateRequest
-    const signature=JSON.stringify(request)
-    const prepared=await api.prepareReleaseCandidate(props.app.id,request,controller.signal)
-    if(disposed || epoch!==candidateEpoch)return false
-    candidate.value=prepared;candidateSignature.value=signature
-    reviewSignature.value='';findingDecisions.value={}
-    if(request.intent==='save-progress')return prepared.canSaveProgress && prepared.status==='ready'
-    if(request.skipChecks)return prepared.checksSkipped===true && prepared.accepted && prepared.status==='skipped'
-    if(prepared.sensitiveFindings.length || prepared.dependencyFindings.some(item=>item.blocked))return false
-    candidate.value={...prepared,status:'running'}
-    const poll=async()=>{try{const view=await api.getReleaseCandidate(props.app.id,prepared.id);if(checkingCandidate.value && epoch===candidateEpoch && !disposed)candidate.value=view}catch{}finally{if(checkingCandidate.value && epoch===candidateEpoch && !disposed)candidatePoll=setTimeout(poll,800)}}
-    candidatePoll=setTimeout(poll,800)
-    const checked=await api.checkReleaseCandidate(props.app.id,prepared.id)
-    if(disposed || epoch!==candidateEpoch)return false
-    candidate.value=checked
-    return checked.accepted
-  }catch(reason){if(!disposed && epoch===candidateEpoch){error.value=messageOf(reason);if(candidate.value)candidate.value={...candidate.value,status:'stale',accepted:false,canSaveProgress:false}};return false}
-  finally{if(epoch===candidateEpoch){candidateAbort=null;checkingCandidate.value=false;if(candidatePoll)clearTimeout(candidatePoll)}}
-}
-async function cancelCandidate(){
-  const epoch=++candidateEpoch
-  candidateAbort?.abort();candidateAbort=null
-  if(candidatePoll)clearTimeout(candidatePoll)
-  if(candidate.value){try{const view=await api.cancelReleaseCandidate(props.app.id,candidate.value.id);if(!disposed && epoch===candidateEpoch)candidate.value=view}catch(reason){if(!disposed && epoch===candidateEpoch)error.value=messageOf(reason)}}
-  if(!disposed && epoch===candidateEpoch)checkingCandidate.value=false
-}
-async function saveSafetyConfig(rules:ReleaseFileRule[],checks:ReleaseCheckProfile[]){
-  if(!releaseConfig.value)return
-  configSaving.value=true
-  try{const saved=await api.saveReleaseConfig(props.app.id,{...releaseConfig.value,fileRules:rules,checkProfiles:checks});applyReleaseConfig(saved);await refreshSafety()}
-  catch(reason){error.value=messageOf(reason)}finally{configSaving.value=false}
-}
-
-const versionInputs = ref<Record<string, string>>({})
-const commitMessage = ref('')
-const commitMessageDirty = ref(false)
-const releaseNotes = ref('')
-const releaseNotesDirty = ref(false)
-const releaseNotesStale = ref(false)
-const releaseNotesLoading = ref(false)
-const releaseNotesError = ref('')
-const releaseNotesBaseTag = ref('')
-const releaseNotesSourceFingerprint = ref('')
-const releaseNotesGeneratedFor = ref('')
-const remoteName = ref('origin')
-const versionStrategy = ref<VersionStrategy>('auto')
-const preReleaseCommand = ref('')
-const createTag = ref(true)
-const pushRemote = ref(true)
-const buildMode = ref<'github' | 'local'>('github')
-const versionMode = ref<ReleaseVersionMode>('auto')
-const profileReady = ref(false)
-const preferenceStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
-const preferenceError = ref('')
-let preferenceRevision = 0
-// Preflight may arrive after the user has already chosen a platform or mode.
-// Saved defaults must never replace explicit choices made in this dialog.
-const editedReleaseOptions = new Set<'targets' | 'build' | 'tag' | 'version' | 'push'>()
-
-const releaseConfig = ref<ReleaseConfig | null>(null)
-const configDraft = ref<ReleaseConfig | null>(null)
-const configBeforeEdit = ref<ReleaseConfig | null>(null)
-const targetChoices = ref<Record<string, TargetChoice>>({})
-const configEndpointAvailable = ref(true)
-const configNotice = ref('')
-const configEditorOpen = ref(false)
-const configFileOpen = ref(false)
-const configScanning = ref(false)
-const configSaving = ref(false)
-const configValidationError = ref('')
-const preflightStale = ref(false)
-const gitOnly = ref(false)
-type ReleaseTab = 'publish' | 'settings'
-const releaseTab = ref<ReleaseTab>('publish')
-const tabScroll: Record<ReleaseTab, number> = { publish: 0, settings: 0 }
-const configFileDirty = ref(false)
-const confirmAction = ref<'retry' | 'regenerate-notes' | null>(null)
-const bodyRef = ref<HTMLElement | null>(null)
-const platformSectionRef = ref<HTMLElement | null>(null)
-
-const activeRun = ref<ReleaseRun | null>(null)
-const logs = ref<ReleaseLog[]>([])
-const runTargets = ref<ReleaseTargetRun[]>([])
-const runArtifacts = ref<ReleaseArtifact[]>([])
-const runAutomation = ref<ReleaseAutomationStatus | null>(null)
-const cloudBuild = ref<import('@/types').CloudBuildStatus | null>(null)
-const retrying = ref(false)
-const openingAutomation = ref(false)
-const automationOpenError = ref('')
-const retryMetadataLoaded = ref(false)
-const retryConfirmationRequired = ref<boolean | undefined>()
-const retryConfirmationTargets = ref<string[]>([])
-let pollTimer: ReturnType<typeof setTimeout> | null = null
-let preferenceTimer: ReturnType<typeof setTimeout> | null = null
-let releaseNotesTimer: ReturnType<typeof setTimeout> | null = null
-let releaseNotesRequest = 0
-let preferenceSave = Promise.resolve()
-let disposed = false
-
-const isActive = computed(() => ['starting', 'running', 'degraded', 'stopping'].includes(props.app.status))
-const selectedPaths = computed(() => Object.entries(selected.value).filter(([, value]) => value).map(([path]) => path))
-const orderedChanges = computed(() => {
-  const changes = preflight.value?.changes || []
-  return [...changes.filter(isAddedFile), ...changes.filter((file) => !isAddedFile(file))]
-})
-const newFiles = computed(() => preflight.value?.changes.filter(isAddedFile) || [])
-
-const allFilesSelected = computed(() => !!preflight.value?.changes.length && preflight.value.changes.every((file) => selected.value[file.path]))
-const configuredTargets = computed(() => releaseConfig.value?.targets || [])
-const chosenTargets = computed(() => configuredTargets.value
-  .filter((target) => targetChoices.value[target.id]?.selected && targetAvailable(target))
-  .map((target) => ({ target, choice: targetChoices.value[target.id] })))
-const selectedTargets = computed<SelectedReleaseTarget[]>(() => gitOnly.value ? [] : chosenTargets.value
-  .map(({ target, choice }) => {
-    return {
-      targetId: target.id,
-      build: phaseAllowed('build') && !!target.steps.build && !!choice.build,
-      package: phaseAllowed('package') && !!target.steps.package && !!choice.package,
-      publish: phaseAllowed('publish') && !!target.steps.publish && !!choice.publish,
-      deploy: phaseAllowed('deploy') && !!target.steps.deploy && !!choice.deploy,
-    }
-  }))
-const invalidChosenTargetIds = computed(() => selectedTargets.value
-  .filter((target) => !target.build && !target.package && !target.publish && !target.deploy)
-  .map((target) => target.targetId))
-const targetSelectionMissing = computed(() => !gitOnly.value && !selectedTargets.value.length)
-const selectedVersionGroupIds = computed(() => [...new Set(chosenTargets.value.map(({ target }) => target.versionGroup))])
-const selectedVersionGroups = computed(() => (releaseConfig.value?.versionGroups || [])
-  .filter((group) => selectedVersionGroupIds.value.includes(group.id)))
-const selectedVersionFiles = computed(() => {
-  if (gitOnly.value || !selectedVersionGroups.value.length) return preflight.value?.versionFiles || []
-  return [...new Set(selectedVersionGroups.value.flatMap((group) => group.versionFiles.map((file) => file.path)))]
-})
-const visibleCurrentVersions = computed<Record<string, string>>(() => {
-  const values: Record<string, string> = {}
-  if (gitOnly.value || !selectedVersionGroups.value.length) {
-    for (const path of preflight.value?.versionFiles || []) values[path] = preflight.value?.currentVersions[path] || ''
-    return values
-  }
-  for (const group of selectedVersionGroups.value) {
-    if (!group.versionFiles.length && group.currentVersion) values[group.name] = group.currentVersion
-    for (const file of group.versionFiles) values[file.path] = preflight.value?.currentVersions[file.path] || group.currentVersion || ''
-  }
-  return values
-})
-function isTagPushTarget(target: ReleaseTarget) {
-  return target.runner.type.trim().toLowerCase() === 'git-push'
-    && (target.steps.publish || '').trim().toLowerCase() === 'tag-push'
-}
-
-function canResumeFailedRun(run: ReleaseRun) {
-  if (!canRetryRun(run)) return false
-  const oldLocalStage = ['building_targets', 'target_check', 'target_build', 'target_package'].includes(run.stage)
-  if (!oldLocalStage) return true
-  return !run.selectedTargets.some((selection) => {
-    if (!selection.build && !selection.package) return false
-    const currentTarget = configuredTargets.value.find((target) => target.id === selection.targetId)
-    return !!currentTarget && isTagPushTarget(currentTarget)
-  })
-}
-type PlannedVersion = { versionGroupId: string; versionGroupName: string; currentVersion: string; suggestedVersion: string; targetVersion: string; tagName: string }
-const plannedVersions = computed<PlannedVersion[]>(() => {
-  const pf = preflight.value
-  if (!pf || !createTag.value) return []
-  if (gitOnly.value || !selectedVersionGroups.value.length) {
-    const suggestedVersion = pf.suggestedVersion || '0.1.0'
-    const target = versionMode.value === 'auto' ? suggestedVersion : (versionInputs.value.repository || suggestedVersion)
-    return [{ versionGroupId: 'repository', versionGroupName: tr("项目版本"), currentVersion: pf.latestTag || tr("未创建 Tag"), suggestedVersion, targetVersion: target, tagName: `v${target}` }]
-  }
-  return selectedVersionGroups.value.map(versionForGroup)
-})
-
-function versionForGroup(group: ReleaseVersionGroup): PlannedVersion {
-    const pf = preflight.value!
-    const namespaced = (releaseConfig.value?.versionGroups.length || 0) > 1
-    const values: string[] = []
-    if (!group.versionFiles.length && group.currentVersion) values.push(group.currentVersion)
-    for (const file of group.versionFiles) values.push(pf.currentVersions[file.path] || group.currentVersion || '')
-    const latestGroupVersion = (pf.latestGroupTags[group.id] || (!namespaced ? pf.latestTag : '') || '').replace(/^.*\/v|^v/, '')
-    const suggestedVersion = namespaced
-      ? (pf.suggestedVersions[group.id] || nextPatchVersion([...values, latestGroupVersion]))
-      : suggestReleaseVersion(values.filter(Boolean), pf.latestTag)
-    const target = versionMode.value === 'auto' ? suggestedVersion : (versionInputs.value[group.id] || suggestedVersion)
-    const prefix = group.tagPrefix || group.id
-    return {
-      versionGroupId: group.id,
-      versionGroupName: versionGroupDisplayName(group),
-      currentVersion: latestGroupVersion || values.find((value) => /^(?:v)?\d+\.\d+\.\d+$/.test(value))?.replace(/^v/, '') || tr("未识别"),
-      suggestedVersion,
-      targetVersion: target,
-      tagName: namespaced ? `${prefix}/v${target}` : `v${target}`,
-    }
-}
-
-function platformVersions(platform: ProductPlatform) {
-  if (!preflight.value) return []
-  const groupIds = new Set(platform.targets.map(target => target.versionGroup))
-  return (releaseConfig.value?.versionGroups || []).filter(group => groupIds.has(group.id)).map(versionForGroup)
-}
-
-function displayCurrentVersion(value: string) {
-  return /^(?:v)?\d+\.\d+\.\d+$/.test(value) ? `v${value.replace(/^v/, '')}` : value
-}
-const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
-const versionValid = computed(() => !createTag.value || (plannedVersions.value.length > 0 && plannedVersions.value.every((version) => versionPattern.test(version.targetVersion))))
-const primaryTargetVersion = computed(() => plannedVersions.value[0]?.targetVersion || '')
-const plannedTagNames = computed(() => plannedVersions.value.map((version) => version.tagName))
-const configNeedsSaving = computed(() => !!releaseConfig.value?.targets.length && releaseConfig.value.source !== 'file')
-const selectedNeedsRemotePush = computed(() => chosenTargets.value.some(({ target }) => target.runner.type.trim().toLowerCase() === 'git-push'))
-const configuredAutomation = computed(() => {
-  const automation = releaseConfig.value?.automation
-  return automation?.provider.trim().toLowerCase() === 'github-actions' ? automation : null
-})
-const selectedHasTagPushTarget = computed(() => chosenTargets.value.some(({ target }) => isTagPushTarget(target)))
-const automationTargetRequiresTag = computed(() => selectedHasTagPushTarget.value
-  || (!!configuredAutomation.value
-    && configuredAutomation.value.trigger.trim().toLowerCase() === 'tag'
-    && selectedNeedsRemotePush.value))
-const willTriggerAutomation = computed(() => (selectedHasTagPushTarget.value
-  || (!!configuredAutomation.value
-    && configuredAutomation.value.trigger.trim().toLowerCase() === 'tag'
-    && configuredAutomation.value.publishesRelease))
-  && createTag.value
-  && pushRemote.value)
-const automationBranchMismatch = computed(() => !!willTriggerAutomation.value
-  && !!configuredAutomation.value?.releaseBranch
-  && configuredAutomation.value.releaseBranch !== preflight.value?.branch)
-const willBuildWindowsInAutomation = computed(() => buildMode.value === 'github' && productPlatforms.value.some((platform) => platform.id === 'pc' && platformHasSelection(platform)))
-const willBuildTargetsInAutomation = computed(() => selectedHasTagPushTarget.value || willBuildWindowsInAutomation.value)
-const releaseNotesOptionsSignature = computed(() => JSON.stringify({
-  gitOnly: gitOnly.value,
-  statusFingerprint: preflight.value?.statusFingerprint || '',
-  selectedPaths: [...selectedPaths.value].sort(),
-  selectedTargets: [...selectedTargets.value].sort((left, right) => left.targetId.localeCompare(right.targetId)),
-  createTag: createTag.value,
-  versions: plannedVersions.value.map((version) => `${version.versionGroupId}:${version.tagName}`),
-}))
-const targetSelectionValid = computed(() => (gitOnly.value
-  || (selectedTargets.value.length > 0 && invalidChosenTargetIds.value.length === 0))
-  && (pushRemote.value || !selectedNeedsRemotePush.value)
-  && (createTag.value || !automationTargetRequiresTag.value)
-  && !automationBranchMismatch.value)
-const newContentState = computed(() => {
-  const pf = preflight.value
-  if (!pf) return 'unknown'
-  const namespaced = (releaseConfig.value?.versionGroups.length || 0) > 1
-  const baseTags = plannedVersions.value.map(version => namespaced && version.versionGroupId !== 'repository'
-    ? pf.latestGroupTags[version.versionGroupId] || '' : pf.latestTag || '')
-  return releaseContentState(createTag.value, selectedPaths.value, pf.changes.map(change => change.path), baseTags, pf.commitsSinceTags)
-})
-const releaseContentHint = computed(() => newContentState.value === 'none'
-  ? tr('暂无新内容，无需发布新版本')
-  : newContentState.value === 'unknown' && preflight.value && !loading.value
-    ? tr('无法确认版本后的改动，请刷新发布检查；旧版后端需先更新') : '')
-const blockingIssues = computed(() => (preflight.value?.blockingIssues || []).filter(issue => {
-  if (!pushRemote.value && (issue.code.startsWith('remote_') || ['fetch_failed', 'branch_behind'].includes(issue.code))) return false
-  if (gitOnly.value && !createTag.value && ['release_config_invalid', 'version_file_invalid', 'version_file_ignored', 'diagnostics_version_file_untracked'].includes(issue.code)) return false
-  return true
-}))
-const localChecksPassed = computed(() => !!preflight.value && !blockingIssues.value.length
-  && (preflight.value.canRelease || preflight.value.blockingIssues.length > 0))
-const remoteMissing = computed(() => pushRemote.value && !!preflight.value && !preflight.value.remotes.includes(remoteName.value))
-const canSubmit = computed(() => {
-  if (preferenceStatus.value === 'saving' || preferenceStatus.value === 'error') return false
-  if (safetySettingsDirty.value) return false
-  if (unstaging.value || configFileDirty.value || configEditorOpen.value || configSaving.value) return false
-  if (!localChecksPassed.value || remoteMissing.value || savingProfile.value || preflightStale.value || activeRun.value || publishing.value || !commitMessage.value.trim()) return false
-  if (createTag.value && (!versionValid.value || releaseNotesLoading.value || (releaseNotesStale.value && !releaseNotesDirty.value) || !releaseNotes.value.trim())) return false
-  if (newContentState.value !== 'new') return false
-  return targetSelectionValid.value
-})
-const canPublish = computed(() => candidateReady.value && canSubmit.value)
-function canRetryRun(run: ReleaseRun | null | undefined) {
-  return !!run && run.status === 'failed' && !!run.commitSha && run.errorCode !== 'build_changed_tree' && [
-    'tagging', 'pushing_branch', 'pushing_tag', 'building_targets', 'publishing_targets',
-    'target_check', 'target_build', 'target_package', 'target_publish', 'target_deploy',
-  ].includes(run.stage)
-}
-const retryable = computed(() => canRetryRun(activeRun.value))
-const customRetryConfirmation = computed(() => retryConfirmationRequired.value ?? (!!activeRun.value
-  && ['publishing_targets', 'target_publish', 'target_deploy'].includes(activeRun.value.stage)))
-const retryUpload = computed(() => !!activeRun.value?.pushRemote
-  && ['pushing_branch', 'pushing_tag'].includes(activeRun.value.stage))
-const uploadPaused = computed(() => retryUpload.value && activeRun.value?.status === 'failed' && !!activeRun.value.commitSha)
-const runFailureSummary = computed(() => activeRun.value?.errorMessage?.split('\n')[0] || '')
-const runFailureDetails = computed(() => activeRun.value?.errorMessage?.split('\n').slice(1).join('\n').trim() || '')
-const retryButtonLabel = computed(() => retrying.value ? tr('正在重试…')
-  : retryUpload.value ? tr('重试上传')
-    : activeRun.value?.stage === 'target_deploy' ? tr('重试部署')
-      : ['building_targets', 'target_check', 'target_build', 'target_package'].includes(activeRun.value?.stage || '') ? tr('重试构建')
-        : tr('继续发布'))
-const retryGuidance = computed(() => retryUpload.value
-  ? tr('本地提交和版本已保留。重试时会自动检查上传结果，跳过已上传的内容，继续未完成的步骤。')
-  : tr('使用本次发布记录继续处理未完成的步骤。'))
-const retryTargetNames = computed(() => retryConfirmationTargets.value.length
-  ? retryConfirmationTargets.value.join('、') : tr('本次选择的发布目标'))
-const hasOnlineAction = computed(() => selectedTargets.value.some((target) => target.publish || target.deploy))
-const hasExternalAction = computed(() => hasOnlineAction.value || willTriggerAutomation.value)
-const remoteDestination = computed(() => /github\.com/i.test(preflight.value?.remoteUrl || '') ? 'GitHub' : tr("远程仓库"))
-const automationPageUrl = computed(() => cloudBuild.value?.url || runAutomation.value?.url
-  || activeRun.value?.automationUrl
-  || githubActionsUrl(preflight.value?.remoteUrl || '', configuredAutomation.value?.workflow || ''))
-
-async function openAutomationPage() {
-  const url = automationPageUrl.value
-  if (!url || openingAutomation.value) return
-  openingAutomation.value = true
-  automationOpenError.value = ''
-  try {
-    await api.openURL(props.app.id, url)
-  } catch (reason) {
-    automationOpenError.value = tr('未能打开浏览器：{0}', [messageOf(reason)])
-  } finally {
-    openingAutomation.value = false
-  }
-}
-const automationHandedOff = computed(() => !!activeRun.value?.pushRemote
-  && (runTargets.value.some((target) => ['triggered', 'remote_pending', 'handed_off'].includes(target.status))
-    || activeRun.value.selectedTargets.some((selection) => selection.publish
-      && configuredTargets.value.find((target) => target.id === selection.targetId)?.runner.type.trim().toLowerCase() === 'git-push')
-    || (!!activeRun.value.createTag && !!(runAutomation.value || activeRun.value.automationUrl || configuredAutomation.value))))
-const activeRunStatusLabel = computed(() => {
-  if (activeRun.value?.status === 'failed') return tr("失败")
-  if (activeRun.value?.status !== 'succeeded') return tr("进行中")
-  return automationHandedOff.value ? tr("已提交 GitHub") : tr("成功")
-})
-const activeStageLabel = computed(() => {
-  if (!activeRun.value) return ''
-  if (activeRun.value.stage === 'completed' && automationHandedOff.value) return tr("本地发布完成，等待 GitHub 自动处理")
-  return stageLabel.value[activeRun.value.stage] || activeRun.value.stage
-})
-const cloudExecutionNotice = computed(() => {
-  if (activeRun.value ? !automationHandedOff.value : !willTriggerAutomation.value) return null
-  const selections = activeRun.value?.selectedTargets || selectedTargets.value
-  if (!selections.length) return {
-    title: tr("GitHub Actions 发布源码版本"),
-    text: tr("代码和 Tag 上传后，由 GitHub Actions 创建源码版本，不生成安装包。"),
-  }
-  const allCloud = selections.every((selection) => configuredTargets.value
-    .find((target) => target.id === selection.targetId)?.runner.type.trim().toLowerCase() === 'git-push')
-  return {
-    title: tr("GitHub Actions 云端构建与发布"),
-    text: allCloud
-      ? tr("本机不构建、不打包。构建、打包和发布由 GitHub Actions 按项目配置执行。")
-      : tr("云端目标由 GitHub Actions 构建、打包并按项目配置发布；本地目标仍按配置执行。"),
-  }
-})
-const cloudBuildSettled = computed(() => cloudBuild.value?.state === 'succeeded' || cloudBuild.value?.state === 'superseded')
-const completionTitle = computed(() => cloudBuild.value?.state === 'superseded' ? tr('旧版本已由新构建替代') : cloudBuild.value?.state === 'failed' ? tr('云端构建失败') : cloudBuild.value?.state === 'succeeded' ? tr('云端构建已完成') : automationHandedOff.value ? tr('代码已上传，正在跟踪云端构建') : activeRun.value?.pushRemote
-  ? tr("已提交到 {0}", [automationHandedOff.value ? 'GitHub' : remoteDestination.value])
-  : tr("本地操作已完成"))
-const completionDescription = computed(() => {
-  if (cloudBuild.value?.summary) return tr(cloudBuild.value.summary)
-  if (!activeRun.value?.pushRemote) return tr("提交已保存在本机，尚未上传到远程仓库。")
-  return activeRun.value.createTag ? tr("代码和版本 Tag 已上传。") : tr("代码已上传。")
-})
-const confirmDialogTitle = computed(() => {
-  if (confirmAction.value === 'regenerate-notes') return tr("重新生成更新说明？")
-  return tr('重新执行发布或部署命令？')
-})
-const confirmDialogMessage = computed(() => {
-  if (confirmAction.value === 'regenerate-notes') return tr("重新生成会覆盖你手动修改的内容。")
-  return tr('这会重新执行“{0}”的发布或部署命令，可能再次更新线上服务。程序无法自动判断自定义命令上次是否已完成。', [retryTargetNames.value])
-})
-const confirmDialogButton = computed(() => confirmAction.value === 'regenerate-notes' ? tr("覆盖并生成") : tr('重新执行'))
-const configConfidence = computed(() => Math.round((releaseConfig.value?.confidence || 0) * 100))
-const standardPlatforms = computed<Array<{ id: Exclude<ProductPlatformId, `custom:${string}`>; name: string; icon: string; description: string }>>(() => ([
-  { id: 'web', name: tr("Web 前端"), icon: '🌐', description: tr("网页界面") },
-  { id: 'pc', name: 'PC', icon: '🖥️', description: tr("Windows 桌面端") },
-  { id: 'android', name: 'Android', icon: '🤖', description: tr("Android 应用") },
-  { id: 'mac', name: 'Mac', icon: '🍎', description: tr("macOS 桌面端") },
-  { id: 'server', name: tr("后端服务"), icon: '🗄️', description: tr("API / 后台任务") },
-]))
-
-function platformIdForTarget(target: ReleaseTarget): ProductPlatformId | null {
-  const kind = target.kind.trim().toLowerCase()
-  const clue = `${target.id} ${target.name}`.toLowerCase()
-  if (kind === 'node') return null
-  if (kind === 'desktop') {
-    const systems = target.runner.os.map((value) => value.trim().toLowerCase()).filter(Boolean)
-    if (systems.length === 1 && systems[0] === 'darwin') return 'mac'
-    if (systems.length === 1 && systems[0] === 'windows') return 'pc'
-    if (!systems.length) {
-      if (clue.includes('macos') || clue.includes('mac ')) return 'mac'
-      if (clue.includes('windows')) return 'pc'
-    }
-    return `custom:${target.id}`
-  }
-  if (kind === 'web') return 'web'
-  if (kind === 'android') return 'android'
-  if (['server', 'service', 'backend', 'docker'].includes(kind)) return 'server'
-  if (['mac', 'macos', 'darwin'].includes(kind) || clue.includes('macos') || clue.includes('mac ')) return 'mac'
-  if (['windows', 'pc'].includes(kind) || clue.includes('windows')) return 'pc'
-  return `custom:${target.id}`
-}
-
-function versionGroupDisplayName(group: ReleaseVersionGroup) {
-  if (group.name && !/^版本\s+\d+\.\d+\.\d+$/.test(group.name) && group.name !== '产品版本') return group.name
-  const platformIds = new Set(configuredTargets.value
-    .filter((target) => target.versionGroup === group.id)
-    .map(platformIdForTarget)
-    .filter((id): id is ProductPlatformId => !!id))
-  const platformNames = standardPlatforms.value.filter((platform) => platformIds.has(platform.id)).map((platform) => platform.name)
-  for (const id of platformIds) if (id.startsWith('custom:')) platformNames.push(id.replace(/^custom:/, ''))
-  if (platformNames.length > 1) return tr("{0}共用版本", [platformNames.join(' / ')])
-  if (platformNames.length === 1) return tr("{0}版本", [platformNames[0]])
-  return group.name || tr("项目版本")
-}
-
-const productPlatforms = computed<ProductPlatform[]>(() => {
-  const grouped = new Map<ProductPlatformId, ReleaseTarget[]>()
-  for (const platform of standardPlatforms.value) grouped.set(platform.id, [])
-  for (const target of configuredTargets.value) {
-    const platformId = platformIdForTarget(target)
-    if (!platformId) continue
-    const targets = grouped.get(platformId) || []
-    targets.push(target)
-    grouped.set(platformId, targets)
-  }
-  const cards: ProductPlatform[] = standardPlatforms.value.map((platform) => ({
-    ...platform,
-    // Keep configured combined targets (e.g. Web + backend) visible by name.
-    name: grouped.get(platform.id)?.length === 1 ? grouped.get(platform.id)![0].name || platform.name : platform.name,
-    targets: grouped.get(platform.id) || [],
-    configured: !!grouped.get(platform.id)?.length,
-  }))
-  for (const [id, targets] of grouped) {
-    if (!id.startsWith('custom:')) continue
-    const target = targets[0]
-    const isDesktop = target?.kind.trim().toLowerCase() === 'desktop'
-    cards.push({ id, name: target?.name || (isDesktop ? tr("桌面端") : tr("自定义目标")), icon: isDesktop ? '💻' : '🧩', description: tr("自定义发布目标"), targets, configured: true })
-  }
-  // Unconfigured placeholders are not selectable build targets. Keep configured
-  // but unavailable targets so their mode/environment explanation remains visible.
-  return cards.filter((platform) => platform.configured)
-})
-
-// Hide only duplicate variants from another build mode. Keep unavailable unique
-// targets visible so missing configuration or OS requirements remain discoverable.
-const visibleProductPlatforms = computed(() => productPlatforms.value.filter(platform =>
-  platformRunnableTargets(platform).length || !platform.targets.every(target =>
-    configuredTargets.value.some(other => isAlternateBuildTarget(target, other) &&
-      targetAvailable(other) && configuredActions(other).length > 0)
-  )
-))
-
-function phaseAllowed(phase: ExecutionPhase) {
-  return buildMode.value === 'github' ? phase === 'publish' : phase === 'build' || phase === 'package'
-}
-
-function changeBuildMode(mode: 'github' | 'local') {
-  editedReleaseOptions.add('build')
-  if (buildMode.value === mode) return
-  const platforms = new Set(productPlatforms.value.filter(platformHasSelection).map(platform => platform.id))
-  buildMode.value = mode
-  pushRemote.value = mode === 'github'
-  for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
-  if (!gitOnly.value) for (const platform of productPlatforms.value) {
-    if (platforms.has(platform.id)) togglePlatform(platform, true)
-  }
-}
-
-function configuredActions(target: ReleaseTarget) {
-  return phaseOptions.value.filter((phase) => phaseAllowed(phase.key) && !!target.steps[phase.key])
-}
-
-function platformRunnableTargets(platform: ProductPlatform) {
-  return platform.targets.filter((target) => targetAvailable(target) && configuredActions(target).length > 0)
-}
-
-function platformSelected(platform: ProductPlatform) {
-  const runnable = platformRunnableTargets(platform)
-  return runnable.length > 0 && runnable.every((target) => targetChoices.value[target.id]?.selected)
-}
-
-function platformHasSelection(platform: ProductPlatform) {
-  return platformRunnableTargets(platform).some((target) => targetChoices.value[target.id]?.selected)
-}
-
-function platformPartiallySelected(platform: ProductPlatform) {
-  const count = platformSelectionCount(platform)
-  return count.selected > 0 && count.selected < count.runnable
-}
-
-function platformPartiallyAvailable(platform: ProductPlatform) {
-  const count = platformSelectionCount(platform)
-  return count.runnable > 0 && count.runnable < count.total
-}
-
-function platformSelectionCount(platform: ProductPlatform) {
-  const runnable = platformRunnableTargets(platform)
-  return {
-    selected: runnable.filter((target) => targetChoices.value[target.id]?.selected).length,
-    runnable: runnable.length,
-    total: platform.targets.filter(target => target.runner.type.trim().toLowerCase() === (buildMode.value === 'github' ? 'git-push' : 'local')).length,
-  }
-}
-
-function platformUnavailableReason(platform: ProductPlatform) {
-  if (!platform.configured) {
-    if (buildMode.value === 'local' && platform.id === 'mac') return currentOS() === 'darwin' ? tr("未配置 Mac 构建") : tr("未配置，且需在 macOS 电脑运行")
-    return tr("未识别到此平台")
-  }
-  const runnable = platformRunnableTargets(platform)
-  if (runnable.length) return ''
-  if (buildMode.value === 'local' && platform.id === 'mac') {
-    const needsMac = platform.targets.some((target) => {
-      const systems = target.runner.os.map((value) => value.trim().toLowerCase())
-      return target.runner.type.trim().toLowerCase() === 'local' && systems.includes('darwin') && !systems.includes('any')
-    })
-    if (needsMac && currentOS() !== 'darwin') return tr("需在 macOS 电脑运行")
-  }
-  const environmentReason = platform.targets.map(targetUnavailableReason).find(Boolean)
-  if (environmentReason) return environmentReason
-  return tr("尚未配置可执行的构建或发布动作")
-}
-
-function platformActionLabels(platform: ProductPlatform, selectedOnly = false) {
-  const targetIds = new Set(platform.targets.map((target) => target.id))
-  return phaseOptions.value
-    .filter((phase) => selectedOnly
-      ? selectedTargets.value.some((target) => targetIds.has(target.targetId) && target[phase.key])
-      : platformRunnableTargets(platform).some((target) => phaseAllowed(phase.key) && !!target.steps[phase.key]))
-    .map((phase) => phase.label)
-}
-
-function platformCardDetail(platform: ProductPlatform) {
-  const unavailableReason = platformUnavailableReason(platform)
-  if (unavailableReason) return unavailableReason
-
-  if (platformPartiallySelected(platform)) {
-    const count = platformSelectionCount(platform)
-    return tr("{0} · 已选 {1}/{2}，点击全选", [platform.description, count.selected, count.runnable])
-  }
-
-  if (platformPartiallyAvailable(platform)) return tr("部分步骤不可用")
-  return platform.description === tr('自定义发布目标') ? '' : platform.description
-}
-
-function togglePlatform(platform: ProductPlatform, checked: boolean) {
-  editedReleaseOptions.add('targets')
-  if (checked) gitOnly.value = false
-  for (const target of platformRunnableTargets(platform)) {
-    const choice = targetChoices.value[target.id]
-    if (!choice) continue
-    choice.selected = checked
-    if (checked) {
-      for (const phase of phaseOptions.value) choice[phase.key] = phaseAllowed(phase.key) && !!target.steps[phase.key]
-    }
-  }
-}
-
-function selectSingleBuildPlatform(enteringRelease = false) {
-  if (gitOnly.value || (!enteringRelease && editedReleaseOptions.has('targets'))) return
-  if (Object.values(targetChoices.value).some(choice => choice.selected)) return
-  const available = productPlatforms.value.filter(platform => platformRunnableTargets(platform).length > 0)
-  if (available.length !== 1) return
-  for (const target of platformRunnableTargets(available[0])) {
-    const choice = targetChoices.value[target.id]
-    if (choice) choice.selected = true
-  }
-}
-
-function toggleGitOnly(checked: boolean) {
-  changeReleaseIntent(checked ? 'save-progress' : 'formal')
-}
-
-const stageLabel = computed<Record<string, string>>(() => ({
-  preparing: tr("准备发布"), versioning: tr("更新版本"), checking: tr("发布前检查"), committing: tr("创建提交"),
-  building_targets: tr("检查、构建和打包"), publishing_targets: tr("上传和部署"),
-  target_check: tr("检查目标"), target_build: tr("构建目标"), target_package: tr("打包目标"),
-  target_publish: tr("上传目标"), target_deploy: tr("部署目标"), tagging: tr("创建 Tag"),
-  pushing_branch: tr("推送分支"), pushing_tag: tr("推送 Tag"), completed: tr("发布完成"),
-}))
-const targetStageLabel = computed<Record<string, string>>(() => ({
-  waiting: tr("等待执行"), checking: tr("检查"), check: tr("检查"), build: tr("构建"), package: tr("打包"),
-  ready_to_publish: tr("等待上传或部署"), waiting_publish: tr("等待上传或部署"), publish: tr("上传"),
-  deploy: tr("部署"), artifacts: tr("核对产物"), triggered: tr("已触发云端流程"), remote_pending: tr("等待云端处理"),
-  cloud_pending: tr('云端结果待确认'), completed: tr("已完成"),
-}))
-
-const summaryLines = computed(() => {
-  if (targetSelectionMissing.value) return []
-  const lines: string[] = []
-  if (createTag.value) {
-    for (const version of plannedVersions.value) lines.push(tr("{0}：{1}（{2}）", [version.versionGroupName, version.targetVersion || tr("待填写"), version.tagName || tr("待生成 Tag")]))
-  }
-  else lines.push(tr("不创建版本 Tag"))
-  const fileCount = selectedPaths.value.length
-  if (!fileCount && !createTag.value) lines.push(pushRemote.value ? tr("上传当前分支") : tr("不创建新提交"))
-  else if (!fileCount) lines.push(pushRemote.value ? tr("创建并上传 Tag") : tr("创建本地 Tag"))
-  if (pushRemote.value) {
-    lines.push(tr("提交后上传到{0}", [remoteDestination.value]))
-    if (preflight.value?.aheadCount) lines.push(tr("同时上传本机已有的 {0} 次提交", [preflight.value.aheadCount]))
-  } else {
-    lines.push(tr("只保存在本机，不上传远程仓库"))
-  }
-  if (gitOnly.value) {
-    lines.push(tr("不构建平台"))
-  } else {
-    for (const platform of productPlatforms.value.filter(platformHasSelection)) {
-      const partial = platformPartiallySelected(platform) ? tr("（部分目标）") : ''
-      const cloudBuild = platform.targets.some((target) => isTagPushTarget(target) && targetChoices.value[target.id]?.selected)
-      const actions = platformActionLabels(platform, true).filter((label) => !cloudBuild || label !== tr("上传"))
-      if (cloudBuild) actions.unshift(tr("交给 GitHub 自动构建"))
-      lines.push(tr("{0}{1}：{2}", [platform.name, partial, actions.join('、') || tr("尚未选择执行动作")]))
-    }
-    const advancedTargets = chosenTargets.value.filter(({ target }) => platformIdForTarget(target) === null)
-    if (advancedTargets.length) lines.push(tr("高级目标：{0}", [advancedTargets.map(({ target }) => target.name).join('、')]))
-  }
-  if (willTriggerAutomation.value) {
-    lines.push(willBuildTargetsInAutomation.value
-      ? tr("Tag 上传后交给 GitHub 自动构建；完成后可在 GitHub 查看结果")
-      : tr("Tag 上传后创建源码 Release，不生成安装包"))
-  }
-  return lines
-})
-
-function messageOf(reason: unknown) {
-  return reason instanceof Error ? reason.message : String(reason)
-}
-
-function githubRepositoryUrl(remoteUrl: string) {
-  const value = remoteUrl.trim().replace(/\.git$/i, '')
-  const httpsMatch = value.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)$/i)
-  if (httpsMatch) return `https://github.com/${httpsMatch[1]}/${httpsMatch[2]}`
-  const sshMatch = value.match(/^(?:ssh:\/\/)?git@github\.com[:/]([^/]+)\/([^/]+)$/i)
-  if (sshMatch) return `https://github.com/${sshMatch[1]}/${sshMatch[2]}`
-  return ''
-}
-
-function githubActionsUrl(remoteUrl: string, workflow: string) {
-  const repository = githubRepositoryUrl(remoteUrl)
-  if (!repository) return ''
-  return workflow ? `${repository}/actions/workflows/${encodeURIComponent(workflow)}` : `${repository}/actions`
-}
-
-function nextPatchVersion(values: string[]) {
-  let best = [0, 0, 0]
-  let found = false
-  for (const raw of values) {
-    const match = raw.replace(/^v/, '').match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
-    if (!match) continue
-    const current = match.slice(1).map(Number)
-    const isHigher = current[0] > best[0]
-      || (current[0] === best[0] && current[1] > best[1])
-      || (current[0] === best[0] && current[1] === best[1] && current[2] > best[2])
-    if (!found || isHigher) {
-      best = current
-      found = true
-    }
-  }
-  if (!found) return '0.1.0'
-  return `${best[0]}.${best[1]}.${best[2] + 1}`
-}
-
-function suggestReleaseVersion(currentVersions: string[], latestTag: string) {
-  const canReleaseCurrentV2 = currentVersions.length > 0
-    && currentVersions.every((version) => version.trim() === '2.0.0')
-    && (() => {
-      const latest = latestTag.replace(/^v/, '').match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
-      if (!latest) return true
-      return Number(latest[1]) < 2
-    })()
-  return canReleaseCurrentV2 ? '2.0.0' : nextPatchVersion([...currentVersions, latestTag])
-}
-
-function cloneConfig(config: ReleaseConfig): ReleaseConfig {
-  return JSON.parse(JSON.stringify(config)) as ReleaseConfig
-}
-
-function normalizeConfig(raw: ReleaseConfig): ReleaseConfig {
-  return {
-    schemaVersion: 1,
-    source: raw.source === 'file' ? 'file' : 'detected',
-    repoRoot: raw.repoRoot || '',
-    configPath: raw.configPath || '.launcher/release.yaml',
-    confidence: Number.isFinite(raw.confidence) ? raw.confidence : 0,
-    versionGroups: (raw.versionGroups || []).map((group) => ({
-      id: group.id || 'product',
-      name: group.name || group.id || tr("统一版本"),
-      ...(group.tagPrefix ? { tagPrefix: group.tagPrefix } : {}),
-      ...(group.currentVersion ? { currentVersion: group.currentVersion } : {}),
-      versionFiles: (group.versionFiles || []).map((file) => ({
-        path: file.path || '',
-        format: file.format || 'json',
-        ...(file.jsonPointer ? { jsonPointer: file.jsonPointer } : {}),
-      })),
-    })),
-    fileRules: raw.fileRules || [],
-    checkProfiles: raw.checkProfiles || [],
-    targets: (raw.targets || []).map((target) => ({
-      id: target.id || `target-${Date.now()}`,
-      name: target.name || target.id || tr("未命名目标"),
-      kind: target.kind || 'custom',
-      versionGroup: target.versionGroup || raw.versionGroups?.[0]?.id || 'product',
-      workingDir: target.workingDir || '.',
-      runner: { type: target.runner?.type || 'local', os: target.runner?.os || [] },
-      enabled: target.enabled !== false,
-      detected: target.detected !== false,
-      confidence: Number.isFinite(target.confidence) ? target.confidence : 0,
-      steps: {
-        check: target.steps?.check || '', build: target.steps?.build || '', package: target.steps?.package || '',
-        publish: target.steps?.publish || '', deploy: target.steps?.deploy || '',
-      },
-      artifacts: target.artifacts || [],
-    })),
-    ...(raw.automation ? {
-      automation: {
-        provider: raw.automation.provider || '',
-        workflow: raw.automation.workflow || '',
-        trigger: raw.automation.trigger || 'tag',
-        releaseBranch: raw.automation.releaseBranch || '',
-        publishesRelease: raw.automation.publishesRelease === true,
-      },
-    } : {}),
-    warnings: raw.warnings || [],
-  }
-}
-
-function currentOS() {
-  const platform = (navigator.platform || navigator.userAgent).toLowerCase()
-  if (platform.includes('win')) return 'windows'
-  if (platform.includes('mac')) return 'darwin'
-  return 'linux'
-}
-
-function osLabel(os: string) {
-  return ({ windows: 'Windows', linux: 'Linux', darwin: 'macOS' } as Record<string, string>)[os] || os
-}
-
-function targetUnavailableReason(target: ReleaseTarget) {
-  if (!target.enabled) return tr("此目标已在配置中停用")
-  const runnerType = target.runner.type.trim().toLowerCase()
-  if (buildMode.value === 'github' && runnerType !== 'git-push') return tr('未配置 GitHub 云端构建，请配置工作流或切换本地构建')
-  if (buildMode.value === 'local' && runnerType !== 'local') return tr('未配置本地构建步骤')
-  if (buildMode.value === 'local' && !target.steps.build && !target.steps.package) return tr('未配置本地构建步骤')
-  if (runnerType === 'git-push') return ''
-  if (runnerType !== 'local') return tr("当前版本不支持此执行方式")
-  if (!target.runner.os.length) return ''
-  const supported = target.runner.os.map((value) => value.trim().toLowerCase())
-  if (supported.includes('any') || supported.includes(currentOS())) return ''
-  return tr("需要 {0} 环境，当前电脑不能执行", [target.runner.os.join(' / ')])
-}
-
-function targetPhaseHint(target: ReleaseTarget, phase: (typeof phaseOptions.value)[number]) {
-  if (isTagPushTarget(target) && phase.key === 'publish') return tr("Tag 上传后由 GitHub 自动构建")
-  if (target.runner.type.trim().toLowerCase() === 'git-push' && phase.key === 'publish') return tr("推送后触发云端构建")
-  return target.steps[phase.key] ? phase.hint : tr("未配置")
-}
-
-function targetAvailable(target: ReleaseTarget) {
-  return !targetUnavailableReason(target)
-}
-
-function defaultTargetChoice(target: ReleaseTarget): TargetChoice {
-  return { selected: false, build: phaseAllowed('build') && !!target.steps.build, package: phaseAllowed('package') && !!target.steps.package, publish: phaseAllowed('publish') && !!target.steps.publish, deploy: phaseAllowed('deploy') && !!target.steps.deploy }
-}
-
-function applyReleaseConfig(raw: ReleaseConfig, editing = false) {
-  const normalized = normalizeConfig(raw)
-  releaseConfig.value = normalized
-  configDraft.value = cloneConfig(normalized)
-  const next: Record<string, TargetChoice> = {}
-  for (const target of normalized.targets) next[target.id] = targetChoices.value[target.id] || defaultTargetChoice(target)
-  targetChoices.value = next
-  if (!normalized.targets.length) gitOnly.value = true
-  selectSingleBuildPlatform()
-  configEditorOpen.value = editing
-}
-
-function resetSelection(pf: ReleasePreflight) {
-  const reconciled = reconcileReleaseSelection(pf.classifications || [], manualDecisions.value)
-  selected.value = reconciled.selected
-  manualDecisions.value = reconciled.decisions
-}
-
-function fileStatusLabel(file: ReleaseFileChange) {
-  if (isAddedFile(file)) return tr("新增")
-  if (file.status.includes('D')) return tr("删除")
-  if (file.status.includes('R')) return tr("重命名")
-  return tr("修改")
-}
-
-function isAddedFile(file: ReleaseFileChange) {
-  return !file.tracked || file.status.includes('A')
-}
-
-function selectAllFiles(checked: boolean) {
-  for (const file of preflight.value?.changes || []) selected.value[file.path] = checked
-}
-
-function normalizePreflight(pf: ReleasePreflight): ReleasePreflight {
-  return { ...pf, remoteChecked: pf.remoteChecked !== false, remotes: pf.remotes || [], versionFiles: pf.versionFiles || [], currentVersions: pf.currentVersions || {}, latestGroupTags: pf.latestGroupTags || {}, suggestedVersions: pf.suggestedVersions || {}, changes: pf.changes || [], aheadCount: pf.aheadCount || 0, unpushedChanges: pf.unpushedChanges || [], blockingIssues: pf.blockingIssues || [] }
-}
-
-function preferenceKey() {
-  return `launcher.release-preferences.${props.app.id}`
-}
-
-function readLocalPreferences(): { buildMode?: 'github' | 'local'; createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } {
-  try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') as { buildMode?: 'github' | 'local'; createTag?: boolean; versionMode?: ReleaseVersionMode; pushRemote?: boolean } }
-  catch { return {} }
-}
-
-function rememberPreferences() {
-  if (!profileReady.value) return
-  preferenceRevision += 1
-  preferenceStatus.value = 'saving'
-  preferenceError.value = ''
-  if (preferenceTimer) clearTimeout(preferenceTimer)
-  preferenceTimer = setTimeout(saveRememberedPreferences, 250)
-}
-
-function saveRememberedPreferences() {
-  if (preferenceTimer) clearTimeout(preferenceTimer)
-  preferenceTimer = null
-  const body = profileBody()
-  const appId = props.app.id
-  const key = preferenceKey()
-  const preferences = JSON.stringify({ buildMode: buildMode.value, createTag: createTag.value, versionMode: versionMode.value, pushRemote: pushRemote.value })
-  const revision = preferenceRevision
-  preferenceStatus.value = 'saving'
-  preferenceError.value = ''
-  preferenceSave = preferenceSave.catch(() => undefined).then(async () => {
-    await api.saveReleaseProfile(appId, body)
-    localStorage.setItem(key, preferences)
-    if (!disposed && revision === preferenceRevision) preferenceStatus.value = 'saved'
-  }).catch(reason => {
-    if (!disposed && revision === preferenceRevision) {
-      preferenceStatus.value = 'error'
-      preferenceError.value = messageOf(reason)
-    }
-  })
-  return preferenceSave
-}
-
-async function closeModal() {
-  if (publishing.value) return
-  if (preferenceTimer) saveRememberedPreferences()
-  await preferenceSave
-  if (disposed || preferenceStatus.value === 'error') return
-  emit('close')
-}
-
-function setDefaultCommitMessage(force = false) {
-  if (commitMessageDirty.value && !force) return
-  commitMessage.value = createTag.value ? `chore(release): ${plannedTagNames.value.join(', ')}` : `chore: update ${props.app.name}`
-  commitMessageDirty.value = false
-}
-
-function onCommitMessageInput() {
-  commitMessageDirty.value = true
-}
-
-function syncVersionInputs() {
-  const next = { ...versionInputs.value }
-  for (const version of plannedVersions.value) {
-    if (!next[version.versionGroupId] || versionMode.value === 'auto') next[version.versionGroupId] = version.suggestedVersion
-  }
-  versionInputs.value = next
-}
-
-function scheduleReleaseNotesDraft(delay = 80) {
-  if (targetSelectionMissing.value) return
-  if (!createTag.value || !preflight.value || releaseNotesDirty.value || activeRun.value || disposed) return
-  if (releaseNotesTimer) clearTimeout(releaseNotesTimer)
-  releaseNotesTimer = setTimeout(() => { releaseNotesTimer = null; void generateReleaseNotesDraft() }, delay)
-}
-
-async function generateReleaseNotesDraft(force = false, overwriteConfirmed = false) {
-  if (targetSelectionMissing.value) return
-  const pf = preflight.value
-  if (!pf || !createTag.value || releaseNotesLoading.value) return
-  // A scheduled draft may start after the user has begun typing.
-  if (!force && releaseNotesDirty.value) return
-  if (force && releaseNotesDirty.value && !overwriteConfirmed) {
-    confirmAction.value = 'regenerate-notes'
-    return
-  }
-
-  const sourceSignature = releaseNotesOptionsSignature.value
-  const requestId = ++releaseNotesRequest
-  releaseNotesLoading.value = true
-  releaseNotesError.value = ''
-  try {
-    const draft = await api.createReleaseNotesDraft(props.app.id, {
-      statusFingerprint: pf.statusFingerprint,
-      selectedPaths: selectedPaths.value,
-      selectedTargets: selectedTargets.value,
-    })
-    if (disposed || requestId !== releaseNotesRequest) return
-    if (sourceSignature !== releaseNotesOptionsSignature.value) {
-      releaseNotesStale.value = true
-      return
-    }
-    releaseNotes.value = draft.text
-    releaseNotesBaseTag.value = draft.baseTag
-    releaseNotesSourceFingerprint.value = draft.sourceFingerprint
-    releaseNotesGeneratedFor.value = sourceSignature
-    releaseNotesDirty.value = false
-    releaseNotesStale.value = false
-  } catch (reason) {
-    if (requestId === releaseNotesRequest) releaseNotesError.value = messageOf(reason)
-  } finally {
-    if (requestId === releaseNotesRequest) {
-      releaseNotesLoading.value = false
-      if (sourceSignature !== releaseNotesOptionsSignature.value) scheduleReleaseNotesDraft(120)
-    }
-  }
-}
-
-function onReleaseNotesInput() {
-  if (releaseNotesTimer) {
-    clearTimeout(releaseNotesTimer)
-    releaseNotesTimer = null
-  }
-  releaseNotesRequest += 1
-  releaseNotesLoading.value = false
-  if (!releaseNotesGeneratedFor.value) releaseNotesGeneratedFor.value = releaseNotesOptionsSignature.value
-  releaseNotesDirty.value = true
-  releaseNotesError.value = ''
-}
-
-function applyPreflight(raw: ReleasePreflight, initial = false, resetFiles = true) {
-  const pf = normalizePreflight(raw)
-  preflight.value = pf
-  remoteName.value = pf.profile?.remoteName || remoteName.value || 'origin'
-  versionStrategy.value = pf.profile?.versionStrategy || versionStrategy.value || 'auto'
-  preReleaseCommand.value = pf.profile?.preReleaseCommand || ''
-  if (initial) {
-    const remembered = readLocalPreferences()
-    const keepTargets = editedReleaseOptions.has('targets') || editedReleaseOptions.has('build')
-    if (!keepTargets) {
-      buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github'
-      for (const target of configuredTargets.value) targetChoices.value[target.id] = defaultTargetChoice(target)
-      selectSingleBuildPlatform()
-    }
-    if (!keepTargets && !editedReleaseOptions.has('push')) pushRemote.value = buildMode.value === 'local' && !gitOnly.value ? false : (typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true)
-    if (!editedReleaseOptions.has('tag')) createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true)
-    if (!editedReleaseOptions.has('version')) versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto')
-  }
-  if (createTag.value) syncVersionInputs()
-  setDefaultCommitMessage()
-  if (resetFiles) resetSelection(pf)
-  preflightStale.value = false
-  scheduleReleaseNotesDraft()
-}
-
-async function unstageFiles() {
-  if (!preflight.value || unstaging.value || publishing.value) return
-  unstaging.value = true
-  unstageNotice.value = ''
-  error.value = ''
-  try {
-    const pf = await api.unstageReleaseFiles(props.app.id, preflight.value.statusFingerprint)
-    if (disposed) return
-    applyPreflight(pf)
-    unstageNotice.value = tr('已取消暂存，文件修改已保留。请在下方重新选择本次提交的文件。')
-  } catch (reason) {
-    if (disposed) return
-    if (reason instanceof ApiError && reason.preflight) applyPreflight(reason.preflight)
-    error.value = messageOf(reason)
-  } finally {
-    unstaging.value = false
-  }
-}
-
-async function load(resumeFailedRun = true) {
-  loading.value = true
-  error.value = ''
-  errorCode.value = ''
-  versionPlanNotice.value = ''
-  configNotice.value = ''
-  try {
-    const localPreflight = api.releasePreflight(props.app.id, false)
-    const [historyResult, configResult] = await Promise.allSettled([
-      api.listReleases(props.app.id), api.getReleaseConfig(props.app.id),
-    ] as const)
-    if (disposed) return
-    history.value = historyResult.status === 'fulfilled' ? historyResult.value : []
-    if (configResult.status === 'fulfilled') {
-      configEndpointAvailable.value = true
-      applyReleaseConfig(configResult.value)
-    } else {
-      configEndpointAvailable.value = false
-      gitOnly.value = true
-      configNotice.value = tr("当前后端暂未启用自动发布配置，仍可继续使用基础 Git 提交与 Tag 功能。")
-    }
-    loading.value = false
-
-    const saved = readReleaseSession()
-    const savedRun = saved?.appId === props.app.id ? history.value.find((run) =>
-      run.id === saved.runId || (!saved.runId && saved.submittedAt &&
-        Date.parse(run.createdAt.includes('T') ? run.createdAt : run.createdAt.replace(' ', 'T') + 'Z') >= saved.submittedAt - 1000)
-    ) : undefined
-    const resumable = savedRun || history.value.find((run) => run.status === 'queued' || run.status === 'running')
-      || (resumeFailedRun ? history.value.find(canResumeFailedRun) : undefined)
-    if (resumable) showRun(resumable)
-
-    const pf = await localPreflight
-    if (disposed) return
-    applyPreflight(pf, true)
-    profileReady.value = true
-    if (editedReleaseOptions.size) rememberPreferences()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  } finally {
-    profileReady.value = true
-    loading.value = false
-  }
-}
-
-function profileBody() {
-  return { buildMode: buildMode.value, remoteName: remoteName.value, versionStrategy: versionStrategy.value, preReleaseCommand: preReleaseCommand.value, createTag: createTag.value, versionMode: versionMode.value }
-}
-
-async function saveAndRecheck() {
-  savingProfile.value = true
-  error.value = ''
-  preflightStale.value = true
-  try {
-    await api.saveReleaseProfile(props.app.id, profileBody())
-    applyPreflight(await api.releasePreflight(props.app.id, false))
-  } catch (reason) { error.value = messageOf(reason) }
-  finally { savingProfile.value = false }
-}
-
-function onVersionInput(groupID: string, value: string) {
-  editedReleaseOptions.add('version')
-  versionInputs.value = { ...versionInputs.value, [groupID]: value.trim() }
-  setDefaultCommitMessage()
-}
-function onCreateTagChange() {
-  editedReleaseOptions.add('tag')
-  if (createTag.value) {
-    syncVersionInputs()
-    scheduleReleaseNotesDraft()
-  } else {
-    releaseNotesError.value = ''
-    releaseNotesLoading.value = false
-    releaseNotesRequest += 1
-  }
-  setDefaultCommitMessage()
-}
-function onVersionModeChange() {
-  editedReleaseOptions.add('version')
-  syncVersionInputs()
-  setDefaultCommitMessage()
-}
-function setTargetSelected(targetId: string, checked: boolean) {
-  editedReleaseOptions.add('targets')
-  const choice = targetChoices.value[targetId]
-  const target = configuredTargets.value.find((item) => item.id === targetId)
-  if (!choice || !target) return
-  choice.selected = checked
-  if (checked) {
-    gitOnly.value = false
-    for (const phase of phaseOptions.value) choice[phase.key] = phaseAllowed(phase.key) && !!target.steps[phase.key]
-  }
-}
-function setTargetPhase(targetId: string, phase: ExecutionPhase, checked: boolean) {
-  editedReleaseOptions.add('targets')
-  if (targetChoices.value[targetId]) targetChoices.value[targetId][phase] = checked
-  if (checked) gitOnly.value = false
-}
-function versionGroupName(target: ReleaseTarget) {
-  const group = releaseConfig.value?.versionGroups.find((item) => item.id === target.versionGroup)
-  return group ? versionGroupDisplayName(group) : target.versionGroup || tr("统一版本")
-}
-
-async function scanReleaseConfig() {
-  configScanning.value = true
-  configValidationError.value = ''
-  configNotice.value = ''
-  try {
-    const previous = releaseConfig.value ? cloneConfig(releaseConfig.value) : null
-    applyReleaseConfig(await api.scanReleaseConfig(props.app.id), true)
-    void switchReleaseTab('settings')
-    configBeforeEdit.value = previous
-    configEndpointAvailable.value = true
-    configNotice.value = tr("自动识别已完成。请检查建议；点击“保存并使用”后才会写入项目。")
-  } catch (reason) {
-    if (!releaseConfig.value) configEndpointAvailable.value = false
-    configNotice.value = tr("自动识别暂不可用：{0}。基础 Git 发布仍可使用。", [messageOf(reason)])
-  } finally { configScanning.value = false }
-}
-
-function openConfigEditor() {
-  if (!releaseConfig.value) { void scanReleaseConfig(); return }
-  void switchReleaseTab('settings')
-  configBeforeEdit.value = cloneConfig(releaseConfig.value)
-  configDraft.value = cloneConfig(releaseConfig.value)
-  configEditorOpen.value = true
-  configValidationError.value = ''
-}
-function cancelConfigEdit() {
-  if (configBeforeEdit.value) applyReleaseConfig(configBeforeEdit.value)
-  else configEditorOpen.value = false
-  configBeforeEdit.value = null
-  configDraft.value = releaseConfig.value ? cloneConfig(releaseConfig.value) : null
-  configValidationError.value = ''
-}
-function validateConfig(config: ReleaseConfig) {
-  if (!config.versionGroups.length) return tr("至少需要一个版本组。")
-  const groupIds = config.versionGroups.map((group) => group.id.trim())
-  if (groupIds.some((id) => !id)) return tr("版本组标识不能为空。")
-  if (new Set(groupIds).size !== groupIds.length) return tr("版本组标识不能重复。")
-  const tagPrefixes = config.versionGroups.map((group) => (group.tagPrefix || group.id).trim().toLowerCase())
-  if (tagPrefixes.some((prefix) => !/^[a-z0-9][a-z0-9._-]*$/i.test(prefix))) return tr("Tag 前缀只能包含字母、数字、点、下划线和短横线。")
-  if (new Set(tagPrefixes).size !== tagPrefixes.length) return tr("每个版本组的 Tag 前缀必须不同。")
-  const targetIds = config.targets.map((target) => target.id.trim())
-  if (targetIds.some((id) => !id)) return tr("发布目标标识不能为空。")
-  if (new Set(targetIds).size !== targetIds.length) return tr("发布目标标识不能重复。")
-  const invalidTarget = config.targets.find((target) => !target.name.trim() || !groupIds.includes(target.versionGroup))
-  if (invalidTarget) return tr("目标“{0}”缺少名称或有效版本组。", [invalidTarget.name || invalidTarget.id])
-  return ''
-}
-async function saveReleaseConfig() {
-  if (!configDraft.value) return
-  const validationError = validateConfig(configDraft.value)
-  if (validationError) { configValidationError.value = validationError; return }
-  configSaving.value = true
-  configValidationError.value = ''
-  configNotice.value = ''
-  let savedSuccessfully = false
-  try {
-    const saved = await api.saveReleaseConfig(props.app.id, normalizeConfig(configDraft.value))
-    savedSuccessfully = true
-    applyReleaseConfig(saved)
-    configBeforeEdit.value = null
-    configNotice.value = tr("发布说明书已保存到 {0}。", [saved.configPath || '.launcher/release.yaml'])
-    preflightStale.value = true
-    applyPreflight(await api.releasePreflight(props.app.id, false))
-  } catch (reason) {
-    const message = messageOf(reason)
-    configValidationError.value = message
-    if (savedSuccessfully) error.value = tr("配置已保存，但重新检查 Git 失败：{0}", [message])
-  }
-  finally { configSaving.value = false }
-}
-
-async function switchReleaseTab(tab: ReleaseTab, focus = false) {
-  if (publishing.value || autoSubmitting.value || activeRun.value) return
-  if (bodyRef.value) tabScroll[releaseTab.value] = bodyRef.value.scrollTop
-  releaseTab.value = tab
-  await nextTick()
-  if (bodyRef.value) bodyRef.value.scrollTop = tabScroll[tab]
-  if (focus) document.getElementById('release-tab-' + tab)?.focus()
-}
-
-async function chooseReleaseTarget() {
-  await switchReleaseTab('publish')
-  platformSectionRef.value?.scrollIntoView({ block: 'start' })
-  platformSectionRef.value?.focus({ preventScroll: true })
-}
-
-function onReleaseTabKeydown(event: KeyboardEvent) {
+const {
+  phaseOptions, loading, savingProfile, publishing, autoSubmitting,
+  unstaging, unstageNotice, error, errorCode, versionPlanNotice,
+  preflight, history, selected, releaseIntent, manualDecisions,
+  sensitiveExceptions, candidate, checkingCandidate, checksEnabled, candidateSignature,
+  reviewSignature, findingDecisions, resolvingReview, safetySettingsDirty, candidatePoll,
+  candidateEpoch, candidateAbort, safetyFiles, candidateRequest, currentCandidateSignature,
+  submissionPlanSignature, candidateStale, reviewStale, pendingFindings, candidateReady,
+  candidateNeedsAttention, showReleaseIssues, chooseSafetyFile, adoptRecommended, recordSensitiveException,
+  continueResolvedReview, changeReleaseIntent, refreshSafety, inspectCandidate, cancelCandidate,
+  saveSafetyConfig, versionInputs, commitMessage, commitMessageDirty, releaseNotes,
+  releaseNotesDirty, releaseNotesStale, releaseNotesLoading, releaseNotesError, releaseNotesBaseTag,
+  releaseNotesSourceFingerprint, releaseNotesGeneratedFor, remoteName, versionStrategy, preReleaseCommand,
+  createTag, pushRemote, buildMode, versionMode, profileReady,
+  preferenceStatus, preferenceError, preferenceRevision, editedReleaseOptions, releaseConfig,
+  configDraft, configBeforeEdit, targetChoices, configEndpointAvailable, configNotice,
+  configEditorOpen, configFileOpen, configScanning, configSaving, configValidationError,
+  preflightStale, gitOnly, releaseTab, tabScroll, configFileDirty,
+  confirmAction, bodyRef, platformSectionRef, activeRun, logs,
+  runTargets, runArtifacts, runAutomation, runDeliveries, cloudBuild,
+  retrying, openingAutomation, automationOpenError, retryMetadataLoaded, retryConfirmationRequired,
+  retryConfirmationTargets, pollTimer, preferenceTimer, releaseNotesTimer, releaseNotesRequest,
+  preferenceSave, disposed, isActive, selectedPaths, orderedChanges,
+  newFiles, allFilesSelected, configuredTargets, chosenTargets, selectedTargets,
+  invalidChosenTargetIds, targetSelectionMissing, selectedVersionGroupIds, selectedVersionGroups, selectedVersionFiles,
+  visibleCurrentVersions, isTagPushTarget, canResumeFailedRun, plannedVersions, versionForGroup,
+  platformVersions, displayCurrentVersion, versionPattern, versionValid, primaryTargetVersion,
+  plannedTagNames, configNeedsSaving, selectedNeedsRemotePush, configuredAutomation, selectedHasTagPushTarget,
+  automationTargetRequiresTag, willTriggerAutomation, automationBranchMismatch, willBuildWindowsInAutomation, willBuildTargetsInAutomation,
+  releaseNotesOptionsSignature, targetSelectionValid, newContentState, releaseContentHint, blockingIssues,
+  localChecksPassed, remoteMissing, canSubmit, canPublish, canRetryRun,
+  retryable, customRetryConfirmation, retryUpload, uploadPaused, runFailureSummary,
+  runFailureDetails, retryButtonLabel, retryGuidance, retryTargetNames, hasOnlineAction,
+  hasExternalAction, remoteDestination, automationPageUrl, openAutomationPage, automationHandedOff,
+  activeRunStatusLabel, activeStageLabel, cloudExecutionNotice, cloudBuildSettled, completionTitle,
+  completionDescription, confirmDialogTitle, confirmDialogMessage, confirmDialogButton, configConfidence,
+  standardPlatforms, platformIdForTarget, versionGroupDisplayName, productPlatforms, visibleProductPlatforms,
+  phaseAllowed, selectedDelivery, setDelivery, changeBuildMode, configuredActions,
+  platformRunnableTargets, platformSelected, platformHasSelection, platformPartiallySelected, platformPartiallyAvailable,
+  platformSelectionCount, platformUnavailableReason, platformActionLabels, platformCardDetail, togglePlatform,
+  selectSingleBuildPlatform, toggleGitOnly, stageLabel, targetStageLabel, summaryLines,
+  messageOf, githubRepositoryUrl, githubActionsUrl, nextPatchVersion, suggestReleaseVersion,
+  cloneConfig, normalizeConfig, currentOS, osLabel, targetUnavailableReason,
+  targetPhaseHint, targetAvailable, defaultTargetChoice, applyReleaseConfig, resetSelection,
+  fileStatusLabel, isAddedFile, selectAllFiles, normalizePreflight, preferenceKey,
+  readLocalPreferences, rememberPreferences, saveRememberedPreferences, closeModal, setDefaultCommitMessage,
+  onCommitMessageInput, syncVersionInputs, scheduleReleaseNotesDraft, generateReleaseNotesDraft, onReleaseNotesInput,
+  applyPreflight, unstageFiles, load, profileBody, saveAndRecheck,
+  onVersionInput, onCreateTagChange, onVersionModeChange, setTargetSelected, setTargetPhase,
+  versionGroupName, scanReleaseConfig, openConfigEditor, cancelConfigEdit, validateConfig,
+  saveReleaseConfig, switchReleaseTab, chooseReleaseTarget, onReleaseTabKeydown, onConfigFileSaved,
+  newId, addVersionGroup, removeVersionGroup, addVersionFile, addTarget,
+  setRunnerOS, setArtifacts, submitRelease, publish, prepareLocalCommit,
+  releaseErrorMessage, showRun, historyStatus, schedulePoll, poll,
+  retry, confirmSensitiveAction, startNew,
+} = useReleaseModel(props, emit)
+type PanelTab = 'publish' | 'settings' | 'local-build'
+const localBuildVisible = ref(false)
+const sealedArtifactsPresent = ref(false)
+const hasLocalSavedOutputs = computed(() => !!activeRun.value
+  && !['queued', 'running'].includes(activeRun.value.status)
+  && runTargets.value.some(target => (target.build || target.package) && !target.publish))
+watch(() => activeRun.value?.id, () => { sealedArtifactsPresent.value = false }, { flush: 'sync' })
+const panelTab = computed<PanelTab>(() => localBuildVisible.value ? 'local-build' : activeRun.value ? 'publish' : releaseTab.value)
+async function switchPanelTab(tab: PanelTab, focus = false) {
+  if (publishing.value || autoSubmitting.value || (tab === 'settings' && activeRun.value)) return
+  localBuildVisible.value = tab === 'local-build'
+  if (tab !== 'local-build') await switchReleaseTab(tab)
+  else await nextTick()
+  if (bodyRef.value && tab === 'local-build') bodyRef.value.scrollTop = 0
+  if (focus) document.getElementById(`release-tab-${tab}`)?.focus()
+}
+function onPanelTabKeydown(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  const tab = event.key === 'Home' ? 'publish' : event.key === 'End' ? 'settings' : releaseTab.value === 'publish' ? 'settings' : 'publish'
-  void switchReleaseTab(tab, true)
+  const tabs: PanelTab[] = activeRun.value ? ['publish', 'local-build'] : ['publish', 'settings', 'local-build']
+  const index = tabs.indexOf(panelTab.value)
+  const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1]
+    : tabs[(index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length]
+  void switchPanelTab(next, true)
 }
-
-async function onConfigFileSaved(config: ReleaseConfig) {
-  if (!configEndpointAvailable.value && config.targets.length) gitOnly.value = false
-  configEndpointAvailable.value = true
-  applyReleaseConfig(config)
-  configBeforeEdit.value = null
-  configNotice.value = ''
-  preflightStale.value = true
-  configSaving.value = true
-  try {
-    applyPreflight(await api.releasePreflight(props.app.id, false))
-    error.value = ''
-  } catch (reason) {
-    error.value = tr('配置已保存，但重新检查 Git 失败：{0}', [messageOf(reason)])
-  } finally { configSaving.value = false }
-}
-
-function newId(prefix: string, existing: string[]) {
-  let index = existing.length + 1
-  while (existing.includes(`${prefix}-${index}`)) index += 1
-  return `${prefix}-${index}`
-}
-function addVersionGroup() {
-  if (!configDraft.value) return
-  const id = newId('version', configDraft.value.versionGroups.map((group) => group.id))
-  configDraft.value.versionGroups.push({ id, name: tr("新版本组"), tagPrefix: id, versionFiles: [] })
-}
-function removeVersionGroup(index: number) {
-  const config = configDraft.value
-  if (!config || config.versionGroups.length <= 1) return
-  const [removed] = config.versionGroups.splice(index, 1)
-  const fallback = config.versionGroups[0].id
-  for (const target of config.targets) if (target.versionGroup === removed.id) target.versionGroup = fallback
-}
-function addVersionFile(group: ReleaseVersionGroup) { group.versionFiles.push({ path: '', format: 'json', jsonPointer: '/version' }) }
-function addTarget() {
-  const config = configDraft.value
-  if (!config) return
-  const id = newId('target', config.targets.map((target) => target.id))
-  const emptySteps: ReleaseTargetSteps = { check: '', build: '', package: '', publish: '', deploy: '' }
-  config.targets.push({ id, name: tr("新发布目标"), kind: 'custom', versionGroup: config.versionGroups[0]?.id || 'product', workingDir: '.', runner: { type: 'local', os: [currentOS()] }, enabled: true, detected: false, confidence: 1, steps: emptySteps, artifacts: [] })
-}
-function setRunnerOS(target: ReleaseTarget, os: string, checked: boolean) {
-  const values = new Set(target.runner.os)
-  if (checked) values.add(os); else values.delete(os)
-  target.runner.os = [...values]
-}
-function setArtifacts(target: ReleaseTarget, value: string) { target.artifacts = value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }
-
-async function submitRelease() {
-  if (!canSubmit.value || autoSubmitting.value || checkingCandidate.value || disposed) return
-  autoSubmitting.value = true
-  const confirmedPlan = submissionPlanSignature.value
-  let stopped = true
-  try {
-    const checked = candidateReady.value || await inspectCandidate()
-    if (!checked || disposed || !candidateReady.value) return
-    if (confirmedPlan !== submissionPlanSignature.value || !canPublish.value) {
-      error.value = tr('发布内容已变化，请核对后再次确认。')
-      return
-    }
-    await publish()
-    stopped = false
-  } finally {
-    autoSubmitting.value = false
-    if (stopped && !disposed) {
-      await nextTick()
-      bodyRef.value?.querySelector('.candidate-result')?.scrollIntoView({block:'center'})
-    }
-  }
-}
-
-async function publish() {
-  const pf = preflight.value
-  if (!pf || !canPublish.value) return
-  publishing.value = true
-  error.value = ''
-  errorCode.value = ''
-  versionPlanNotice.value = ''
-  try {
-    await api.saveReleaseProfile(props.app.id, profileBody())
-    rememberReleaseSession({ appId: props.app.id, submittedAt: Date.now() })
-    const run = await api.createRelease(props.app.id, {
-      ...candidateRequest.value, candidateId:candidate.value?.id,
-      targetVersion: createTag.value ? primaryTargetVersion.value : '',
-      versions: createTag.value ? plannedVersions.value.map((version) => ({ versionGroupId: version.versionGroupId, targetVersion: version.targetVersion })) : [],
-      createTag: createTag.value, versionMode: versionMode.value,
-      buildMode: gitOnly.value ? 'none' : buildMode.value, pushRemote: pushRemote.value,
-      selectedTargets: selectedTargets.value, selectedPaths: selectedPaths.value, commitMessage: commitMessage.value, statusFingerprint: pf.statusFingerprint,
-      releaseNotes: createTag.value ? releaseNotes.value.trim() : '',
-      releaseNotesConfirmed: createTag.value,
-      externalActionsConfirmed: hasExternalAction.value,
-    })
-    if (!disposed) showRun(run)
-  } catch (reason) {
-    rememberReleaseSession({ appId: props.app.id })
-    if (disposed) return
-    if (reason instanceof ApiError && reason.code === 'version_plan_changed' && reason.preflight) {
-      applyPreflight(reason.preflight, false, false)
-      versionPlanNotice.value = tr('版本建议已更新。请核对版本与更新说明，再次确认后继续。')
-    } else {
-      error.value = releaseErrorMessage(reason)
-      errorCode.value = reason instanceof ApiError ? reason.code : ''
-      if (errorCode.value === 'status_changed') preflightStale.value = true
-      if (['status_changed','candidate_stale','candidate_not_found','candidate_not_accepted'].includes(errorCode.value) && candidate.value) {
-        candidate.value={...candidate.value,status:'stale',accepted:false,canSaveProgress:false}
-        candidateSignature.value='';reviewSignature.value='';findingDecisions.value={}
-      }
-    }
-    await nextTick()
-    bodyRef.value?.scrollTo({ top: 0 })
-  }
-  finally { publishing.value = false }
-}
-
-function prepareLocalCommit() {
-  changeReleaseIntent('save-progress')
-  // Change the visible plan only. The normal submit button remains the final action.
-  gitOnly.value = true
-  createTag.value = false
-  pushRemote.value = false
-  if (errorCode.value.startsWith('remote_') || errorCode.value === 'fetch_failed') { error.value = ''; errorCode.value = '' }
-  if (!commitMessageDirty.value) setDefaultCommitMessage()
-}
-
-function releaseErrorMessage(reason: unknown) {
-  const message = messageOf(reason)
-  if (!(reason instanceof ApiError)) return message
-  const titles: Record<string, string> = {
-    remote_timeout: tr('远程检查超时。请检查网络或代理，也可关闭“提交后上传”在本机完成。'),
-    remote_auth_failed: tr('远程仓库认证失败。请检查 Git 凭据和仓库访问权限。'),
-    remote_branch_missing: tr('远程仓库没有当前分支。请确认分支名称或先建立远程分支。'),
-    remote_network_failed: tr('无法连接远程仓库。请检查网络、代理或证书设置。'),
-    remote_check_cancelled: tr('远程检查已取消。'),
-    remote_check_failed: tr('远程检查失败。请查看下方 Git 返回的原因。'),
-  }
-  const title = titles[reason.code]
-  if (!title) return message
-  const detail = message.split('\n').slice(1).join('\n').trim()
-  return detail ? `${title}\n${detail}` : title
-}
-
-function showRun(run: ReleaseRun) {
-  if (pollTimer) clearTimeout(pollTimer)
-  activeRun.value = run
-  logs.value = []
-  runTargets.value = []
-  runArtifacts.value = []
-  runAutomation.value = null
-  cloudBuild.value = null
-  retryMetadataLoaded.value = false
-  retryConfirmationRequired.value = undefined
-  retryConfirmationTargets.value = []
-  error.value = ''
-  rememberReleaseSession({ appId: props.app.id, runId: run.id })
-  schedulePoll(0)
-}
-
-function historyStatus(run: ReleaseRun) {
-  if (run.status === 'succeeded') return run.pushRemote ? tr("已推送") : tr("本地完成")
-  return run.status === 'failed' ? tr("失败") : tr("进行中")
-}
-
-function schedulePoll(delay = 700) {
-  if (disposed) return
-  if (pollTimer) clearTimeout(pollTimer)
-  pollTimer = setTimeout(() => void poll(), delay)
-}
-async function poll() {
-  const run = activeRun.value
-  if (!run || disposed) return
-  try {
-    const lastId = logs.value.length ? logs.value[logs.value.length - 1].id : 0
-    const view = await api.getReleaseRun(run.id, lastId)
-    if (disposed || activeRun.value?.id !== run.id) return
-    activeRun.value = view.run
-    runTargets.value = view.targets || []
-    runArtifacts.value = view.artifacts || []
-    runAutomation.value = view.automation || null
-    cloudBuild.value = view.cloudBuild || null
-    retryConfirmationRequired.value = view.retryConfirmationRequired
-    retryConfirmationTargets.value = view.retryConfirmationTargets || []
-    retryMetadataLoaded.value = true
-    logs.value = [...logs.value, ...(view.logs || [])]
-    if (view.run.status === 'queued' || view.run.status === 'running') schedulePoll()
-    else {
-      history.value = await api.listReleases(props.app.id)
-      if (view.run.status === 'succeeded' && automationHandedOff.value && !cloudBuildSettled.value) schedulePoll(15000)
-    }
-  } catch (reason) {
-    if (disposed) return
-    error.value = messageOf(reason)
-    schedulePoll(1500)
-  }
-}
-async function retry(externalActionsConfirmed = false) {
-  if (!activeRun.value || !retryable.value || retrying.value || !retryMetadataLoaded.value) return
-  if (customRetryConfirmation.value && !externalActionsConfirmed) {
-    confirmAction.value = 'retry'
-    return
-  }
-  const runId = activeRun.value.id
-  retrying.value = true
-  error.value = ''
-  try {
-    // Clicking retry authorizes resuming this same upload. Older sidecars also
-    // require the flag for Git uploads; custom commands retain explicit consent.
-    const run = await api.retryRelease(runId, !customRetryConfirmation.value || externalActionsConfirmed)
-    if (!disposed && activeRun.value?.id === runId) { activeRun.value = run; schedulePoll(0) }
-  } catch (reason) {
-    if (!disposed && activeRun.value?.id === runId) {
-      error.value = releaseErrorMessage(reason)
-      if (reason instanceof ApiError && reason.code === 'external_actions_confirmation_required') {
-        retryConfirmationRequired.value = true
-        schedulePoll(0)
-      }
-    }
-  } finally { retrying.value = false }
-}
-async function confirmSensitiveAction() {
-  const action = confirmAction.value
-  confirmAction.value = null
-  if (action === 'retry') await retry(true)
-  else if (action === 'regenerate-notes') await generateReleaseNotesDraft(true, true)
-}
-function startNew() {
-  candidate.value=null;candidateSignature.value=''
-  if (pollTimer) clearTimeout(pollTimer)
-  rememberReleaseSession({ appId: props.app.id })
-  confirmAction.value = null
-  activeRun.value = null
-  logs.value = []
-  runTargets.value = []
-  runArtifacts.value = []
-  runAutomation.value = null
-  cloudBuild.value = null
-  retryMetadataLoaded.value = false
-  retryConfirmationRequired.value = undefined
-  retryConfirmationTargets.value = []
-  releaseNotes.value = ''
-  releaseNotesDirty.value = false
-  releaseNotesStale.value = false
-  releaseNotesGeneratedFor.value = ''
-  releaseNotesError.value = ''
-  commitMessageDirty.value = false
-  void load(false)
-}
-
-watch([releaseIntent,gitOnly,createTag],()=>{
-  gitOnly.value=releaseIntent.value==='save-progress'
-  createTag.value=releaseIntent.value==='formal'
-},{flush:'sync'})
-watch([buildMode, createTag, versionMode, pushRemote], rememberPreferences)
-watch(gitOnly, value => { if (!value && buildMode.value === 'local') pushRemote.value = false })
-watch(pushRemote, () => {
-  if (errorCode.value.startsWith('remote_') || errorCode.value === 'fetch_failed') { error.value = ''; errorCode.value = '' }
-})
-watch([() => activeRun.value?.id, () => activeRun.value?.status], async () => {
-  await nextTick()
-  bodyRef.value?.scrollTo({ top: 0 })
-})
-watch(releaseNotesOptionsSignature, (signature) => {
-  if (!createTag.value) return
-  if (releaseNotesGeneratedFor.value && signature === releaseNotesGeneratedFor.value) releaseNotesStale.value = false
-  else {
-    releaseNotesStale.value = !!releaseNotesGeneratedFor.value
-    if (!releaseNotesDirty.value) scheduleReleaseNotesDraft()
-  }
-})
-watch(plannedTagNames, (tags) => {
-  if (profileReady.value && createTag.value && versionMode.value === 'auto' && tags.length) {
-    syncVersionInputs()
-    setDefaultCommitMessage()
-  }
-})
-onMounted(() => {
-  disposed = false
-  void load()
-})
-onBeforeUnmount(() => {
-  candidateAbort?.abort()
-  disposed = true
-  if(checkingCandidate.value)void cancelCandidate()
-  if(candidatePoll)clearTimeout(candidatePoll)
-  if (activeRun.value?.status === 'succeeded') rememberReleaseSession({ appId: props.app.id })
-  if (pollTimer) clearTimeout(pollTimer)
-  if (preferenceTimer) {
-    clearTimeout(preferenceTimer)
-    saveRememberedPreferences()
-  }
-  if (releaseNotesTimer) clearTimeout(releaseNotesTimer)
-  releaseNotesRequest += 1
-})
+function closePanel() { if (localBuildVisible.value) emit('close'); else closeModal() }
 </script>
 
 <template>
-  <div class="overlay" @click.self="closeModal">
+  <div class="overlay" @click.self="closePanel">
     <div class="modal">
       <header class="m-head">
         <h2>{{ tr("发布") }} {{ app.name }}</h2>
-        <button class="ghost icon" :disabled="publishing || preferenceStatus === 'saving'" :aria-label="tr('关闭')" @click="closeModal">✕</button>
+        <button class="ghost icon" :disabled="!localBuildVisible && (publishing || preferenceStatus === 'saving')" :aria-label="tr('关闭')" @click="closePanel">✕</button>
       </header>
 
-      <nav v-if="!activeRun" class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onReleaseTabKeydown">
-        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="releaseTab === 'publish'" :tabindex="releaseTab === 'publish' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchReleaseTab('publish')">{{ tr('发布') }}</button>
-        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="releaseTab === 'settings'" :tabindex="releaseTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
+      <nav class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onPanelTabKeydown">
+        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="panelTab === 'publish'" :tabindex="panelTab === 'publish' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchPanelTab('publish')">{{ tr('发布') }}</button>
+        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="panelTab === 'settings'" :tabindex="panelTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting || !!activeRun" @click="switchPanelTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
+        <button id="release-tab-local-build" type="button" role="tab" aria-controls="release-panel-local-build" :aria-selected="panelTab === 'local-build'" :tabindex="panelTab === 'local-build' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchPanelTab('local-build')">{{ tr('本地构建') }}</button>
       </nav>
 
-      <div ref="bodyRef" class="m-body" :inert="publishing || autoSubmitting">
+      <div ref="bodyRef" class="m-body" :inert="!localBuildVisible && (publishing || autoSubmitting)">
+        <LocalBuildPanel v-if="localBuildVisible" :app-id="app.id" :app-name="app.name" @settings="switchPanelTab('settings', true)" />
+        <template v-else>
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
         <div v-if="error" class="alert error" role="alert">{{ error }}</div>
         <div v-if="preferenceStatus === 'error'" class="alert error" role="alert">{{ tr('设置保存失败，请重试。') }} {{ preferenceError }} <button type="button" @click="saveRememberedPreferences">{{ tr('重试保存') }}</button></div>
@@ -1642,11 +125,12 @@ onBeforeUnmount(() => {
         <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
 
         <template v-if="activeRun">
-          <section class="progress-block">
+          <section id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="progress-block" tabindex="0">
             <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff && !cloudBuildSettled, failed: cloudBuild?.state === 'failed' }" role="status" aria-live="polite">
               <span class="completion-icon" aria-hidden="true">{{ cloudBuild?.state === 'failed' ? '!' : automationHandedOff && !cloudBuildSettled ? '↑' : '✓' }}</span>
               <h3>{{ completionTitle }}</h3>
               <p>{{ completionDescription }}</p>
+              <CopyErrorButton v-if="cloudBuild?.state === 'failed'" :text="cloudFailureText(cloudBuild)" />
               <template v-if="automationHandedOff">
                 <div class="completion-next"><strong>{{ cloudExecutionNotice?.title || tr("后续由 GitHub Actions 执行") }}</strong><span>{{ cloudExecutionNotice?.text }}</span><span v-if="!cloudBuildSettled" class="cloud-result-pending">{{ tr('可以关闭此窗口；应用运行期间会继续跟踪，失败时提醒你。') }}</span></div>
                 <button v-if="automationPageUrl" type="button" class="actions-link" :disabled="openingAutomation" :aria-busy="openingAutomation" @click="openAutomationPage">{{ openingAutomation ? tr('正在打开浏览器…') : tr("查看 GitHub Actions 进度") }} <span aria-hidden="true">↗</span></button>
@@ -1654,12 +138,15 @@ onBeforeUnmount(() => {
               </template>
             </section>
             <div v-else-if="activeRun.status !== 'failed' && cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
+            <ReleaseDeliveryStatus :run="activeRun" :deliveries="runDeliveries" @refresh="poll" />
             <div class="progress-title"><strong>{{ activeRun.createTag === false ? tr("代码更新") : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</strong><span v-if="activeRun.status !== 'succeeded'" class="status" :class="activeRun.status">{{ activeRunStatusLabel }}</span></div>
             <div v-if="activeRun.status !== 'succeeded'" class="current-stage">{{ activeStageLabel }}</div>
             <div v-if="runTargets.length" class="run-targets"><div v-for="target in runTargets" :key="target.targetId" class="run-target"><strong>{{ configuredTargets.find((item) => item.id === target.targetId)?.name || target.targetId }}</strong><span>{{ targetStageLabel[target.stage] || stageLabel[target.stage] || tr("等待执行") }}</span><em :class="target.status">{{ target.status === 'succeeded' ? tr("完成") : target.status === 'failed' ? tr("失败") : target.status === 'running' ? tr("执行中") : ['triggered', 'remote_pending', 'handed_off'].includes(target.status) ? tr("已交接") : tr("等待") }}</em></div></div>
             <details class="execution-details" :open="activeRun.status !== 'succeeded'"><summary>{{ tr("执行日志") }}</summary><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">{{ tr("等待发布日志…") }}</div></div></details>
-            <details v-if="runArtifacts.length" class="artifacts"><summary>{{ tr('已生成产物（{0}）', [runArtifacts.length]) }}</summary><div v-for="artifact in runArtifacts" :key="`${artifact.targetId}-${artifact.path}`" class="artifact-row"><code>{{ artifact.path }}</code><span>{{ Math.max(1, Math.round(artifact.sizeBytes / 1024)) }} KB</span><code>{{ artifact.sha256.slice(0, 12) }}</code></div></details>
+            <SavedReleaseArtifacts v-if="hasLocalSavedOutputs" :run-id="activeRun.id" @sealed="sealedArtifactsPresent = $event" />
+            <details v-if="runArtifacts.length && !sealedArtifactsPresent" class="artifacts"><summary>{{ tr('已生成产物（{0}）', [runArtifacts.length]) }}</summary><div v-for="artifact in runArtifacts" :key="`${artifact.targetId}-${artifact.path}`" class="artifact-row"><code>{{ artifact.path }}</code><span>{{ Math.max(1, Math.round(artifact.sizeBytes / 1024)) }} KB</span><code>{{ artifact.sha256.slice(0, 12) }}</code></div></details>
             <div v-if="runFailureSummary" class="alert error">{{ tr(runFailureSummary) }}</div>
+            <CopyErrorButton v-if="activeRun.status === 'failed'" :text="localFailureText(app.name, activeRun, runTargets, logs)" />
             <details v-if="runFailureDetails" class="execution-details"><summary>{{ tr('查看技术详情') }}</summary><pre class="log-box">{{ runFailureDetails }}</pre></details>
             <div v-if="retryable && !customRetryConfirmation" class="alert info" role="note">{{ retryGuidance }}</div>
             <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
@@ -1678,6 +165,7 @@ onBeforeUnmount(() => {
           <p v-if="releaseIntent==='save-progress' && pushRemote" class="section-help">{{tr('上传可能触发仓库已有 CI。')}}</p>
           <label v-if="releaseIntent==='save-progress'" class="full-label">{{tr('提交说明')}}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
           <div v-if="configFileDirty || configEditorOpen" class="alert warn settings-edit-hint">{{ tr('高级配置尚未保存，请在对应区域保存或取消修改。') }}<button type="button" @click="switchReleaseTab('settings', true)">{{ tr('前往设置') }}</button></div>
+          <ReleaseDeliveryChoice v-if="buildMode === 'local' && releaseIntent === 'formal'" :targets="chosenTargets" :disabled="checkingCandidate || publishing" @change="setDelivery" />
           <section v-if="blockingIssues.length" class="issues">
             <div v-for="issue in blockingIssues" :key="issue.code" class="alert" :class="issue.code === 'staged_changes' ? 'warn staged-issue' : 'error'">
               <template v-if="issue.code === 'staged_changes'">
@@ -1782,15 +270,15 @@ onBeforeUnmount(() => {
             <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
             <div class="choice-picker" role="radiogroup" :aria-label="tr('构建位置')">
               <label class="choice-option" :class="{ selected: buildMode === 'github' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'github'" :aria-label="tr('GitHub 云端构建')" @change="changeBuildMode('github')" /><span><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></span></label>
-              <label class="choice-option" :class="{ selected: buildMode === 'local' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'local'" :aria-label="tr('本地构建')" @change="changeBuildMode('local')" /><span><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，不上传或部署') }}</small></span></label>
+              <label class="choice-option" :class="{ selected: buildMode === 'local' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'local'" :aria-label="tr('本地构建')" @change="changeBuildMode('local')" /><span><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，发布目的地可独立选择') }}</small></span></label>
             </div>
-            <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地模式只执行检查、构建和打包，需要本机已安装项目依赖。') }}</p>
+            <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地执行检查、构建和打包；选择 GitHub Release 后自动交付已核验的产物。') }}</p>
           </section>
 
           <section v-if="releaseIntent==='formal'" class="block upload-settings">
             <h3>{{ tr('提交与上传') }}</h3>
             <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-              <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly)" @change="editedReleaseOptions.add('push')" />
+              <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly && !selectedDelivery)" @change="editedReleaseOptions.add('push')" />
               <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
             </label>
             <div class="button-row">
@@ -1843,7 +331,7 @@ onBeforeUnmount(() => {
                 <article v-for="target in releaseConfig.targets" :key="target.id" class="target-card" :class="{ disabled: !targetAvailable(target) || gitOnly, selected: !gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected, invalid: invalidChosenTargetIds.includes(target.id) }">
                   <header class="target-head"><label class="target-select"><input type="checkbox" :checked="!gitOnly && targetAvailable(target) && targetChoices[target.id]?.selected" :disabled="gitOnly || !targetAvailable(target)" @change="setTargetSelected(target.id, ($event.target as HTMLInputElement).checked)" /><span><strong>{{ target.name }}</strong><small>{{ target.kind }} · {{ versionGroupName(target) }}</small></span></label><span v-if="target.detected" class="detected-badge">{{ tr("自动识别") }}</span></header>
                   <div v-if="targetUnavailableReason(target)" class="unavailable">{{ targetUnavailableReason(target) }}</div>
-                  <div v-else class="phase-grid"><label v-for="phase in phaseOptions.filter(item => phaseAllowed(item.key))" :key="phase.key" class="phase-choice" :class="{ unavailable: !target.steps[phase.key], risky: phase.risky && targetChoices[target.id]?.[phase.key] }"><input type="checkbox" :checked="targetChoices[target.id]?.[phase.key]" :disabled="gitOnly || !targetChoices[target.id]?.selected || !target.steps[phase.key]" @change="setTargetPhase(target.id, phase.key, ($event.target as HTMLInputElement).checked)" /><span>{{ phase.label }}<small>{{ targetPhaseHint(target, phase) }}</small></span></label></div>
+                  <div v-else class="phase-grid"><label v-for="phase in phaseOptions.filter(item => phaseAllowed(item.key))" :key="phase.key" class="phase-choice" :class="{ unavailable: !target.steps[phase.key] && !(phase.key === 'publish' && target.delivery), risky: phase.risky && targetChoices[target.id]?.[phase.key] }"><input type="checkbox" :checked="targetChoices[target.id]?.[phase.key]" :disabled="gitOnly || !targetChoices[target.id]?.selected || (!target.steps[phase.key] && !(phase.key === 'publish' && target.delivery))" @change="setTargetPhase(target.id, phase.key, ($event.target as HTMLInputElement).checked)" /><span>{{ phase.label }}<small>{{ targetPhaseHint(target, phase) }}</small></span></label></div>
                   <div v-if="!gitOnly && invalidChosenTargetIds.includes(target.id)" class="target-error">{{ tr("请至少选择一个有命令的动作；也可以修改配置或选择“仅 Git”。") }}</div>
                   <div v-if="target.steps.check" class="target-check">{{ tr("发布前会先自动检查") }}</div>
                 </article>
@@ -1864,9 +352,10 @@ onBeforeUnmount(() => {
           </template>
           <ReleaseConfigFileEditor v-else :app-id="app.id" @saved="onConfigFileSaved" @editing="configFileOpen = $event" @dirty="configFileDirty = $event" />
         </section>
+        </template>
       </div>
 
-      <footer v-if="!activeRun && !loading && preflight && releaseTab === 'publish'" class="m-foot" :inert="publishing">
+      <footer v-if="!localBuildVisible && !activeRun && !loading && preflight && releaseTab === 'publish'" class="m-foot" :inert="publishing">
         <span v-if="releaseTab === 'publish' && releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
         <button :disabled="publishing || preferenceStatus === 'saving'" @click="checkingCandidate ? cancelCandidate() : closeModal()">{{checkingCandidate && checksEnabled?tr('取消检查'):tr('关闭')}}</button>
         <button v-if="targetSelectionMissing" type="button" class="primary" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button>
@@ -1886,153 +375,7 @@ onBeforeUnmount(() => {
       </section>
     </div>
   </div>
+
 </template>
 
-<style scoped>
-.summary-card > summary { cursor: pointer; color: var(--text-dim); font-size: 12px; font-weight: 600; }
-.summary-card[open] > summary { margin-bottom: 10px; }
-.summary-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
-.intent-choice{display:flex;gap:8px;margin-bottom:8px}.intent-choice button{flex:1;padding:10px;border:1px solid var(--border);background:var(--bg);font-size:13px}.intent-choice button.chosen{border-color:var(--accent);background:rgba(79,140,255,.1);color:var(--accent)}
-
-.target-selection-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.target-selection-hint > span { flex: 1 1 240px; }
-.platform-section:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.release-tabs { display: flex; flex-shrink: 0; gap: 6px; padding: 8px 20px 0; border-bottom: 1px solid var(--border); }
-.release-tabs [role="tab"] { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px 14px; border: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--text-dim); font-size: 14px; font-weight: 600; cursor: pointer; }
-.release-tabs [role="tab"]:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
-.release-tabs [aria-selected="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.release-tabs [aria-selected="true"]::after { content: ''; position: absolute; bottom: -1px; left: 16px; right: 16px; height: 3px; background: var(--accent); border-radius: 3px 3px 0 0; }
-.release-tabs button:focus-visible,.release-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.release-panel { display: flex; flex-direction: column; gap: 18px; min-width: 0; outline: none; }
-.release-mode-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-dim); font-size: 12px; }
-.release-mode-summary button { color: var(--accent); font-size: 12px; padding: 7px 12px; cursor: pointer; }
-.settings-intro h3 { font-size: 16px; margin: 0 0 6px; }.settings-intro p { font-size: 12px; color: var(--text-dim); margin: 0; line-height: 1.6; }
-.settings-panel > .block { padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg) 25%, transparent); }
-.settings-panel :deep(button:not(:disabled)) { cursor: pointer; }.settings-panel :deep(button:not(:disabled):hover) { border-color: var(--accent); }
-.settings-edit-hint { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
-.unsaved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
-.m-head,.m-foot { flex-shrink: 0; }.m-body { min-height: 0; }
-@media (max-width: 720px) { .release-tabs { padding-left: 14px; padding-right: 14px; }.settings-panel > .block { padding: 14px; } }
-.repo-tag-summary { min-width: 0; overflow-wrap: anywhere; }
-.alert.error { white-space: pre-line; overflow-wrap: anywhere; }
-.completion-banner.pending { border-color: color-mix(in srgb, var(--amber) 35%, transparent); background: color-mix(in srgb, var(--amber) 5%, var(--bg-elev)); }
-.completion-banner.pending .completion-icon { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
-.completion-banner.pending h3 { color: var(--text); }
-.completion-banner.pending .completion-next { border-color: color-mix(in srgb, var(--amber) 20%, transparent); }
-.completion-banner.failed { border-color: var(--red); background: color-mix(in srgb, var(--red) 7%, var(--bg-elev)); }
-.completion-banner.failed .completion-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
-.m-foot { flex-wrap: wrap; align-items: center; }
-.release-content-hint { margin-right: auto; flex: 1 1 180px; font-size: 12px; color: var(--text-dim); }
-.overlay { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.58); display: flex; align-items: center; justify-content: center; padding: 20px; }.modal { width: min(920px,100%); max-height: 94vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }.m-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border); }.m-head h2 { margin: 0; font-size: 17px; }.m-body { padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }.m-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }.state,.muted { color: var(--text-faint); font-size: 12px; }.alert { padding: 9px 11px; border-radius: 7px; font-size: 12px; line-height: 1.5; }.alert.error { color: var(--red); background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.3); }.alert.warn { color: var(--amber); background: rgba(251,191,36,.08); }.alert.info { color: var(--accent); background: rgba(79,140,255,.08); border: 1px solid rgba(79,140,255,.2); }
-.repo-glance { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 12px; border: 1px solid rgba(52,211,153,.22); border-radius: 9px; color: var(--text-dim); background: rgba(52,211,153,.05); font-size: 12px; }.repo-glance strong { color: var(--text); }.repo-glance-status { margin-left: auto; color: var(--green); }.ready-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }.repo-glance.checking { border-color: rgba(79,140,255,.3); background: rgba(79,140,255,.06); }.repo-glance.checking .ready-dot { background: var(--accent); animation: checking-pulse 1s ease-in-out infinite alternate; }.repo-glance.checking .repo-glance-status { color: var(--accent); }.repo-glance.problem { border-color: rgba(248,113,113,.25); background: rgba(248,113,113,.05); }.repo-glance.problem .ready-dot { background: var(--red); }.repo-glance.problem .repo-glance-status { color: var(--red); } @keyframes checking-pulse { to { opacity: .35; transform: scale(.75); } }
-.choice-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.choice-option { display: flex; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer; }
-.choice-option.selected { border-color: var(--accent); background: rgba(79,140,255,.12); }
-.choice-option:hover { border-color: var(--accent); }
-.choice-option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.choice-option input { margin: 0; flex-shrink: 0; accent-color: var(--accent); }
-.choice-option input:focus-visible { outline: none; box-shadow: none; }
-.choice-option > span { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.choice-option strong { font-size: 13px; color: var(--text); }
-.choice-option small { color: var(--text-dim); line-height: 1.5; }
-.version-mode-picker { margin: 14px 0; }
-.release-versions { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }
-.release-versions .tag-switch-row h3 { color: var(--text); font-size: 15px; margin: 0; }
-.release-version-list { display: grid; gap: 10px; }
-.staged-issue p { margin: 7px 0 12px; line-height: 1.5; }
-.staged-issue button { margin: 0; }
-@media (max-width: 600px) { .choice-picker { grid-template-columns: 1fr; } }
-.platform-section { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.platform-section h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.basic-section-head { align-items: center; }.platform-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-top: 12px; }.platform-card { position: relative; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; min-height: 76px; padding: 12px; overflow: hidden; text-align: left; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--bg); }.platform-card:not(:disabled):hover { border-color: rgba(79,140,255,.65); }.platform-card.selected { border-color: var(--accent); background: rgba(79,140,255,.1); box-shadow: inset 0 0 0 1px rgba(79,140,255,.16); }.platform-card.partial { border-color: var(--amber); border-style: dashed; }.platform-card.limited:not(.selected):not(.partial) { border-style: dashed; }.platform-card.unavailable { cursor: not-allowed; opacity: .62; }.platform-icon { font-size: 22px; line-height: 1; }.platform-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding-right: 14px; }.platform-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.platform-copy small { color: var(--text-faint); font-size: 10px; line-height: 1.35; }.chosen-mark { position: absolute; top: 8px; right: 9px; color: var(--accent); font-weight: 700; }.risk-badge { position: absolute; right: 8px; bottom: 6px; padding: 1px 5px; border-radius: 8px; color: var(--amber); background: rgba(251,191,36,.12); font-size: 9px; }.git-card .platform-icon { color: var(--accent); font-size: 26px; }
-.file-picker { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.file-picker h3 { margin: 0 0 4px; color: var(--text); font-size: 15px; }.file-picker-head { align-items: center; }.file-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--text-faint); font-size: 11px; }.file-actions button { padding: 5px 8px; }.file-warning { margin-bottom: 9px; }.file-list { max-height: 230px; overflow: auto; padding: 3px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }.file-footnote { margin-top: 8px; color: var(--text-faint); font-size: 10px; }
-.release-notes { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: rgba(15,17,21,.36); }.release-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }.release-notes h3 { margin: 0; color: var(--text); font-size: 15px; }.release-notes-head button { flex: 0 0 auto; padding: 6px 9px; }.release-notes textarea { width: 100%; min-height: 132px; resize: vertical; line-height: 1.55; }.release-notes-meta { display: flex; min-height: 17px; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; color: var(--text-faint); font-size: 10px; }.release-notes-alert { margin-top: 8px; }.release-notes-alert button { margin-left: 6px; padding: 3px 7px; }.automation-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 9px; }.automation-result a { flex: 0 0 auto; color: var(--accent); }
-.unpushed-files { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }.unpushed-files summary { cursor: pointer; color: var(--accent); font-size: 12px; }.unpushed-note { margin: 7px 0; color: var(--text-faint); font-size: 11px; }.committed-list { max-height: 180px; }.committed-row { grid-template-columns: auto 54px minmax(0,1fr); }.committed-mark { color: var(--green); }
-.version-quick { padding: 14px; border: 1px solid var(--border); border-radius: 10px; }.block.version-quick h3 { margin: 0; color: var(--text); font-size: 15px; text-transform: none; letter-spacing: normal; }.version-list { display: flex; flex-direction: column; gap: 7px; }.version-row { display: grid; grid-template-columns: minmax(120px,1fr) minmax(100px,150px) minmax(150px,1fr); align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px; background: var(--bg); font-size: 12px; }.version-name { display: flex; min-width: 0; flex-direction: column; gap: 2px; }.version-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }.version-name small { color: var(--text-faint); }.version-next { color: var(--text-faint); }.version-next strong { margin-left: 5px; color: var(--accent); font-size: 14px; }.version-row code { overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); white-space: nowrap; }.advanced-settings,.history-panel { border: 1px solid var(--border); border-radius: 10px; background: rgba(15,17,21,.26); }.advanced-settings > summary,.history-panel > summary { display: flex; align-items: center; gap: 9px; padding: 11px 13px; cursor: pointer; color: var(--text-dim); font-size: 12px; }.advanced-settings > summary small { color: var(--text-faint); font-size: 10px; }.advanced-settings[open] > summary,.history-panel[open] > summary { border-bottom: 1px solid var(--border); }.advanced-body { display: flex; flex-direction: column; gap: 16px; padding: 13px; }.history-panel { padding-bottom: 5px; }.history-panel .history-row { margin: 0 12px; }.file-count { font-weight: 600; color: var(--text)!important; }
-.repo-card { padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); }.kv { display: grid; grid-template-columns: 80px minmax(0,1fr); gap: 8px; padding: 3px 0; font-size: 12px; }.kv span { color: var(--text-faint); }.kv code { overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }.block h3,.config-section h3,.summary-card h3 { margin: 0 0 10px; font-size: 12px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; }.section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.section-head h3 { margin-bottom: 4px; }.section-help { color: var(--text-faint); font-size: 12px; }.toolbar,.editor-actions { display: flex; gap: 8px; flex-wrap: wrap; }.config-section { padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: rgba(15,17,21,.45); }.config-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; color: var(--text-faint); font-size: 11px; }.config-meta code { margin-left: auto; }.wizard-banner { display: flex; flex-direction: column; gap: 3px; padding: 11px; margin: 12px 0; border-radius: 8px; color: var(--text-dim); background: rgba(79,140,255,.08); }.wizard-banner span { font-size: 12px; }
-.editor-subhead { display: flex; justify-content: space-between; align-items: center; margin: 14px 0 8px; color: var(--text); font-size: 13px; }.edit-card { padding: 11px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }.target-edit-card { border-left: 3px solid var(--accent); }.target-edit-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }.form-grid.three { grid-template-columns: repeat(3,minmax(0,1fr)); }.form-grid label,.full-label { display: flex; flex-direction: column; gap: 5px; color: var(--text-dim); font-size: 12px; }.full-label { margin: 10px 0; }.form-grid input,.form-grid select,.full-label input,.full-label textarea { width: 100%; }.field-action { display: flex; align-items: flex-end; }.plain-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 12px; }.os-row { display: flex; gap: 13px; align-items: center; margin-top: 11px; color: var(--text-faint); font-size: 12px; }.advanced { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 9px; }.advanced.compact { margin-bottom: 10px; }.advanced summary { cursor: pointer; color: var(--text-faint); font-size: 12px; }.version-file-row { display: grid; grid-template-columns: minmax(0,2fr) 100px minmax(0,1fr) auto; gap: 7px; margin: 8px 0; }.danger-text { color: var(--red); }.editor-actions { justify-content: flex-end; margin-top: 14px; }
-.empty-config { padding: 18px; text-align: center; color: var(--text-faint); border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; }.setup-callout { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; margin: 10px 0; border-radius: 8px; background: rgba(251,191,36,.08); color: var(--amber); font-size: 12px; }.git-only-choice { display: flex; align-items: center; gap: 7px; margin: 10px 0; color: var(--text-dim); font-size: 12px; }.target-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 10px; }.target-card { padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); }.target-card.selected { border-color: rgba(79,140,255,.65); }.target-card.invalid { border-color: rgba(248,113,113,.7); }.target-card.disabled { opacity: .65; }.target-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; min-width: 0; }.target-select { display: flex; gap: 8px; min-width: 0; }.target-select span { display: flex; flex-direction: column; min-width: 0; }.target-select strong { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.target-select small { margin-top: 2px; color: var(--text-faint); font-size: 10px; }.detected-badge { flex-shrink: 0; color: var(--accent); font-size: 10px; }.unavailable { margin-top: 9px; color: var(--amber); font-size: 11px; }.phase-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; margin-top: 10px; }.phase-choice { display: flex; gap: 6px; align-items: flex-start; padding: 6px; border-radius: 6px; background: var(--bg-elev); }.phase-choice span { display: flex; flex-direction: column; color: var(--text-dim); font-size: 11px; }.phase-choice small { color: var(--text-faint); font-size: 9px; }.phase-choice.unavailable { opacity: .45; }.phase-choice.risky { background: rgba(251,191,36,.1); }.target-error { margin-top: 7px; color: var(--red); font-size: 10px; }.target-check { margin-top: 7px; color: var(--green); font-size: 10px; }
-.tag-switch-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }.tag-switch-row h3 { margin-bottom: 4px; }.tag-switch-row p { margin: 0; color: var(--text-faint); font-size: 12px; }.switch { position: relative; display: inline-flex; flex-shrink: 0; }.switch input { position: absolute; opacity: 0; }.switch span { width: 42px; height: 23px; border-radius: 20px; background: var(--border); transition: .15s; }.switch span::after { content: ''; display: block; width: 17px; height: 17px; margin: 3px; border-radius: 50%; background: #fff; transition: .15s; }.switch input:checked + span { background: var(--accent); }.switch input:checked + span::after { transform: translateX(19px); }.strategy-line,.current-versions { color: var(--text-dim); font-size: 12px; margin: 10px 0 9px; }.current-versions { display: flex; flex-wrap: wrap; gap: 7px; }.current-versions code { padding: 2px 5px; background: var(--bg); border-radius: 4px; }.mode-picker { display: flex; gap: 8px; margin: 10px 0; }.mode-picker label { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-dim); font-size: 12px; }.mode-picker label.active { border-color: var(--accent); background: rgba(79,140,255,.08); }.mode-picker small { color: var(--text-faint); }.no-tag-note { margin-top: 10px; padding: 10px; border-radius: 8px; color: var(--text-dim); background: var(--bg); font-size: 12px; }.invalid { border-color: var(--red)!important; }.field-error { margin-top: 5px; color: var(--red); font-size: 11px; }
-.run-targets { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; }.run-target { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: 8px; padding: 7px 9px; border-radius: 6px; background: var(--bg); font-size: 11px; }.run-target span { color: var(--text-faint); }.run-target em { font-style: normal; color: var(--text-dim); }.run-target em.succeeded { color: var(--green); }.run-target em.triggered,.run-target em.remote_pending,.run-target em.handed_off { color: var(--accent); }.run-target em.failed { color: var(--red); }.artifacts { margin: 9px 0; color: var(--text-dim); font-size: 11px; }.artifact-row { display: grid; grid-template-columns: minmax(0,1fr) auto 90px; gap: 8px; padding: 5px 0; }.artifact-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.action-confirm-overlay { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.68); }.action-confirm { width: min(430px,100%); padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elev); box-shadow: var(--shadow); }.action-confirm h3 { margin: 0 0 9px; color: var(--text); font-size: 16px; }.action-confirm p { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.6; }.action-confirm-buttons { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
-.publish-control { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; max-width: 100%; }.push-choice { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12px; cursor: pointer; }.push-choice input { margin: 0; accent-color: var(--accent); }.push-choice small { display: block; margin-top: 3px; color: var(--text-faint); font-size: 10px; line-height: 1.4; }.push-choice.required { color: var(--amber); }.publish-submit { min-height: 36px; border-radius: 7px; }
-.modal { position: relative; }.submitting-lock { position: absolute; inset: 0; z-index: 115; display: flex; align-items: center; justify-content: center; gap: 10px; border-radius: inherit; color: var(--text); background: rgba(11,14,20,.78); backdrop-filter: blur(2px); }.submitting-spinner { width: 18px; height: 18px; border: 2px solid rgba(79,140,255,.25); border-top-color: var(--accent); border-radius: 50%; animation: submitting-spin .7s linear infinite; } @keyframes submitting-spin { to { transform: rotate(360deg); } }
-.file-row { display: grid; grid-template-columns: auto 54px minmax(0,1fr); align-items: center; gap: 8px; min-height: 32px; color: var(--text-dim); font-size: 12px; }.file-row + .file-row { border-top: 1px solid rgba(148,163,184,.08); }.file-row.unselected { opacity: .62; }.file-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.file-status { color: var(--amber); font-size: 11px; }.file-status.added { color: var(--accent); }.summary-card { padding: 13px; border: 1px solid rgba(79,140,255,.35); border-radius: 10px; background: rgba(79,140,255,.06); }.summary-card p { margin: 0 0 6px; color: var(--text-dim); font-size: 12px; }.summary-card ul { margin: 0 0 10px; padding-left: 20px; color: var(--text); font-size: 12px; line-height: 1.8; }.history-row { display: grid; grid-template-columns: 100px 1fr auto; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }.history-row span { color: var(--text-faint); }.history-row .succeeded,.status.succeeded { color: var(--green); }.history-row .failed,.status.failed { color: var(--red); }.progress-title { display: flex; align-items: center; justify-content: space-between; }.status { font-size: 12px; }.current-stage { margin: 8px 0; color: var(--accent); font-size: 13px; }.log-box { min-height: 180px; max-height: 320px; overflow: auto; padding: 10px; border-radius: 8px; background: #070b11; color: #cbd5e1; font: 12px/1.55 Consolas,monospace; white-space: pre-wrap; }.log-line.error { color: #fca5a5; }.log-line.stderr { color: #fbbf24; }.button-row { display: flex; gap: 8px; margin-top: 12px; }
-@media (max-width: 720px) { .overlay { padding: 8px; }.modal { max-height: 97vh; }.m-head > div { min-width: 0; }.m-head h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.m-body { padding: 14px; }.repo-glance { flex-wrap: wrap; }.repo-glance-status { margin-left: 0; width: 100%; padding-left: 18px; }.section-head,.setup-callout { flex-direction: column; align-items: stretch; }.platform-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.form-grid,.form-grid.three,.target-list { grid-template-columns: 1fr; }.version-row { grid-template-columns: minmax(0,1fr) minmax(100px,140px); }.version-row code { grid-column: 1 / -1; }.version-file-row { grid-template-columns: 1fr; }.file-actions { align-items: stretch; }.file-row { grid-template-columns: auto 48px minmax(0,1fr); }.os-row,.mode-picker { flex-wrap: wrap; }.mode-picker label { flex: 1 1 160px; }.run-target { grid-template-columns: minmax(0,1fr) auto; }.run-target span { grid-column: 1 / -1; grid-row: 2; }.artifact-row { grid-template-columns: minmax(0,1fr) auto; }.artifact-row code:last-child { grid-column: 1 / -1; }.release-notes-head,.release-notes-meta,.automation-result { align-items: flex-start; flex-direction: column; }.automation-result a { align-self: flex-start; } }
-@media (max-width: 440px) { .overlay { padding: 0; }.modal { width: 100%; max-height: 100vh; border-radius: 0; }.m-head,.m-foot { padding-left: 14px; padding-right: 14px; }.platform-grid { grid-template-columns: 1fr; }.platform-card { min-height: 68px; }.m-foot > button { flex: 0 0 auto; }.publish-control { flex: 1 1 100%; min-width: 0; justify-content: space-between; }.publish-submit { flex: 1; min-width: 0; }.history-row { grid-template-columns: 85px minmax(0,1fr) auto; } }
-.completion-banner { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 24px; padding: 30px 24px; border: 1px solid rgba(52,211,153,.5); border-radius: 14px; background: linear-gradient(145deg,rgba(52,211,153,.13),rgba(52,211,153,.035)); text-align: center; }
-.completion-icon { display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(52,211,153,.16); color: var(--green); font-size: 36px; font-weight: 700; line-height: 1; }
-.completion-banner h3 { margin: 0; color: var(--green); font-size: 28px; line-height: 1.3; }
-.completion-banner p { margin: 0; color: var(--text); font-size: 15px; }
-.completion-next { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-top: 6px; padding-top: 18px; border-top: 1px solid rgba(52,211,153,.2); color: var(--text-dim); font-size: 13px; line-height: 1.6; }
-.completion-next strong { color: var(--text); font-size: 16px; }
-.completion-next .cloud-result-pending { color: var(--text-dim); font-size: 12px; }
-.actions-link { display: inline-flex; align-items: center; justify-content: center; gap: 10px; margin-top: 4px; padding: 11px 18px; border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; font-size: 14px; font-weight: 600; }
-.actions-link:hover { background: var(--accent-hover); }
-.actions-link:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
-.cloud-execution-notice { padding: 15px 16px; margin-bottom: 16px; border: 1px solid rgba(79,140,255,.4); border-left: 4px solid var(--accent); border-radius: 8px; background: rgba(79,140,255,.1); }
-.cloud-execution-notice strong { display: block; color: var(--text); font-size: 15px; }
-.cloud-execution-notice p { margin: 7px 0 0; color: var(--text-dim); font-size: 13px; line-height: 1.65; }
-.execution-details { margin: 12px 0; }
-.history-row { width: 100%; text-align: left; background: transparent; border-radius: 0; cursor: pointer; }
-.history-row:hover { background: rgba(79,140,255,.08); }
-.execution-details > summary { padding: 7px 0; cursor: pointer; color: var(--text-dim); font-size: 12px; }
-.submitting-message { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; max-width: 480px; padding: 24px; text-align: center; }
-.submitting-message p { flex-basis: 100%; margin: 0; font-size: 14px; line-height: 1.7; color: var(--text-dim); }
-.progress-title { gap: 12px; }
-.progress-title > strong { min-width: 0; overflow-wrap: anywhere; }
-.progress-title > .status { flex-shrink: 0; }
-@media (max-width: 720px) { .completion-banner { padding: 24px 16px; gap: 10px; }.completion-banner h3 { font-size: 25px; }.completion-icon { width: 52px; height: 52px; font-size: 30px; }.actions-link { width: 100%; }.cloud-execution-notice { padding: 12px; } }
-.platform-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; align-items: stretch; }
-.version-platform-card { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; min-height: 0; }
-.version-platform-card.unavailable { opacity: .8; }
-.platform-select { position: relative; display: flex; flex: 1; align-items: center; gap: 12px; width: 100%; min-height: 88px; padding: 16px; border: 0; border-radius: 0; text-align: left; background: transparent; color: var(--text); cursor: pointer; }
-.platform-select:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.platform-select:focus-visible { outline-offset: -3px; }.platform-select:disabled { cursor: not-allowed; }
-.platform-select .platform-copy strong { font-size: 17px; line-height: 1.35; white-space: normal; }
-.platform-select .platform-copy small { font-size: 11px; }.platform-select .platform-icon { font-size: 25px; }
-.platform-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; padding-right: 12px; }
-.platform-current-version { color: var(--text-dim); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-@media (max-width: 600px) { .platform-grid { grid-template-columns: 1fr; }.platform-select { min-height: 76px; padding: 14px; } }
-
-/* One reading order, compact controls; settings and result views stay unchanged. */
-#release-panel-publish { gap: 16px; }
-.publish-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
-.publish-toolbar .intent-choice { margin: 0; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
-.publish-toolbar .intent-choice button { flex: none; min-height: 32px; padding: 5px 13px; border-color: transparent; background: transparent; }
-.publish-toolbar .intent-choice button.chosen { background: var(--bg-elev); border-color: var(--border); color: var(--text); }
-.publish-toolbar .release-mode-summary { flex-wrap: wrap; gap: 6px; }
-.publish-toolbar .release-mode-summary button { background: transparent; border-color: transparent; padding: 6px; }
-#release-panel-publish > .platform-section,
-#release-panel-publish > .release-versions,
-#release-panel-publish > .release-notes { padding: 0; border: 0; border-radius: 0; background: transparent; }
-#release-panel-publish > .release-versions,
-#release-panel-publish > .release-notes { border-top: 1px solid var(--border); padding-top: 14px; }
-#release-panel-publish .basic-section-head { margin-bottom: 8px; }
-#release-panel-publish .platform-grid { grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap: 8px; margin-top: 0; }
-#release-panel-publish .platform-card { border-radius: 8px; margin-top: 0; }
-#release-panel-publish .platform-select { min-height: 64px; padding: 10px 12px; gap: 9px; }
-#release-panel-publish .platform-select .platform-copy strong { font-size: 14px; }
-#release-panel-publish .platform-icon { font-size: 20px; }
-#release-panel-publish .platform-current-version { font-size: 12px; font-weight: 400; }
-#release-panel-publish .platform-title { gap: 3px 8px; }
-#release-panel-publish .platform-copy { padding-right: 6px; }
-#release-panel-publish .tag-switch-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-#release-panel-publish .version-mode-picker { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; }
-#release-panel-publish .version-mode-picker .choice-option { min-height: 32px; padding: 4px 9px; gap: 6px; background: transparent; border-color: transparent; }
-#release-panel-publish .version-mode-picker .choice-option.selected { background: rgba(79,140,255,.1); }
-#release-panel-publish .version-mode-picker strong { font-size: 12px; font-weight: 500; }
-#release-panel-publish .release-version-list { gap: 6px; }
-#release-panel-publish .release-notes-head { flex-direction: row; align-items: center; margin-bottom: 8px; }
-#release-panel-publish .release-notes textarea { min-height: 112px; font-size: 13px; }
-#release-panel-publish > .file-picker { padding: 0; background: transparent; border: 0; }
-#release-panel-publish .unpushed-files { margin: 0; padding: 0; border: 0; }
-#release-panel-publish > .summary-card { padding: 10px 12px; background: transparent; border-color: var(--border); }
-@media (max-width: 600px) {
-  #release-panel-publish .platform-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .publish-toolbar { align-items: stretch; }
-  .publish-toolbar .release-mode-summary { flex: 1 1 100%; }
-}
-@media (max-width: 460px) { #release-panel-publish .platform-grid { grid-template-columns: 1fr; } }
-@media (pointer: coarse) {
-  .publish-toolbar .intent-choice button, #release-panel-publish .choice-option { min-height: 44px; }
-}
-</style>
+<style scoped src="./release/release-modal.css"></style>

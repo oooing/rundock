@@ -41,6 +41,8 @@ type Server struct {
 	cloudDone         chan struct{}
 	runtimeMonitor    *runtimeMonitor
 	runtimeDone       chan struct{}
+	portPlans         map[string]portPlan // Guarded by startupMu; short-lived, single-use.
+	portBackendPort   int                 // Actual bound HTTP port; Host headers never grant origin authority.
 }
 
 // New 组装 server。Launcher 由外部创建后注入（依赖 store/hub/registry）。
@@ -73,6 +75,9 @@ func New(s *store.Store, hub *logbus.Hub, reg *adapter.Registry) *Server {
 	l.Diagnostics = diag
 	pub := publisher.New(s)
 	pub.SetDiagnostics(diag)
+	if err := pub.RecoverReleases(); err != nil {
+		diag.Record(diagnostics.Event{Kind: "error", Severity: "error", Source: "release", Operation: "release.recovery", Status: "failed", Message: "发布任务恢复失败"})
+	}
 	if hub != nil {
 		pub.OnCloudBuildChange = hub.BroadcastCloudBuild
 	}
@@ -91,6 +96,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/api/apps/reorder", s.handleAppsReorder)
 	mux.HandleFunc("/api/apps/", s.handleAppReleasePrep) // /api/apps/{id}...
 	mux.HandleFunc("/api/releases/", s.handleReleaseDetail)
+	mux.HandleFunc("/api/local-builds/", s.handleLocalBuildDetail)
 	mux.HandleFunc("/api/cloud-builds", s.handleCloudBuilds)
 	mux.HandleFunc("/api/groups", s.handleGroups)
 	mux.HandleFunc("/api/groups/", s.handleGroupDetail)
@@ -109,6 +115,7 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 		return 0, err
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
+	s.portBackendPort = port
 	s.httpSrv = &http.Server{Handler: s.Router()}
 	cloudCtx, cloudCancel := context.WithCancel(context.Background())
 	s.cloudCancel = cloudCancel

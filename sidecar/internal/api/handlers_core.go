@@ -180,8 +180,14 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleReleaseConfigFile(w, r, id)
 	case "releases":
 		s.handleAppReleases(w, r, id)
+	case "local-builds":
+		s.handleAppLocalBuilds(w, r, id)
 	case "runtime-check":
 		s.handleRuntimeCheck(w, r, id)
+	case "port-resolution":
+		s.handlePortResolution(w, r, id)
+	case "resolve-ports":
+		s.handleResolvePorts(w, r, id)
 	default:
 		// services/{sid}/role 与 services/{sid}/reidentify:多段子路径
 		if sid, sub := pathTail("services/", rest); sid != "" {
@@ -210,6 +216,11 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request, id string
 		writeJSON(w, http.StatusOK, appView(a, s))
 
 	case http.MethodPatch:
+		if !s.startupMu.TryLock() {
+			writeError(w, 409, "已有启停操作进行中，请稍后重试")
+			return
+		}
+		defer s.startupMu.Unlock()
 		var body updateAppBody
 		if err := readJSON(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
@@ -259,6 +270,11 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request, id string
 		writeJSON(w, http.StatusOK, appView(a, s))
 
 	case http.MethodDelete:
+		if !s.startupMu.TryLock() {
+			writeError(w, 409, "已有启停操作进行中，请稍后重试")
+			return
+		}
+		defer s.startupMu.Unlock()
 		// 运行中先停止
 		if s.Manager.Registry.IsRunning(id) {
 			_ = s.Launcher.Stop(id)

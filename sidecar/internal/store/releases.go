@@ -33,6 +33,7 @@ type ReleaseVersion struct {
 }
 
 type ReleaseRun struct {
+	Intent            string                   `json:"intent,omitempty"`
 	ID                string                   `json:"id"`
 	AppID             string                   `json:"appId"`
 	RepoRoot          string                   `json:"repoRoot"`
@@ -154,7 +155,8 @@ func (s *Store) ListReleaseRuns(appID string, limit int) ([]*ReleaseRun, error) 
 	}
 	rows, err := s.db.Query(`SELECT id,app_id,repo_root,branch,remote_name,target_version,tag_name,create_tag,selected_targets_json,execution_plan_json,
 		status,stage,commit_sha,status_fingerprint,error_code,error_message,created_at,finished_at
-		FROM release_runs WHERE app_id=? ORDER BY created_at DESC,id DESC LIMIT ?`, appID, limit)
+		FROM release_runs WHERE app_id=? AND COALESCE(json_extract(execution_plan_json,'$.intent'),'')<>'build-only'
+		ORDER BY created_at DESC,id DESC LIMIT ?`, appID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -198,10 +200,12 @@ func scanReleaseRun(sc scanner) (*ReleaseRun, error) {
 	var planMetadata struct {
 		ReleaseVersions []ReleaseVersion `json:"releaseVersions"`
 		PushRemote      *bool            `json:"pushRemote"`
+		Intent          string           `json:"intent"`
 	}
 	r.PushRemote = true
 	if json.Unmarshal(r.ExecutionPlan, &planMetadata) == nil {
 		r.Versions = planMetadata.ReleaseVersions
+		r.Intent = planMetadata.Intent
 		if planMetadata.PushRemote != nil {
 			r.PushRemote = *planMetadata.PushRemote
 		}

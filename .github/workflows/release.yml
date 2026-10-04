@@ -1,11 +1,21 @@
 name: RunDock release
+run-name: ${{ inputs.release_run_id && format('rundock:{0}:{1}', inputs.release_run_id, inputs.target_id) || 'RunDock manual validation' }}
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: Frozen release tag; empty runs source validation only
+        type: string
+      release_commit:
+        description: Frozen commit SHA
+        type: string
+      release_run_id:
+        description: RunDock operation ID
+        type: string
+      target_id:
+        description: RunDock target ID
+        type: string
       source_only:
         description: 'Dry-run only: validate source without building installers'
         required: true
@@ -53,10 +63,15 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           DRY_RUN_SOURCE_ONLY: ${{ inputs.source_only }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          TARGET_ID: ${{ inputs.target_id }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:EVENT_NAME -eq 'push') {
-            $tagName = $env:REF_NAME
+          if ($env:RELEASE_TAG) {
+            $tagName = $env:RELEASE_TAG
+            if ($env:REF_NAME -cne $tagName -or $env:RELEASE_COMMIT -notmatch '^[a-f0-9]{40}$' -or $env:RELEASE_RUN_ID -notmatch '^[A-Za-z0-9_.-]+$' -or $env:TARGET_ID -cne 'windows') { throw 'Invalid RunDock dispatch identity.' }
             # checkout with fetch-depth: 0 already fetched all branches and tags.
             # Do not fetch again: credentials are deliberately not persisted.
             git show-ref --verify --quiet refs/remotes/origin/master
@@ -64,7 +79,7 @@ jobs:
             $tagCommit = (git rev-list -n 1 "refs/tags/$tagName").Trim()
             if (-not $tagCommit) { throw "Unable to resolve tag $tagName." }
             $checkedOutCommit = (git rev-parse HEAD).Trim()
-            if ($LASTEXITCODE -ne 0 -or $checkedOutCommit -ne $tagCommit) {
+            if ($LASTEXITCODE -ne 0 -or $checkedOutCommit -ne $tagCommit -or $tagCommit -cne $env:RELEASE_COMMIT) {
               throw "Checked-out commit does not match tag $tagName."
             }
             git merge-base --is-ancestor $tagCommit refs/remotes/origin/master
@@ -78,6 +93,9 @@ jobs:
           }
 
           $plan = Get-Content release-plan/release-plan.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -and (@($plan.targetIds).Count -ne 1 -or $plan.targetIds[0] -cne $env:TARGET_ID)) {
+            throw 'The frozen plan does not authorize this cloud target.'
+          }
           @(
             "### Release plan"
             "- Tag: ``$($plan.tagName)``"
@@ -185,7 +203,7 @@ jobs:
       - build_windows
     if: >-
       always() &&
-      github.event_name == 'push' &&
+      inputs.release_tag != '' &&
       needs.prepare.result == 'success' &&
       (needs.build_windows.result == 'success' || needs.build_windows.result == 'skipped') &&
       needs.prepare.outputs.publishes_release == 'true'

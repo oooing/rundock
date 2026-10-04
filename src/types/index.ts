@@ -1,3 +1,6 @@
+import type { ReleaseTargetRun, ReleaseArtifact, ReleaseAutomationStatus, ReleaseDelivery } from './releaseExecution'
+export type { PortResolution, PortConflict, PortResolutionState } from './portResolution'
+
 // 类型定义，与 Go sidecar 的 JSON tag 对齐。
 
 /** App 状态机 */
@@ -71,9 +74,10 @@ export interface AppView {
   lastUrl: string
   status: AppStatus
   runtimeCheck?: {
-    state: 'clear' | 'checking' | 'unknown' | 'running' | 'conflict'
+    state: 'clear' | 'checking' | 'unknown' | 'running' | 'conflict' | 'reserved'
     message?: string
     conflicts?: { port: number; pid: number; name: string }[]
+    reservedPorts?: number[]
   }
   /** 仅用于前端交互：重启请求及启动恢复期间保持为 true */
   restarting?: boolean
@@ -257,6 +261,10 @@ export interface ReleaseTargetSteps {
 
 /** 发布目标并不限定平台；kind 可由项目使用任意标识。 */
 export interface ReleaseTarget {
+	 delivery?: { provider: 'github'; repository: string; account: string; prerelease?: boolean; makeLatest?: boolean; workflowPolicy: 'dispatch-only'; sync?: { url: string; jsonPointer: string } }
+	 timeouts?: Partial<Record<'check' | 'build' | 'package' | 'publish' | 'deploy', number>>
+	 artifactRules?: Array<{ pattern: string; min: number; max: number }>
+	 verification?: Array<{ name: string; command: string; timeoutSeconds?: number }>
   id: string
   name: string
   kind: string
@@ -272,6 +280,7 @@ export interface ReleaseTarget {
 
 /** Tag 推送后由外部平台接管的自动发布流程。 */
 export interface ReleaseAutomation {
+	account?: string
   provider: string
   workflow: string
   trigger: string
@@ -401,45 +410,8 @@ export interface ReleaseLog {
   text: string
 }
 
-export interface ReleaseTargetRun {
-  releaseRunId: string
-  targetId: string
-  build: boolean
-  package: boolean
-  publish: boolean
-  deploy: boolean
-  checkDone: boolean
-  buildDone: boolean
-  packageDone: boolean
-  publishDone: boolean
-  deployDone: boolean
-  status: 'waiting' | 'queued' | 'running' | 'triggered' | 'remote_pending' | 'handed_off' | 'succeeded' | 'failed'
-  stage: string
-  errorCode: string
-  errorMessage: string
-  startedAt: string | null
-  finishedAt: string | null
-}
-
-export interface ReleaseArtifact {
-  id: number
-  releaseRunId: string
-  targetId: string
-  path: string
-  sizeBytes: number
-  sha256: string
-  createdAt: string
-}
-
-export interface ReleaseAutomationStatus {
-  provider: string
-  workflow: string
-  url: string
-  state: string
-  message: string
-}
-
 export interface ReleaseRunView {
+	 deliveries?: ReleaseDelivery[]
   cloudBuild?: CloudBuildStatus
   /** 根据冻结计划及已完成步骤判断是否会重复执行自定义外部命令。 */
   retryConfirmationRequired?: boolean
@@ -449,18 +421,6 @@ export interface ReleaseRunView {
   artifacts: ReleaseArtifact[]
   logs: ReleaseLog[]
   automation?: ReleaseAutomationStatus
-}
-
-export interface CloudBuildStatus {
-  releaseRunId: string
-  appId: string
-  appName: string
-  version: string
-  state: 'pending' | 'running' | 'failed' | 'succeeded' | 'superseded' | 'unavailable' | 'not_started'
-  summary: string
-  url: string
-  alertKey: string
-  checkedAt: string
 }
 
 export interface CreateReleaseBody {
@@ -492,6 +452,7 @@ export interface ReleaseFileClassification {
   selectedDefault: boolean; reasons: string[]; sources: string[]; ruleIds?: string[]; group: string
   contentFingerprint: string; baselineKept: boolean
 }
+
 export interface ReleaseFilePreview {
   path: string
   kind: 'text' | 'image' | 'unsupported'
@@ -521,4 +482,16 @@ export interface ExportSnapshot {
   groups: Group[]
   settings: Record<string, string>
   releaseProfiles?: ReleaseProfile[]
+}
+
+export interface CloudBuildStatus {
+  releaseRunId: string
+  appId: string
+  appName: string
+  version: string
+  state: 'pending' | 'running' | 'failed' | 'succeeded' | 'superseded' | 'unavailable' | 'not_started'
+  summary: string
+  url: string
+  alertKey: string
+  checkedAt: string
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/launcher-sidecar/internal/releaseconfig"
+	"github.com/launcher-sidecar/internal/store"
 )
 
 func TestRepositoryIdentityResolvesAliases(t *testing.T) {
@@ -23,7 +24,14 @@ func assertSameRepositoryLock(t *testing.T, repo, alias string) {
 	if !samePath(repo, alias) {
 		t.Fatalf("repository aliases differ: %q and %q", repo, alias)
 	}
-	svc := &Service{active: map[string]bool{}}
+	// Repository locks now coordinate through the persistent data directory.
+	db, err := store.Open(filepath.Join(t.TempDir(), "identity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := New(db)
+	defer svc.release(repo)
 	if !svc.reserve(repo) || svc.reserve(alias) {
 		t.Fatal("repository alias bypassed the release lock")
 	}

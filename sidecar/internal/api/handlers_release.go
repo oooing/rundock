@@ -146,7 +146,15 @@ func (s *Server) handleAppReleases(w http.ResponseWriter, r *http.Request, appID
 		if runs == nil {
 			runs = []*store.ReleaseRun{}
 		}
-		writeJSON(w, http.StatusOK, runs)
+		// Pure local builds have their own origin-restricted history endpoint.
+		// Never expose their source paths through this legacy public release list.
+		formalRuns := make([]*store.ReleaseRun, 0, len(runs))
+		for _, run := range runs {
+			if !publisher.IsLocalBuild(run) {
+				formalRuns = append(formalRuns, run)
+			}
+		}
+		writeJSON(w, http.StatusOK, formalRuns)
 	case http.MethodPost:
 		started := time.Now()
 		var body publisher.CreateRequest
@@ -263,6 +271,44 @@ func (s *Server) handleReleaseDetail(w http.ResponseWriter, r *http.Request) {
 	runID, rest := pathTail("/api/releases/", r.URL.Path)
 	if runID == "" {
 		writeError(w, http.StatusNotFound, "release id required")
+		return
+	}
+	if strings.HasPrefix(rest, "artifacts/") || rest == "open-artifact-dir" || rest == "saved-artifacts" {
+		s.handleReleaseSavedArtifact(w, r, runID, rest)
+		return
+	}
+	// Stable legacy release URLs remain valid, but do not inherit the old CORS
+	// authority for new local-only runs. Gate every suffix before GET, cancel,
+	// sync or retry can inspect or mutate a standalone build.
+	run, lookupErr := s.Store.GetReleaseRun(runID)
+	if lookupErr != nil {
+		writeError(w, http.StatusInternalServerError, "无法读取发布任务")
+		return
+	}
+	if publisher.IsLocalBuild(run) && !s.allowLocalOperation(w, r) {
+		return
+	}
+	if rest == "cancel" || rest == "sync" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var err error
+		if rest == "cancel" {
+			err = s.Publisher.Cancel(runID)
+		} else {
+			err = s.Publisher.RetrySync(r.Context(), runID)
+		}
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		view, err := s.Publisher.GetRun(runID, 0)
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
 	if rest == "retry" {

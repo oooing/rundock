@@ -143,7 +143,8 @@ if (-not $SkipTests) {
     Write-Host '[release] 前端类型检查'
     Invoke-Npm @('run', 'type-check')
     Write-Host '[release] Go 测试'
-    Invoke-Checked $go @('test', '-count=1', '-timeout=15m', './...') (Join-Path $codeDirectory 'sidecar')
+    # Retain scenario names and timings in CI output for regression timeout diagnosis.
+    Invoke-Checked $go @('test', '-v', '-count=1', '-timeout=15m', './...') (Join-Path $codeDirectory 'sidecar')
 }
 
 $temporarySidecar = Join-Path $temporaryRoot ("launcher-sidecar-{0}.exe" -f [Guid]::NewGuid().ToString('N'))
@@ -186,6 +187,17 @@ try {
         if ($null -ne $process -and -not $process.HasExited) {
             $process.Kill()
             $process.WaitForExit()
+        }
+    }
+
+    if (-not $SkipTests) {
+        Write-Host '[release] 旧库升级与真实本地构建端到端验收'
+        $previousSidecar = $env:RUNDOCK_SIDECAR
+        try {
+            $env:RUNDOCK_SIDECAR = $temporarySidecar
+            Invoke-Checked (Resolve-Tool 'node.exe') @('scripts/acceptance/schema-upgrade.mjs')
+        } finally {
+            $env:RUNDOCK_SIDECAR = $previousSidecar
         }
     }
 

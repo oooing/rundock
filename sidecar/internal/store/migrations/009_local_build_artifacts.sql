@@ -9,7 +9,5 @@ CREATE TABLE IF NOT EXISTS local_build_artifacts (
   FOREIGN KEY (release_run_id) REFERENCES release_runs(id) ON DELETE CASCADE
 );
 
--- A lost response must not execute the same local build twice, including after restart.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_local_build_request
-  ON release_runs(app_id,json_extract(execution_plan_json,'$.localBuildRequestId'))
-  WHERE json_extract(execution_plan_json,'$.intent')='build-only';
+-- The request uniqueness index is created by Store.ensureDerivedIndexes after
+-- ensureSchema has added execution_plan_json to legacy release_runs tables.

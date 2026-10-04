@@ -19,7 +19,7 @@ var migrationFS embed.FS
 
 // Store 包装 *sql.DB，提供类型化的数据访问。
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
 	dataDir string
 }
 
@@ -54,6 +54,10 @@ func Open(dbPath string) (*Store, error) {
 	if err := s.ensureSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ensure schema: %w", err)
+	}
+	if err := s.ensureDerivedIndexes(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ensure indexes: %w", err)
 	}
 	return s, nil
 }
@@ -173,6 +177,17 @@ func (s *Store) tableColumns(table string) (map[string]bool, error) {
 		cols[strings.ToUpper(name)] = true
 	}
 	return cols, rows.Err()
+}
+
+// Derived indexes may reference columns added by ensureSchema on an old table.
+// Keep them after column evolution: CREATE TABLE IF NOT EXISTS cannot upgrade
+// existing tables. See docs/adr/2026-10-04-schema-upgrade-order.md.
+func (s *Store) ensureDerivedIndexes() error {
+	// A lost response must not execute the same local build twice after restart.
+	_, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_local_build_request
+	 ON release_runs(app_id,json_extract(execution_plan_json,'$.localBuildRequestId'))
+	 WHERE json_extract(execution_plan_json,'$.intent')='build-only'`)
+	return err
 }
 
 // migrate 按文件名顺序执行 migrations/*.sql。

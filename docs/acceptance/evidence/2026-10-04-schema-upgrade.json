@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-04",
+  "scope": "local database upgrade fix and isolated candidate validation; no public release or installed-product change",
+  "baselineCommit": "b7d683826d7890d146cb406660d1bfb465af2f39",
+  "sourceIncludesUncommittedFix": true,
+  "schemaAcceptance": {
+    "node22": { "passed": true, "checks": 9, "report": "outputs/acceptance/schema-upgrade-1791086582038-c2d9c556/report.json" },
+    "node24": { "passed": true, "checks": 9, "report": "outputs/acceptance/schema-upgrade-1791086478094-702321ab/report.json" },
+    "binarySHA256": "b7b8e4a6bb66d141791aa8c57d26c386e2ed44d1b1c76dc0df5ead879f15a3be",
+    "oldBinaryReproducedFailure": true,
+    "oldBinaryReport": "outputs/acceptance/schema-upgrade-1791086337074-3a285346/report.json"
+  },
+  "existingRegression": {
+    "originalCloudFailureCasePassed": true,
+    "singleFullCommandPassed": false,
+    "reason": "publisher package cumulative runtime reached the existing 15 minute limit",
+    "publisherBeforeTimeout": { "passed": 150, "skipped": 6 },
+    "remainingCases": { "passed": 3, "seconds": 49.488 },
+    "otherGoPackagesPassed": true,
+    "timeoutLog": ".tmp/schema-ci-20261004-7f531c2a/outputs/build-retry.log",
+    "remainingLog": ".tmp/schema-ci-20261004-7f531c2a/outputs/publisher-tail.log"
+  },
+  "candidateBuild": {
+    "version": "2.0.22",
+    "frontendTypeCheckPassed": true,
+    "frontendProductionBuildPassed": true,
+    "lockedRustBuildPassed": true,
+    "releaseScriptTestsPassed": 22,
+    "syntheticInstallerHookChecksPassed": 3,
+    "installedIntoProduction": false,
+    "nsis": {
+      "path": ".tmp/schema-ci-20261004-7f531c2a/src-tauri/target/release/bundle/nsis/RunDock_2.0.22_x64-setup.exe",
+      "sha256": "d509ef1d6191e1f5c947fd309a58a920b41af0044714386662e74502753ac154"
+    },
+    "msi": {
+      "path": ".tmp/schema-ci-20261004-7f531c2a/src-tauri/target/release/bundle/msi/RunDock_2.0.22_x64_en-US.msi",
+      "sha256": "4fb7a670902a7657d1c06c66b62c12c3efb5eefde7f24a07edcbe984cecaa4f9"
+    }
+  },
+  "remoteMutated": false,
+  "cloudRerunValidated": false
+}

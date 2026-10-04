@@ -16,7 +16,7 @@ RunDock 自身生成 Windows EXE、MSI 和 SHA256SUMS，校验内嵌版本、x64
 1. 在受管理项目自己的仓库配置构建命令、产物和工作流，并将需要的工作流同步到其默认分支。
 2. 安装或运行包含本次发布器改动的 RunDock。旧版发布器不识别新的 dispatch 配置。
 3. 在本机 GitHub CLI 登录配置中的账号，凭证保存到系统密钥环。发布器检查当前账号、仓库身份及写入权限。
-4. 打开项目发布界面，选择本地构建目标，再选择“仅保存在本机”或“GitHub Release”。正式交付需要同步代码和 Tag。
+4. 打开项目发布界面，选择本地构建目标。“发布到哪里”默认“GitHub（自动识别）”：识别当前 GitHub 远端后同步代码和 Tag，并上传目标中已配置的安装包；可明确改为“仅保存在本机”。此配置自动按项目保存，不由构建位置决定。
 5. 查看自动建议的版本和本次冻结范围，确认发布。安装包全部验证通过后才进入草稿上传和公开阶段。
 
 本地修改不代表远端工作流已更新，也不代表安装版已替换。远端仍使用旧工作流时，
@@ -41,7 +41,7 @@ RunDock 自身生成 Windows EXE、MSI 和 SHA256SUMS，校验内嵌版本、x64
     "repository": "owner/repository",
     "account": "account-name",
     "workflowPolicy": "dispatch-only",
-    "makeLatest": false
+    "makeLatest": true
   }
 }
 ```
@@ -50,6 +50,10 @@ RunDock 自身生成 Windows EXE、MSI 和 SHA256SUMS，校验内嵌版本、x64
 避免宽泛通配符收集旧包。`artifacts` 用于登记生成文件，`artifactRules` 决定真正交付的完整集合。
 验证命令必须实际核验包内版本、平台和项目签名策略，不能只检查文件是否存在。
 环境依赖及版本要求应放在项目已有 check 命令中；每步超时为 1–86400 秒，未指定时为 600 秒。
+
+主版本交付配置建议显式设置 `makeLatest: true`，公开成功后更新 GitHub 首页 Latest。
+同一仓库只有一个 Latest；多平台共仓时由主产品目标更新，其他平台可设为 false，按各自 Tag 查询版本。
+Latest 只决定 GitHub 首页展示，不触发服务器部署或客户端安装；服务器自动拉取须单独配置。
 
 本地交付目标不能再配置自定义 publish/deploy 命令。每个版本组形成独立批次，同一组全部目标采用一致交付设置。
 首版不在一个任务中混合内置交付与云端/自定义发布，不协调同 Tag 的本地和云端产物。
@@ -85,7 +89,32 @@ RunDock 的 Authenticode 可选验证要求显式配置证书指纹，当前不�
 可选 `delivery.sync` 包含无凭证的 HTTPS `url` 和 `jsonPointer`，例如 `/data/version`。
 只有返回的版本字符串精确等于本次版本才显示已核验；HTTP 200 但版本旧仍显示等待同步。
 未配置时显示未配置验证。同步失败不会把已经成功的 GitHub 发布改为失败，可单独重新检查。
-此模块只观察版本，不代替服务器部署脚本；是否配置端点以各项目实际配置为准。
+仅配置 `sync` 时只观察版本。服务器已安装 Release 定时更新服务时，配置下面的方式；RunDock 上传后只核验线上版本，不触发 Actions：
+
+```json
+{
+  "deployment": { "strategy": "server-pull" },
+  "sync": { "url": "https://your-server.example/api/version", "jsonPointer": "/version" }
+}
+```
+
+本地模式由服务器下载已校验成品并装配镜像，云端模式继续执行原构建工作流并发布版本镜像。服务器必须用单个更新执行者串行处理两种产物，选择最高稳定 Web 版本，保留持久数据与回滚镜像，并最终检查线上版本与源码提交。
+
+项目需要交给 GitHub 工作流部署时，也可在同一 `delivery` 配置下面的方式（会使用 Actions）：
+
+```json
+{
+  "deployment": { "workflow": "deploy-prebuilt.yml" },
+  "sync": { "url": "https://your-server.example/api/version", "jsonPointer": "/version" }
+}
+```
+
+RunDock 在 Release 上传并核验后，自动调用冻结 Tag 内的工作流；工作流使用发布成品打包镜像，服务器按既有部署方式更新。
+工作流接受 `release_tag`、`release_commit`、`release_run_id`、`target_id`（版本组 ID），run-name 为
+`rundock-deploy:<release_run_id>:<target_id>`。必须自行核验成品、阻止旧版本覆盖，并等待线上版本确认后才成功。
+界面显示镜像部署与服务器同步状态，提供任务链接；查看结果期间每 15 秒核对一次。
+断线或重启后先查询原任务，不重复发起；明确权限拒绝可修复后重新检查，失败的 Actions 任务可从任务链接重跑。
+只保存本机、仅构建当前版本均不会触发服务器更新。旧的已封存发布不补写新配置，保持当时的发布语义。
 
 ## 回滚
 

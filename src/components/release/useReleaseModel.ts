@@ -10,6 +10,7 @@ import { installProgress } from './progress';
 import { installSelection } from './selection';
 import { installState } from './state';
 import { installSubmission } from './submission';
+import { installSync } from './sync';
 export function useReleaseModel(props: {
     app: AppView;
 }, emit: (e: 'close') => void) {
@@ -21,6 +22,7 @@ export function useReleaseModel(props: {
     installPlatforms(ctx);
     installProgress(ctx);
     installConfiguration(ctx);
+    installSync(ctx);
     installPreferences(ctx);
     installNotes(ctx);
     installSubmission(ctx);

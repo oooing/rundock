@@ -148,7 +148,7 @@ func TestReleaseCommitsSelectedFilesAndPushesTag(t *testing.T) {
 		t.Fatalf("unexpected strategy/version: %s %s", pf.VersionStrategy, pf.SuggestedVersion)
 	}
 	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
-		TargetVersion: "1.0.1", SelectedPaths: []string{"tracked.txt", "selected-new.txt"},
+		TargetVersion: "1.0.1", PushRemote: boolPtr(true), SelectedPaths: []string{"tracked.txt", "selected-new.txt"},
 		ManualDecisions: []ManualDecision{{Path: "not-selected.txt", Decision: DecisionExclude, Reason: "local scratch"}},
 		CommitMessage:   "chore(release): v1.0.1", StatusFingerprint: pf.StatusFingerprint,
 		ReleaseNotes: testReleaseNotes, ReleaseNotesConfirmed: true,

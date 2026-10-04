@@ -18,22 +18,24 @@ type File struct {
 }
 
 type Batch struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	RunID         string            `json:"runId"`
-	AppID         string            `json:"appId"`
-	GroupID       string            `json:"groupId"`
-	Repository    string            `json:"repository"`
-	Account       string            `json:"account"`
-	Commit        string            `json:"commit"`
-	Tag           string            `json:"tag"`
-	Version       string            `json:"version"`
-	Notes         string            `json:"notes"`
-	Prerelease    bool              `json:"prerelease"`
-	MakeLatest    bool              `json:"makeLatest"`
-	SyncURL       string            `json:"syncUrl,omitempty"`
-	SyncPointer   string            `json:"syncPointer,omitempty"`
-	Workflows     map[string]string `json:"workflows"`
-	Files         []File            `json:"files"`
+	SchemaVersion      int               `json:"schemaVersion"`
+	RunID              string            `json:"runId"`
+	AppID              string            `json:"appId"`
+	GroupID            string            `json:"groupId"`
+	Repository         string            `json:"repository"`
+	Account            string            `json:"account"`
+	Commit             string            `json:"commit"`
+	Tag                string            `json:"tag"`
+	Version            string            `json:"version"`
+	Notes              string            `json:"notes"`
+	Prerelease         bool              `json:"prerelease"`
+	MakeLatest         bool              `json:"makeLatest"`
+	SyncURL            string            `json:"syncUrl,omitempty"`
+	SyncPointer        string            `json:"syncPointer,omitempty"`
+	DeploymentWorkflow string            `json:"deploymentWorkflow,omitempty"`
+	DeploymentStrategy string            `json:"deploymentStrategy,omitempty"`
+	Workflows          map[string]string `json:"workflows"`
+	Files              []File            `json:"files"`
 }
 
 type Source struct{ TargetID, Path, SHA256 string }

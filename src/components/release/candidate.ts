@@ -92,7 +92,7 @@ export function installCandidate(ctx: ReleaseContext) {
             ctx.editedReleaseOptions.add('version');
             ctx.gitOnly.value = true;
             ctx.createTag.value = false;
-            ctx.pushRemote.value = false;
+            ctx.applySyncPolicy();
             for (const choice of Object.values(ctx.targetChoices.value))
                 choice.selected = false;
         }
@@ -102,6 +102,7 @@ export function installCandidate(ctx: ReleaseContext) {
         }
         if (enteringRelease)
             ctx.selectSingleBuildPlatform(true);
+        ctx.applySyncPolicy();
         ctx.setDefaultCommitMessage();
     };
     ctx.refreshSafety = async function () {

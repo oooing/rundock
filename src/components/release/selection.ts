@@ -148,7 +148,7 @@ export function installSelection(ctx: ReleaseContext) {
         createTag: ctx.createTag.value,
         versions: ctx.plannedVersions.value.map((version) => `${version.versionGroupId}:${version.tagName}`),
     }));
-    ctx.targetSelectionValid = computed(() => (!ctx.selectedDelivery.value || (ctx.createTag.value && ctx.pushRemote.value)) && (ctx.gitOnly.value
+    ctx.targetSelectionValid = computed(() => !ctx.syncDeliveryMissing.value && (!ctx.selectedDelivery.value || (ctx.createTag.value && ctx.pushRemote.value)) && (ctx.gitOnly.value
         || (ctx.selectedTargets.value.length > 0 && ctx.invalidChosenTargetIds.value.length === 0))
         && (ctx.pushRemote.value || !ctx.selectedNeedsRemotePush.value)
         && (ctx.createTag.value || !ctx.automationTargetRequiresTag.value)

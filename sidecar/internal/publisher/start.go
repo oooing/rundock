@@ -23,7 +23,7 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	if req.CreateTag != nil {
 		createTag = *req.CreateTag
 	}
-	pushRemote := true
+	pushRemote := false
 	if req.PushRemote != nil {
 		pushRemote = *req.PushRemote
 	}
@@ -37,10 +37,6 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 		req.BuildMode = BuildModeNone
 		req.SelectedTargets = nil
 		req.CreateTag = boolPtr(false)
-		if req.PushRemote == nil {
-			pushRemote = false
-			req.PushRemote = boolPtr(false)
-		}
 	}
 	checkConfig := createTag || len(req.SelectedTargets) > 0
 	// Preparing a release is local-only. Normal (non-force) pushes enforce
@@ -48,6 +44,10 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 	pf, err := s.preflight(ctx, appID, false, createTag, checkConfig)
 	if err != nil {
 		return nil, err
+	}
+	if req.PushRemote == nil {
+		pushRemote = profile.SyncPolicy != "local" && githubRepository(pf.RemoteURL) != ""
+		req.PushRemote = boolPtr(pushRemote)
 	}
 	if pushRemote && !contains(pf.Remotes, pf.RemoteName) {
 		return nil, &Error{Code: "remote_missing", Message: "尚未配置上传位置。可以选择“仅提交到本机”先保存代码"}
@@ -132,7 +132,7 @@ func (s *Service) Start(ctx context.Context, appID string, req CreateRequest) (*
 			plan.Targets[i].Steps.Check = ""
 		}
 	}
-	if err := validateBuildMode(req.BuildMode, plan, pushRemote); err != nil {
+	if err := validateBuildMode(req.BuildMode, plan); err != nil {
 		return nil, err
 	}
 	plan.BuildMode = req.BuildMode

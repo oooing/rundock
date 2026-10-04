@@ -15,7 +15,7 @@ import vue from '@vitejs/plugin-vue'
 import { makeFixture, fingerprint, gitAt } from './local-build-fixture.mjs'
 import { verifyRealLocalProject } from './local-build-real-project.mjs'
 import { removeSealRegistration, recordedSnapshot, prependDiagnosticHistory } from './local-build-recovery-fixture.mjs'
-import { verifyLocalBuildInteraction } from './local-build-ui.mjs'
+import { openCurrentLocalBuild, verifyLocalBuildInteraction } from './local-build-ui.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const dir = path.join(root, 'sidecar/.tmp', `local-build-${Date.now()}`)
@@ -311,7 +311,9 @@ try {
   page = await context.newPage(); const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   await page.goto(uiBase)
-  await page.getByRole('tab', { name: '本地构建', exact: true }).click()
+  assert.ok(await page.getByRole('radio', { name: 'GitHub 云端构建', exact: true }).isChecked())
+  assert.equal(await page.getByRole('tab').count(), 2)
+  await openCurrentLocalBuild(page)
   await page.getByText('在本机生成安装包，不提交代码、不创建版本、不上传。', { exact: true }).waitFor()
   await page.screenshot({ path: path.join(evidence, 'local-build-ready.png'), fullPage: true })
   const button = page.getByRole('button', { name: '开始构建', exact: true })
@@ -344,7 +346,7 @@ try {
   const originalArtifact = readFileSync(damagedPath)
   writeFileSync(damagedPath, 'damaged checksum file')
   await page.reload()
-  await page.getByRole('tab', { name: '本地构建', exact: true }).click()
+  await openCurrentLocalBuild(page)
   await page.getByText('有产物不可用，无法打开目录；可用文件仍可下载。', { exact: true }).waitFor()
   assert.ok(await page.getByRole('button', { name: '打开产物目录', exact: true }).isDisabled())
   assert.equal(await page.getByRole('button', { name: /^下载 / }).count(), 1)
@@ -359,7 +361,7 @@ try {
   assert.ok(unavailablePrep.preparationError && unavailablePrep.recentRuns.length)
   await page.evaluate(() => localStorage.clear())
   await page.reload()
-  await page.getByRole('tab', { name: '本地构建', exact: true }).click()
+  await openCurrentLocalBuild(page)
   const localPanel = page.locator('#release-panel-local-build')
   await localPanel.getByRole('button', { name: '重新读取配置', exact: true }).waitFor()
   await localPanel.locator('.local-build-history button').first().click()
@@ -367,7 +369,7 @@ try {
   writeFileSync(manifestPath, manifestBytes)
   report.checks.push('Broken current configuration + fresh browser storage: old verified tasks and downloads remain accessible')
   assert.deepEqual(pageErrors, [])
-  report.checks.push('Actual ReleaseModal no-Git tab, concise in-App help, target selection, real build success and browser download')
+  report.checks.push('Actual ReleaseModal defaults to cloud with two tabs; local mode is inside Publish, including no-Git builds, in-App help and verified downloads')
   assert.ok(!existsSync(path.join(plain.root, 'uploaded.txt')) && !existsSync(path.join(plain.root, 'deployed.txt')))
   assert.deepEqual(fingerprint(repo.root, true), beforeDirty)
   await verifyRealLocalProject({ request, response, evidence, report, pause })

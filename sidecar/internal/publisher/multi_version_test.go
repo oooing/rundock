@@ -48,7 +48,7 @@ func TestReleaseMultipleVersionGroupsCreatesIndependentTags(t *testing.T) {
 	svc.targetRunner = &recordingTargetRunner{}
 	createTag := true
 	run, err := svc.Start(context.Background(), "app1", acceptCandidate(t, svc, CreateRequest{
-		CreateTag: &createTag, VersionMode: "auto", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
+		CreateTag: &createTag, PushRemote: boolPtr(true), VersionMode: "auto", SelectedPaths: []string{"tracked.txt"}, StatusFingerprint: pf.StatusFingerprint,
 		SelectedTargets: []store.ReleaseTargetSelection{{TargetID: "web", Build: true}, {TargetID: "server", Build: true}},
 		ReleaseNotes:    testReleaseNotes, ReleaseNotesConfirmed: true,
 	}))

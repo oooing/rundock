@@ -80,6 +80,8 @@ export function installNotes(ctx: ReleaseContext) {
         ctx.preReleaseCommand.value = pf.profile?.preReleaseCommand || '';
         if (initial) {
             const remembered = ctx.readLocalPreferences();
+            if (!ctx.editedReleaseOptions.has('push'))
+                ctx.syncPolicy.value = pf.profile?.syncPolicy === 'local' ? 'local' : 'auto';
             const keepTargets = ctx.editedReleaseOptions.has('targets') || ctx.editedReleaseOptions.has('build');
             if (!keepTargets) {
                 ctx.buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github';
@@ -87,13 +89,12 @@ export function installNotes(ctx: ReleaseContext) {
                     ctx.targetChoices.value[target.id] = ctx.defaultTargetChoice(target);
                 ctx.selectSingleBuildPlatform();
             }
-            if (!keepTargets && !ctx.editedReleaseOptions.has('push'))
-                ctx.pushRemote.value = ctx.buildMode.value === 'local' && !ctx.gitOnly.value ? false : (typeof remembered.pushRemote === 'boolean' ? remembered.pushRemote : true);
             if (!ctx.editedReleaseOptions.has('tag'))
                 ctx.createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true);
             if (!ctx.editedReleaseOptions.has('version'))
                 ctx.versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto');
         }
+        ctx.applySyncPolicy();
         if (ctx.createTag.value)
             ctx.syncVersionInputs();
         ctx.setDefaultCommitMessage();

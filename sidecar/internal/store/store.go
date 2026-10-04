@@ -108,6 +108,7 @@ func (s *Store) ensureSchema() error {
 		"create_tag":   "INTEGER NOT NULL DEFAULT 1",
 		"version_mode": "TEXT NOT NULL DEFAULT 'auto'",
 		"build_mode":   "TEXT NOT NULL DEFAULT 'github'",
+		"sync_policy":  "TEXT NOT NULL DEFAULT 'auto'",
 	}
 	for col, def := range profileWanted {
 		if !profileCols[strings.ToUpper(col)] {

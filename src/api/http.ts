@@ -154,8 +154,14 @@ export const api = {
   createReleaseNotesDraft: (id: string, body: ReleaseNotesDraftRequest) =>
     req<ReleaseNotesDraft>(`/api/apps/${id}/release/notes-draft`, { method: 'POST', body: JSON.stringify(body) }),
   getReleaseProfile: (id: string) => req<ReleaseProfile>(`/api/apps/${id}/release-profile`),
-  saveReleaseProfile: (id: string, body: Omit<ReleaseProfile, 'appId' | 'updatedAt'>) =>
-    req<ReleaseProfile>(`/api/apps/${id}/release-profile`, { method: 'PATCH', body: JSON.stringify(body) }),
+  saveReleaseProfile: async (id: string, body: Omit<ReleaseProfile, 'appId' | 'updatedAt'>) => {
+    const saved = await req<ReleaseProfile>(`/api/apps/${id}/release-profile`, { method: 'PATCH', body: JSON.stringify(body) })
+    // Older backends accept unknown fields without persisting them. A successful
+    // HTTP response is not proof that the per-project synchronization policy saved.
+    if (body.syncPolicy && saved.syncPolicy !== body.syncPolicy)
+      throw new ApiError(tr('同步配置尚未保存，请重启更新后的后端再试。'), 'sync_policy_not_saved')
+    return saved
+  },
   getReleaseConfig: (id: string) => req<ReleaseConfig>(`/api/apps/${id}/release-config`),
   getReleaseConfigFile: (id: string) =>
     req<{ path: string; content: string; exists: boolean; revision: string; example: string }>(`/api/apps/${id}/release-config/file`),

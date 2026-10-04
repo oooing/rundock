@@ -38,9 +38,9 @@ function dateOf(value: string) {
 </script>
 
 <template>
-  <section id="release-panel-local-build" class="local-build-panel" role="tabpanel" aria-labelledby="release-tab-local-build" tabindex="0">
+  <section id="release-panel-local-build" class="local-build-panel">
     <div class="local-build-intro">
-      <h3>{{ tr('本地构建') }}</h3>
+      <h3>{{ tr('构建当前版本') }}</h3>
       <p>{{ tr('在本机生成安装包，不提交代码、不创建版本、不上传。') }}</p>
       <details class="local-build-help"><summary>{{ tr('操作说明') }}</summary><p>{{ tr('选目标 → 开始构建 → 打开产物目录/下载') }}</p><p>{{ tr('使用项目配置的命令；所需依赖仍需安装。源代码在隔离快照中构建。') }}</p></details>
     </div>

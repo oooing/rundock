@@ -153,6 +153,13 @@ func (s *Service) sealDeliveries(ctx context.Context, run *store.ReleaseRun, pla
 			batch.SyncURL = d.Sync.URL
 			batch.SyncPointer = d.Sync.JSONPointer
 		}
+		if d.Deployment != nil {
+			batch.DeploymentStrategy = d.Deployment.Strategy
+			batch.DeploymentWorkflow = d.Deployment.Workflow
+			if batch.DeploymentWorkflow != "" && workflows[batch.DeploymentWorkflow] == "" {
+				return &Error{Code: "deployment_workflow_missing", Message: "发布配置中的服务器部署工作流不存在"}
+			}
+		}
 		groups[target.VersionGroup] = batch
 		for _, source := range matches {
 			sources[target.VersionGroup] = append(sources[target.VersionGroup], source)
@@ -314,6 +321,10 @@ func cloneDelivery(d *releaseconfig.Delivery) *releaseconfig.Delivery {
 	if d.Sync != nil {
 		sync := *d.Sync
 		copy.Sync = &sync
+	}
+	if d.Deployment != nil {
+		deployment := *d.Deployment
+		copy.Deployment = &deployment
 	}
 	return &copy
 }

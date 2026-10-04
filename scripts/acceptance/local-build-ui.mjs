@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 
+// Failure inventory before the UI refactor: a third navigation tab survives;
+// cloud is not the initial mode; switching modes creates/cancels tasks; a closed
+// dialog loses the accepted task; no-Git or broken config hides retained outputs.
+export async function openCurrentLocalBuild(page) {
+  assert.equal(await page.getByRole('tab', { name: '本地构建', exact: true }).count(), 0)
+  await page.getByRole('radio', { name: '本地构建', exact: true }).check()
+  await page.getByRole('checkbox', { name: '仅构建当前版本', exact: true }).check()
+  await page.locator('#release-panel-local-build').waitFor()
+}
+
 export async function verifyLocalBuildInteraction({ page, context, base, uiBase, evidence, report, prepareLongHistory }) {
   const panel = page.locator('#release-panel-local-build')
   let verifiedRefreshLock = false
@@ -37,7 +47,7 @@ export async function verifyLocalBuildInteraction({ page, context, base, uiBase,
   await page.getByRole('button', { name: '关闭', exact: true }).click()
   await page.getByText('closed', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'Open build', exact: true }).click()
-  await page.getByRole('tab', { name: '本地构建', exact: true }).click()
+  await openCurrentLocalBuild(page)
   await panel.getByRole('button', { name: '取消构建', exact: true }).click()
   await panel.locator('.local-build-status').filter({ hasText: '已取消构建' }).waitFor()
   report.checks.push('UI close/reopen recovers running task; explicit cancel gives terminal feedback')
@@ -49,7 +59,7 @@ export async function verifyLocalBuildInteraction({ page, context, base, uiBase,
   await page.getByRole('button', { name: '关闭', exact: true }).click()
   await prepareLongHistory(failedId)
   await page.getByRole('button', { name: 'Open build', exact: true }).click()
-  await page.getByRole('tab', { name: '本地构建', exact: true }).click()
+  await openCurrentLocalBuild(page)
   await panel.locator('.local-build-status').filter({ hasText: '本地构建失败' }).waitFor()
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: uiBase })
   await panel.getByRole('button', { name: '复制错误信息', exact: true }).click()

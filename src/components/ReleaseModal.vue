@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { tr } from '@/i18n'
 import { cloudFailureText, localFailureText } from '@/utils/buildFailure'
 import { releaseTargetLabel } from '@/utils/releasePresentation'
@@ -9,10 +9,11 @@ import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
 import ReleaseSafetyPanel from './ReleaseSafetyPanel.vue'
 import ReleaseSafetySettings from './ReleaseSafetySettings.vue'
 import CopyErrorButton from './CopyErrorButton.vue'
-import ReleaseDeliveryChoice from './ReleaseDeliveryChoice.vue'
+import ReleaseSyncChoice from './ReleaseSyncChoice.vue'
 import ReleaseDeliveryStatus from './ReleaseDeliveryStatus.vue'
 import ReleaseVersionChange from './ReleaseVersionChange.vue'
 import LocalBuildPanel from './LocalBuildPanel.vue'
+import ReleaseBuildModeChoice from './ReleaseBuildModeChoice.vue'
 import SavedReleaseArtifacts from './SavedReleaseArtifacts.vue'
 const props = defineProps<{ app: AppView }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -53,7 +54,7 @@ const {
   activeRunStatusLabel, activeStageLabel, cloudExecutionNotice, cloudBuildSettled, completionTitle,
   completionDescription, confirmDialogTitle, confirmDialogMessage, confirmDialogButton, configConfidence,
   standardPlatforms, platformIdForTarget, versionGroupDisplayName, productPlatforms, visibleProductPlatforms,
-  phaseAllowed, selectedDelivery, setDelivery, changeBuildMode, configuredActions,
+  phaseAllowed, selectedDelivery, syncPolicy, syncRepository, syncNotice, syncDeliveryMissing, changeSyncPolicy, changeBuildMode, configuredActions,
   platformRunnableTargets, platformSelected, platformHasSelection, platformPartiallySelected, platformPartiallyAvailable,
   platformSelectionCount, platformUnavailableReason, platformActionLabels, platformCardDetail, togglePlatform,
   selectSingleBuildPlatform, toggleGitOnly, stageLabel, targetStageLabel, summaryLines,
@@ -72,32 +73,20 @@ const {
   releaseErrorMessage, showRun, historyStatus, schedulePoll, poll,
   retry, confirmSensitiveAction, startNew,
 } = useReleaseModel(props, emit)
-type PanelTab = 'publish' | 'settings' | 'local-build'
-const localBuildVisible = ref(false)
+const buildCurrentVersion = ref(false)
+const localBuildMounted = ref(false)
+const localBuildVisible = computed(() => !activeRun.value && releaseIntent.value === 'formal'
+  && buildMode.value === 'local' && buildCurrentVersion.value)
+// Keep the task controller alive when hiding the module or visiting Settings.
+// Task creation/cancellation remains an explicit action, never a mode-change effect.
+watch(localBuildVisible, visible => { if (visible) localBuildMounted.value = true })
 const sealedArtifactsPresent = ref(false)
 const hasLocalSavedOutputs = computed(() => !!activeRun.value
   && !['queued', 'running'].includes(activeRun.value.status)
   && runTargets.value.some(target => (target.build || target.package) && !target.publish))
 watch(() => activeRun.value?.id, () => { sealedArtifactsPresent.value = false }, { flush: 'sync' })
-const panelTab = computed<PanelTab>(() => localBuildVisible.value ? 'local-build' : activeRun.value ? 'publish' : releaseTab.value)
-async function switchPanelTab(tab: PanelTab, focus = false) {
-  if (publishing.value || autoSubmitting.value || (tab === 'settings' && activeRun.value)) return
-  localBuildVisible.value = tab === 'local-build'
-  if (tab !== 'local-build') await switchReleaseTab(tab)
-  else await nextTick()
-  if (bodyRef.value && tab === 'local-build') bodyRef.value.scrollTop = 0
-  if (focus) document.getElementById(`release-tab-${tab}`)?.focus()
-}
-function onPanelTabKeydown(event: KeyboardEvent) {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-  event.preventDefault()
-  const tabs: PanelTab[] = activeRun.value ? ['publish', 'local-build'] : ['publish', 'settings', 'local-build']
-  const index = tabs.indexOf(panelTab.value)
-  const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1]
-    : tabs[(index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length]
-  void switchPanelTab(next, true)
-}
-function closePanel() { if (localBuildVisible.value) emit('close'); else closeModal() }
+const panelTab = computed(() => activeRun.value ? 'publish' : releaseTab.value)
+function closePanel() { if (localBuildVisible.value && !preflight.value) emit('close'); else void closeModal() }
 </script>
 
 <template>
@@ -108,17 +97,14 @@ function closePanel() { if (localBuildVisible.value) emit('close'); else closeMo
         <button class="ghost icon" :disabled="!localBuildVisible && (publishing || preferenceStatus === 'saving')" :aria-label="tr('关闭')" @click="closePanel">✕</button>
       </header>
 
-      <nav class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onPanelTabKeydown">
-        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="panelTab === 'publish'" :tabindex="panelTab === 'publish' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchPanelTab('publish')">{{ tr('发布') }}</button>
-        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="panelTab === 'settings'" :tabindex="panelTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting || !!activeRun" @click="switchPanelTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
-        <button id="release-tab-local-build" type="button" role="tab" aria-controls="release-panel-local-build" :aria-selected="panelTab === 'local-build'" :tabindex="panelTab === 'local-build' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchPanelTab('local-build')">{{ tr('本地构建') }}</button>
+      <nav class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onReleaseTabKeydown">
+        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="panelTab === 'publish'" :tabindex="panelTab === 'publish' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchReleaseTab('publish')">{{ tr('发布') }}</button>
+        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="panelTab === 'settings'" :tabindex="panelTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting || !!activeRun" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
       </nav>
 
-      <div ref="bodyRef" class="m-body" :inert="!localBuildVisible && (publishing || autoSubmitting)">
-        <LocalBuildPanel v-if="localBuildVisible" :app-id="app.id" :app-name="app.name" @settings="switchPanelTab('settings', true)" />
-        <template v-else>
+      <div ref="bodyRef" class="m-body" :inert="publishing || autoSubmitting">
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
-        <div v-if="error" class="alert error" role="alert">{{ error }}</div>
+        <div v-if="error && !localBuildVisible" class="alert error" role="alert">{{ error }}</div>
         <div v-if="preferenceStatus === 'error'" class="alert error" role="alert">{{ tr('设置保存失败，请重试。') }} {{ preferenceError }} <button type="button" @click="saveRememberedPreferences">{{ tr('重试保存') }}</button></div>
         <div v-if="versionPlanNotice" class="alert warn" role="status">{{ versionPlanNotice }}</div>
         <div v-if="preflightStale" class="alert warn">{{ tr("配置或 Git 已变化，请重新检查。") }}<button :disabled="savingProfile" @click="saveAndRecheck">{{ tr("重新检查") }}</button></div>
@@ -155,17 +141,18 @@ function closePanel() { if (localBuildVisible.value) emit('close'); else closeMo
           </section>
         </template>
 
-        <section v-else-if="(preflight || releaseConfig) && !loading" v-show="releaseTab === 'publish'" id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="release-panel" tabindex="0">
+        <section v-else-if="!loading" v-show="releaseTab === 'publish'" id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="release-panel" tabindex="0">
+          <ReleaseBuildModeChoice v-if="releaseIntent === 'formal'" v-model:current-only="buildCurrentVersion" :mode="buildMode" :disabled="checkingCandidate || publishing || autoSubmitting" @change="changeBuildMode" />
+          <LocalBuildPanel v-if="localBuildMounted" v-show="localBuildVisible" :app-id="app.id" :app-name="app.name" @settings="switchReleaseTab('settings', true)" />
+          <template v-if="!localBuildVisible && (preflight || releaseConfig)">
           <div class="publish-toolbar">
             <div class="intent-choice" :aria-label="tr('本次目的')"><button :class="{chosen:releaseIntent==='save-progress'}" :aria-pressed="releaseIntent==='save-progress'" :disabled="checkingCandidate" @click="changeReleaseIntent('save-progress')">{{tr('仅提交代码')}}</button><button :class="{chosen:releaseIntent==='formal'}" :aria-pressed="releaseIntent==='formal'" :disabled="checkingCandidate" @click="changeReleaseIntent('formal')">{{tr('发布版本')}}</button></div>
-            <div v-if="releaseIntent==='formal'" class="release-mode-summary"><span>{{ gitOnly ? tr('仅提交代码') : buildMode === 'github' ? tr('由 GitHub Actions 打包，本机不打包') : tr('在本机打包') }}</span><button type="button" @click="switchReleaseTab('settings', true)">{{ tr('调整设置') }}</button></div>
           </div>
           <p v-if="releaseIntent==='save-progress'" class="section-help">{{tr('只提交所选代码，不改版本、不创建 Tag、不构建或部署。')}}</p>
-          <label v-if="releaseIntent==='save-progress'" class="plain-check"><input v-model="pushRemote" type="checkbox" @change="editedReleaseOptions.add('push')" />{{tr('提交后上传')}}</label>
+          <ReleaseSyncChoice v-if="preflight" :policy="syncPolicy" :notice="syncNotice" :repository="syncRepository" :missing="syncDeliveryMissing" :disabled="checkingCandidate || publishing || autoSubmitting" :status="preferenceStatus" @change="changeSyncPolicy" @settings="switchReleaseTab('settings', true)" />
           <p v-if="releaseIntent==='save-progress' && pushRemote" class="section-help">{{tr('上传可能触发仓库已有 CI。')}}</p>
           <label v-if="releaseIntent==='save-progress'" class="full-label">{{tr('提交说明')}}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
           <div v-if="configFileDirty || configEditorOpen" class="alert warn settings-edit-hint">{{ tr('高级配置尚未保存，请在对应区域保存或取消修改。') }}<button type="button" @click="switchReleaseTab('settings', true)">{{ tr('前往设置') }}</button></div>
-          <ReleaseDeliveryChoice v-if="buildMode === 'local' && releaseIntent === 'formal'" :targets="chosenTargets" :disabled="checkingCandidate || publishing" @change="setDelivery" />
           <section v-if="blockingIssues.length" class="issues">
             <div v-for="issue in blockingIssues" :key="issue.code" class="alert" :class="issue.code === 'staged_changes' ? 'warn staged-issue' : 'error'">
               <template v-if="issue.code === 'staged_changes'">
@@ -177,7 +164,7 @@ function closePanel() { if (localBuildVisible.value) emit('close'); else closeMo
             </div>
           </section>
           <div v-if="unstageNotice" class="alert info" role="status">{{ unstageNotice }}</div>
-          <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。可以关闭“提交后上传”，在本机完成本次操作。') }}</div>
+          <div v-if="remoteMissing" class="alert warn">{{ tr('尚未配置远程仓库。请选择“仅保存在本机”，或在设置中配置 GitHub 远端。') }}</div>
 
           <section v-if="releaseIntent==='formal'" ref="platformSectionRef" class="platform-section" tabindex="-1" :aria-label="tr('选择构建端')">
             <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
@@ -262,28 +249,12 @@ function closePanel() { if (localBuildVisible.value) emit('close'); else closeMo
           <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
           </template>
           <div v-else class="state panel-detail-loading">{{ tr("正在读取版本和代码变更…") }}</div>
+          </template>
         </section>
         <section v-if="!activeRun && !loading" v-show="releaseTab === 'settings'" id="release-panel-settings" role="tabpanel" aria-labelledby="release-tab-settings" class="release-panel settings-panel" tabindex="0">
           <div class="settings-intro"><h3>{{ tr('设置') }}</h3><p>{{ tr('构建与上传选项自动保存；高级配置单独保存。') }}</p><p class="preference-status" role="status" aria-live="polite">{{ preferenceStatus === 'saving' ? tr('正在保存…') : preferenceStatus === 'saved' ? tr('已自动保存') : '' }}</p></div>
           <template v-if="preflight">
-          <section v-if="releaseIntent==='formal'" class="block build-mode-section">
-            <div class="section-head"><h3>{{ tr('构建位置') }}</h3><small class="muted">{{ tr('按项目记住选择') }}</small></div>
-            <div class="choice-picker" role="radiogroup" :aria-label="tr('构建位置')">
-              <label class="choice-option" :class="{ selected: buildMode === 'github' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'github'" :aria-label="tr('GitHub 云端构建')" @change="changeBuildMode('github')" /><span><strong>{{ tr('GitHub 云端构建') }}</strong><small>{{ tr('默认 · 上传代码和版本，由 GitHub 构建和打包') }}</small></span></label>
-              <label class="choice-option" :class="{ selected: buildMode === 'local' }"><input type="radio" name="release-build-mode" :checked="buildMode === 'local'" :aria-label="tr('本地构建')" @change="changeBuildMode('local')" /><span><strong>{{ tr('本地构建') }}</strong><small>{{ tr('在本机生成产物，发布目的地可独立选择') }}</small></span></label>
-            </div>
-            <p class="section-help">{{ buildMode === 'github' ? tr('云端模式不会在本机执行构建；缺少工作流时，请先配置或切换本地构建。') : tr('本地执行检查、构建和打包；选择 GitHub Release 后自动交付已核验的产物。') }}</p>
-          </section>
 
-          <section v-if="releaseIntent==='formal'" class="block upload-settings">
-            <h3>{{ tr('提交与上传') }}</h3>
-            <label class="push-choice" :class="{ required: !pushRemote && selectedNeedsRemotePush }">
-              <input v-model="pushRemote" type="checkbox" :disabled="publishing || (buildMode === 'local' && !gitOnly && !selectedDelivery)" @change="editedReleaseOptions.add('push')" />
-              <span>{{ tr('提交后上传') }}<small>{{ pushRemote ? tr('先保存本地提交，再上传') : tr('本地完成，无需连接远程仓库') }}</small></span>
-            </label>
-            <div class="button-row">
-            </div>
-          </section>
           <section class="repo-card">
             <div class="kv"><span>{{ tr("代码仓库") }}</span><code>{{ preflight.repoRoot }}</code></div><div class="kv"><span>{{ tr("当前分支") }}</span><code>{{ preflight.branch || tr("未绑定分支") }}</code></div>
             <div class="kv"><span>{{ tr("远程地址") }}</span><code>{{ preflight.remoteUrl || '—' }}</code></div><div class="kv"><span>{{ tr("仓库通用 Tag（不含平台 Tag）") }}</span><code>{{ preflight.latestTag || tr("还没有版本 Tag") }}</code></div>
@@ -352,7 +323,6 @@ function closePanel() { if (localBuildVisible.value) emit('close'); else closeMo
           </template>
           <ReleaseConfigFileEditor v-else :app-id="app.id" @saved="onConfigFileSaved" @editing="configFileOpen = $event" @dirty="configFileDirty = $event" />
         </section>
-        </template>
       </div>
 
       <footer v-if="!localBuildVisible && !activeRun && !loading && preflight && releaseTab === 'publish'" class="m-foot" :inert="publishing">

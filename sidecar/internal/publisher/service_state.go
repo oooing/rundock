@@ -117,6 +117,12 @@ func requiresExternalActionsConfirmation(values []store.ReleaseTargetSelection) 
 }
 
 func (s *Service) SaveProfile(p *store.ReleaseProfile) error {
+	if p.SyncPolicy == "" {
+		p.SyncPolicy = "auto"
+	}
+	if p.SyncPolicy != "auto" && p.SyncPolicy != "local" {
+		return &Error{Code: "invalid_sync_policy", Message: "请选择自动同步 GitHub 或仅保存在本机"}
+	}
 	if p.BuildMode == "" {
 		p.BuildMode = "github"
 	}

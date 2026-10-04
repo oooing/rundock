@@ -102,25 +102,12 @@ export function installPlatforms(ctx: ReleaseContext) {
         return ctx.buildMode.value === 'github' ? phase === 'publish' : phase === 'build' || phase === 'package' || phase === 'publish';
     };
     ctx.selectedDelivery = computed(() => ctx.chosenTargets.value.some(({ target, choice }) => !!target.delivery && choice.publish));
-    ctx.setDelivery = function (targetId: string, publish: boolean) {
-        const group = ctx.configuredTargets.value.find(target => target.id === targetId)?.versionGroup;
-        for (const { target } of ctx.chosenTargets.value)
-            if (target.versionGroup === group)
-                ctx.setTargetPhase(target.id, 'publish', publish);
-        if (publish) {
-            ctx.pushRemote.value = true;
-            ctx.createTag.value = true;
-        }
-        else if (ctx.buildMode.value === 'local' && !ctx.selectedDelivery.value)
-            ctx.pushRemote.value = false;
-    };
     ctx.changeBuildMode = function (mode: 'github' | 'local') {
         ctx.editedReleaseOptions.add('build');
         if (ctx.buildMode.value === mode)
             return;
         const platforms = new Set(ctx.productPlatforms.value.filter(ctx.platformHasSelection).map(platform => platform.id));
         ctx.buildMode.value = mode;
-        ctx.pushRemote.value = mode === 'github';
         for (const target of ctx.configuredTargets.value)
             ctx.targetChoices.value[target.id] = ctx.defaultTargetChoice(target);
         if (!ctx.gitOnly.value)
@@ -128,6 +115,7 @@ export function installPlatforms(ctx: ReleaseContext) {
                 if (platforms.has(platform.id))
                     ctx.togglePlatform(platform, true);
             }
+        ctx.applySyncPolicy();
     };
     ctx.configuredActions = function (target: ReleaseTarget) {
         return ctx.phaseOptions.value.filter((phase) => ctx.phaseAllowed(phase.key) && !!target.steps[phase.key]);
@@ -214,6 +202,7 @@ export function installPlatforms(ctx: ReleaseContext) {
                     choice[phase.key] = ctx.phaseAllowed(phase.key) && !!target.steps[phase.key];
             }
         }
+        ctx.applySyncPolicy();
     };
     ctx.selectSingleBuildPlatform = function (enteringRelease = false) {
         if (ctx.gitOnly.value || (!enteringRelease && ctx.editedReleaseOptions.has('targets')))

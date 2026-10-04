@@ -10,13 +10,20 @@ import (
 // Delivery is an opt-in destination. Absence preserves local artifact-only builds.
 // Account is an identity reference to the local gh credential provider, never a token.
 type Delivery struct {
-	Provider       string     `json:"provider"`
-	Repository     string     `json:"repository"`
-	Account        string     `json:"account"`
-	Prerelease     bool       `json:"prerelease,omitempty"`
-	MakeLatest     bool       `json:"makeLatest,omitempty"`
-	WorkflowPolicy string     `json:"workflowPolicy"`
-	Sync           *SyncCheck `json:"sync,omitempty"`
+	Provider       string      `json:"provider"`
+	Repository     string      `json:"repository"`
+	Account        string      `json:"account"`
+	Prerelease     bool        `json:"prerelease,omitempty"`
+	MakeLatest     bool        `json:"makeLatest,omitempty"`
+	WorkflowPolicy string      `json:"workflowPolicy"`
+	Sync           *SyncCheck  `json:"sync,omitempty"`
+	Deployment     *Deployment `json:"deployment,omitempty"`
+}
+
+// Deployment identifies the owner of post-publication deployment.
+type Deployment struct {
+	Strategy string `json:"strategy,omitempty"`
+	Workflow string `json:"workflow,omitempty"`
 }
 
 type SyncCheck struct {
@@ -75,6 +82,19 @@ func validateDelivery(t Target) error {
 		u, err := url.Parse(d.Sync.URL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !strings.HasPrefix(d.Sync.JSONPointer, "/") {
 			return fmt.Errorf("%s：同步检查需要无凭证的 HTTPS 地址和 JSON Pointer", t.Name)
+		}
+	}
+	if d.Deployment != nil {
+		name := d.Deployment.Workflow
+		if d.Sync == nil {
+			return fmt.Errorf("%s：服务器部署需要线上版本检查地址", t.Name)
+		}
+		if d.Deployment.Strategy == "server-pull" {
+			if name != "" {
+				return fmt.Errorf("%s：服务器拉取更新不能同时触发云端部署工作流", t.Name)
+			}
+		} else if (d.Deployment.Strategy != "" && d.Deployment.Strategy != "workflow") || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml$`).MatchString(name) {
+			return fmt.Errorf("%s：服务器部署方式必须为 server-pull 或有效工作流", t.Name)
 		}
 	}
 	return nil

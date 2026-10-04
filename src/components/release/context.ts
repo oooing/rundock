@@ -233,7 +233,12 @@ export interface ReleaseContext {
     visibleProductPlatforms: ComputedRef<ProductPlatform[]>;
     phaseAllowed: (phase: ExecutionPhase) => boolean;
     selectedDelivery: ComputedRef<boolean>;
-    setDelivery: (targetId: string, publish: boolean) => void;
+    syncPolicy: Ref<'auto' | 'local'>;
+    syncRepository: ComputedRef<string>;
+    syncDeliveryMissing: ComputedRef<boolean>;
+    syncNotice: ComputedRef<string>;
+    applySyncPolicy: () => void;
+    changeSyncPolicy: (policy: 'auto' | 'local') => void;
     changeBuildMode: (mode: "github" | "local") => void;
     configuredActions: (target: ReleaseTarget) => {
         key: ExecutionPhase;
@@ -289,7 +294,6 @@ export interface ReleaseContext {
         buildMode?: 'github' | 'local';
         createTag?: boolean;
         versionMode?: ReleaseVersionMode;
-        pushRemote?: boolean;
     };
     rememberPreferences: () => void;
     saveRememberedPreferences: () => Promise<void>;
@@ -305,6 +309,7 @@ export interface ReleaseContext {
     load: (resumeFailedRun?: boolean) => Promise<void>;
     profileBody: () => {
         buildMode: "github" | "local";
+        syncPolicy: "auto" | "local";
         remoteName: string;
         versionStrategy: VersionStrategy;
         preReleaseCommand: string;

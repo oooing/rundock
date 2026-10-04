@@ -14,6 +14,7 @@ type ReleaseProfile struct {
 	CreateTag         bool   `json:"createTag"`
 	VersionMode       string `json:"versionMode"`
 	BuildMode         string `json:"buildMode"`
+	SyncPolicy        string `json:"syncPolicy"`
 	UpdatedAt         string `json:"updatedAt"`
 }
 
@@ -65,15 +66,15 @@ type ReleaseLog struct {
 }
 
 func DefaultReleaseProfile(appID string) *ReleaseProfile {
-	return &ReleaseProfile{AppID: appID, RemoteName: "origin", VersionStrategy: "auto", CreateTag: true, VersionMode: "auto", BuildMode: "github"}
+	return &ReleaseProfile{AppID: appID, RemoteName: "origin", VersionStrategy: "auto", CreateTag: true, VersionMode: "auto", BuildMode: "github", SyncPolicy: "auto"}
 }
 
 func (s *Store) GetReleaseProfile(appID string) (*ReleaseProfile, error) {
 	p := &ReleaseProfile{}
 	var createTag int
-	err := s.db.QueryRow(`SELECT app_id,remote_name,version_strategy,pre_release_command,create_tag,version_mode,build_mode,updated_at
+	err := s.db.QueryRow(`SELECT app_id,remote_name,version_strategy,pre_release_command,create_tag,version_mode,build_mode,sync_policy,updated_at
 		FROM release_profiles WHERE app_id=?`, appID).
-		Scan(&p.AppID, &p.RemoteName, &p.VersionStrategy, &p.PreReleaseCommand, &createTag, &p.VersionMode, &p.BuildMode, &p.UpdatedAt)
+		Scan(&p.AppID, &p.RemoteName, &p.VersionStrategy, &p.PreReleaseCommand, &createTag, &p.VersionMode, &p.BuildMode, &p.SyncPolicy, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return DefaultReleaseProfile(appID), nil
 	}
@@ -85,17 +86,20 @@ func (s *Store) UpsertReleaseProfile(p *ReleaseProfile) error {
 	if p.BuildMode == "" {
 		p.BuildMode = "github"
 	}
-	_, err := s.db.Exec(`INSERT INTO release_profiles (app_id,remote_name,version_strategy,pre_release_command,create_tag,version_mode,build_mode,updated_at)
-		VALUES (?,?,?,?,?,?,?,datetime('now'))
+	if p.SyncPolicy == "" {
+		p.SyncPolicy = "auto"
+	}
+	_, err := s.db.Exec(`INSERT INTO release_profiles (app_id,remote_name,version_strategy,pre_release_command,create_tag,version_mode,build_mode,sync_policy,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,datetime('now'))
 		ON CONFLICT(app_id) DO UPDATE SET remote_name=excluded.remote_name,
 		version_strategy=excluded.version_strategy,pre_release_command=excluded.pre_release_command,
-		create_tag=excluded.create_tag,version_mode=excluded.version_mode,build_mode=excluded.build_mode,updated_at=datetime('now')`,
-		p.AppID, p.RemoteName, p.VersionStrategy, p.PreReleaseCommand, boolInt(p.CreateTag), p.VersionMode, p.BuildMode)
+		create_tag=excluded.create_tag,version_mode=excluded.version_mode,build_mode=excluded.build_mode,sync_policy=excluded.sync_policy,updated_at=datetime('now')`,
+		p.AppID, p.RemoteName, p.VersionStrategy, p.PreReleaseCommand, boolInt(p.CreateTag), p.VersionMode, p.BuildMode, p.SyncPolicy)
 	return err
 }
 
 func (s *Store) ListReleaseProfiles() ([]*ReleaseProfile, error) {
-	rows, err := s.db.Query(`SELECT app_id,remote_name,version_strategy,pre_release_command,create_tag,version_mode,build_mode,updated_at
+	rows, err := s.db.Query(`SELECT app_id,remote_name,version_strategy,pre_release_command,create_tag,version_mode,build_mode,sync_policy,updated_at
 		FROM release_profiles ORDER BY app_id`)
 	if err != nil {
 		return nil, err
@@ -105,7 +109,7 @@ func (s *Store) ListReleaseProfiles() ([]*ReleaseProfile, error) {
 	for rows.Next() {
 		p := &ReleaseProfile{}
 		var createTag int
-		if err := rows.Scan(&p.AppID, &p.RemoteName, &p.VersionStrategy, &p.PreReleaseCommand, &createTag, &p.VersionMode, &p.BuildMode, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.AppID, &p.RemoteName, &p.VersionStrategy, &p.PreReleaseCommand, &createTag, &p.VersionMode, &p.BuildMode, &p.SyncPolicy, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		p.CreateTag = createTag != 0

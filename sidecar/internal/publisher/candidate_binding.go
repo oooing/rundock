@@ -24,7 +24,7 @@ func normalizeCandidateRequest(req CandidateRequest, pf *Preflight) CandidateReq
 		req.CreateTag = boolPtr(pf.Profile.CreateTag)
 	}
 	if req.PushRemote == nil {
-		req.PushRemote = boolPtr(req.Intent != IntentSaveProgress)
+		req.PushRemote = boolPtr(pf.Profile.SyncPolicy != "local" && githubRepository(pf.RemoteURL) != "")
 	}
 	if req.Intent == IntentSaveProgress {
 		req.VersionMode = VersionModeUnchanged

@@ -24,7 +24,7 @@ const context=await browser.newContext({viewport:{width:1280,height:950}});
 const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
 const source=JSON.parse(await readFile(path.join(root,'.launcher/release.yaml'),'utf8'));
 const config={...source,source:'file',confidence:1,warnings:[],configPath:'.launcher/release.yaml',targets:source.targets.filter(t=>t.runner.type==='local')};
-const profile={appId:'fixture',buildMode:'local',remoteName:'origin',versionStrategy:'tauri',preReleaseCommand:'',createTag:true,versionMode:'auto'};
+const profile={appId:'fixture',buildMode:'local',syncPolicy:'auto',remoteName:'origin',versionStrategy:'tauri',preReleaseCommand:'',createTag:true,versionMode:'auto'};
 const classification={path:'src/change.ts',status:'M',tracked:true,category:'recommend',selectedDefault:true,reasons:[],sources:[],contentFingerprint:'file',baselineKept:true};
 const preflight={repoRoot:'C:/fixture',branch:'master',headSha:'a'.repeat(40),remoteName:'origin',remoteUrl:'https://github.com/oooing/rundock',remotes:['origin'],latestTag:'v2.0.20',latestGroupTags:{},commitsSinceTags:{'v2.0.20':1},suggestedVersion:'2.0.21',suggestedVersions:{product:'2.0.21'},versionStrategy:'tauri',versionFiles:['package.json'],currentVersions:{'package.json':'2.0.20'},changes:[{path:'src/change.ts',status:' M',tracked:true,staged:false}],classifications:[classification],aheadCount:0,unpushedChanges:[],blockingIssues:[],canRelease:true,remoteChecked:false,statusFingerprint:'fixture-fingerprint',profile};
 const candidate={id:'candidate',status:'ready',accepted:true,canFormal:true,canSaveProgress:true,classifications:[classification],selectedPaths:['src/change.ts'],sensitiveFindings:[],dependencyFindings:[],checkResults:[],warnings:[],fingerprint:'candidate-fingerprint',treeHash:'b'.repeat(40)};
@@ -51,10 +51,9 @@ await context.route('http://127.0.0.1:19999/api/**',async route=>{
 const report={boundary:'real Vue dialog and browser, simulated HTTP',passed:false,checks:[],requests:calls};
 try {
  await page.goto(`http://127.0.0.1:${address.port}/`);
- const choice=page.locator('#delivery-local-windows');await choice.waitFor();
- assert.equal(await choice.inputValue(),'local');await choice.selectOption('github');
- await page.getByText('oooing/rundock · oooing',{exact:false}).waitFor();
- report.checks.push('local build destination independently selectable');
+ const choice=page.locator('#release-sync-policy');await choice.waitFor();
+ assert.equal(await choice.inputValue(),'auto');await choice.selectOption('local');await choice.selectOption('auto');
+ report.checks.push('GitHub auto-detected; destination independent of build location');
  // The existing notes generator fills the confirmation text; wait for submit availability.
  const submit=page.locator('.publish-submit');await submit.waitFor();
  await page.waitForFunction(()=>!document.querySelector('.publish-submit')?.disabled);

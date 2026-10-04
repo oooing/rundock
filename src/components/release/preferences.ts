@@ -12,14 +12,12 @@ export function installPreferences(ctx: ReleaseContext) {
         buildMode?: 'github' | 'local';
         createTag?: boolean;
         versionMode?: ReleaseVersionMode;
-        pushRemote?: boolean;
     } {
         try {
             return JSON.parse(localStorage.getItem(ctx.preferenceKey()) || '{}') as {
                 buildMode?: 'github' | 'local';
                 createTag?: boolean;
                 versionMode?: ReleaseVersionMode;
-                pushRemote?: boolean;
             };
         }
         catch {
@@ -43,7 +41,7 @@ export function installPreferences(ctx: ReleaseContext) {
         const body = ctx.profileBody();
         const appId = ctx.props.app.id;
         const key = ctx.preferenceKey();
-        const preferences = JSON.stringify({ buildMode: ctx.buildMode.value, createTag: ctx.createTag.value, versionMode: ctx.versionMode.value, pushRemote: ctx.pushRemote.value });
+        const preferences = JSON.stringify({ buildMode: ctx.buildMode.value, createTag: ctx.createTag.value, versionMode: ctx.versionMode.value });
         const revision = ctx.preferenceRevision;
         ctx.preferenceStatus.value = 'saving';
         ctx.preferenceError.value = '';
@@ -66,7 +64,9 @@ export function installPreferences(ctx: ReleaseContext) {
         if (ctx.preferenceTimer)
             ctx.saveRememberedPreferences();
         await ctx.preferenceSave;
-        if (ctx.disposed || ctx.preferenceStatus.value === 'error')
+        // Closing dismisses the panel, not a save confirmation. A failed
+        // autosave must not trap the user; it remains an error until dismissal.
+        if (ctx.disposed)
             return;
         ctx.emit('close');
     };
@@ -163,7 +163,7 @@ export function installPreferences(ctx: ReleaseContext) {
         }
     };
     ctx.profileBody = function () {
-        return { buildMode: ctx.buildMode.value, remoteName: ctx.remoteName.value, versionStrategy: ctx.versionStrategy.value, preReleaseCommand: ctx.preReleaseCommand.value, createTag: ctx.createTag.value, versionMode: ctx.versionMode.value };
+        return { buildMode: ctx.buildMode.value, syncPolicy: ctx.syncPolicy.value, remoteName: ctx.remoteName.value, versionStrategy: ctx.versionStrategy.value, preReleaseCommand: ctx.preReleaseCommand.value, createTag: ctx.createTag.value, versionMode: ctx.versionMode.value };
     };
     ctx.saveAndRecheck = async function () {
         ctx.savingProfile.value = true;
@@ -215,8 +215,13 @@ export function installPreferences(ctx: ReleaseContext) {
             for (const phase of ctx.phaseOptions.value)
                 choice[phase.key] = ctx.phaseAllowed(phase.key) && !!target.steps[phase.key];
         }
+        ctx.applySyncPolicy();
     };
     ctx.setTargetPhase = function (targetId: string, phase: ExecutionPhase, checked: boolean) {
+        if (phase === 'publish' && ctx.buildMode.value === 'local') {
+            ctx.changeSyncPolicy(checked ? 'auto' : 'local');
+            return;
+        }
         ctx.editedReleaseOptions.add('targets');
         if (ctx.targetChoices.value[targetId])
             ctx.targetChoices.value[targetId][phase] = checked;

@@ -4,7 +4,7 @@ import "strings"
 
 // Empty is retained for internal callers and historical execution plans. The
 // public create API resolves an omitted mode from the project (default GitHub).
-func validateBuildMode(mode string, plan *executionPlan, push bool) error {
+func validateBuildMode(mode string, plan *executionPlan) error {
 	if mode == "" {
 		return nil
 	}
@@ -17,9 +17,8 @@ func validateBuildMode(mode string, plan *executionPlan, push bool) error {
 	if len(plan.Targets) == 0 {
 		return nil
 	} // plain Git submission
-	if mode == "local" && push && !plan.hasDelivery() {
-		return &Error{Code: "build_mode_mismatch", Message: "本地构建不会上传代码或触发云端构建，请关闭“提交后上传”"}
-	}
+	// Build location does not decide code synchronization. A local build may push
+	// its checked commit/Tag even when there are no declared installable artifacts.
 	for _, target := range plan.Targets {
 		cloud := strings.EqualFold(strings.TrimSpace(target.Runner.Type), "git-push")
 		if mode == "github" && (!cloud || target.Selection.Build || target.Selection.Package || target.Selection.Deploy || !target.Selection.Publish) {

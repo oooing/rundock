@@ -170,6 +170,7 @@ export function installConfiguration(ctx: ReleaseContext) {
         if (!normalized.targets.length)
             ctx.gitOnly.value = true;
         ctx.selectSingleBuildPlatform();
+        ctx.applySyncPolicy();
         ctx.configEditorOpen.value = editing;
     };
     ctx.resetSelection = function (pf: ReleasePreflight) {

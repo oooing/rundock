@@ -14,20 +14,19 @@ func TestBuildModeRejectsMixedExecution(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode, runner string
 		selection          store.ReleaseTargetSelection
-		push, reject       bool
+		reject             bool
 	}{
-		{"cloud", "github", "git-push", store.ReleaseTargetSelection{Publish: true}, true, false},
-		{"cloud cannot build locally", "github", "local", store.ReleaseTargetSelection{Build: true}, true, true},
-		{"local", "local", "local", store.ReleaseTargetSelection{Build: true, Package: true}, false, false},
-		{"local cannot upload", "local", "local", store.ReleaseTargetSelection{Build: true}, true, true},
-		{"local cannot deploy", "local", "local", store.ReleaseTargetSelection{Deploy: true}, false, true},
-		{"local cannot trigger cloud", "local", "git-push", store.ReleaseTargetSelection{Publish: true}, false, true},
-		{"invalid mode", "elsewhere", "local", store.ReleaseTargetSelection{Build: true}, false, true},
+		{"cloud", "github", "git-push", store.ReleaseTargetSelection{Publish: true}, false},
+		{"cloud cannot build locally", "github", "local", store.ReleaseTargetSelection{Build: true}, true},
+		{"local", "local", "local", store.ReleaseTargetSelection{Build: true, Package: true}, false},
+		{"local cannot deploy", "local", "local", store.ReleaseTargetSelection{Deploy: true}, true},
+		{"local cannot trigger cloud", "local", "git-push", store.ReleaseTargetSelection{Publish: true}, true},
+		{"invalid mode", "elsewhere", "local", store.ReleaseTargetSelection{Build: true}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			target := validExecutorTarget()
 			target.Runner.Type = tc.runner
-			err := validateBuildMode(tc.mode, executorPlan(target, tc.selection), tc.push)
+			err := validateBuildMode(tc.mode, executorPlan(target, tc.selection))
 			if (err != nil) != tc.reject {
 				t.Fatalf("unexpected validation: %v", err)
 			}

@@ -10,9 +10,18 @@ import (
 	"time"
 )
 
-// Sync observes a public version endpoint. It never runs deployments and never
-// changes a successful release to failed when the server is still catching up.
+// Sync reconciles an explicitly configured deployment, then observes the public
+// version endpoint. A pending deployment never makes a published artifact fail.
 func (e *Engine) Sync(ctx context.Context, b Batch) error {
+	if b.DeploymentStrategy == "server-pull" && b.DeploymentWorkflow != "" {
+		return failure("deployment_strategy_conflict", "服务器拉取更新不能同时触发云端部署")
+	}
+	if b.DeploymentWorkflow != "" {
+		ready, err := e.deploymentReady(ctx, b)
+		if err != nil || !ready {
+			return err
+		}
+	}
 	if b.SyncURL == "" {
 		return e.Store.UpdateDeliverySync(b.RunID, b.GroupID, "unconfigured", "未配置服务器同步验证")
 	}

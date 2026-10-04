@@ -217,6 +217,8 @@ export interface SelectedReleaseTarget {
 
 export interface ReleaseProfile {
   buildMode?: 'github' | 'local'
+  /** 构建位置与目的地独立；auto 只自动同步精确识别的 GitHub 远端。 */
+  syncPolicy?: 'auto' | 'local'
   appId: string
   remoteName: string
   versionStrategy: VersionStrategy
@@ -261,7 +263,7 @@ export interface ReleaseTargetSteps {
 
 /** 发布目标并不限定平台；kind 可由项目使用任意标识。 */
 export interface ReleaseTarget {
-	 delivery?: { provider: 'github'; repository: string; account: string; prerelease?: boolean; makeLatest?: boolean; workflowPolicy: 'dispatch-only'; sync?: { url: string; jsonPointer: string } }
+	 delivery?: { provider: 'github'; repository: string; account: string; prerelease?: boolean; makeLatest?: boolean; workflowPolicy: 'dispatch-only'; sync?: { url: string; jsonPointer: string }; deployment?: { strategy?: 'workflow' | 'server-pull'; workflow?: string } }
 	 timeouts?: Partial<Record<'check' | 'build' | 'package' | 'publish' | 'deploy', number>>
 	 artifactRules?: Array<{ pattern: string; min: number; max: number }>
 	 verification?: Array<{ name: string; command: string; timeoutSeconds?: number }>

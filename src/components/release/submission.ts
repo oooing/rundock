@@ -87,7 +87,7 @@ export function installSubmission(ctx: ReleaseContext) {
         // Change the visible plan only. The normal submit button remains the final action.
         ctx.gitOnly.value = true;
         ctx.createTag.value = false;
-        ctx.pushRemote.value = false;
+        ctx.changeSyncPolicy('local');
         if (ctx.errorCode.value.startsWith('remote_') || ctx.errorCode.value === 'fetch_failed') {
             ctx.error.value = '';
             ctx.errorCode.value = '';

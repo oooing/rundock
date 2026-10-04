@@ -46,6 +46,7 @@ export function installState(ctx: ReleaseContext) {
     ctx.preReleaseCommand = ref('');
     ctx.createTag = ref(true);
     ctx.pushRemote = ref(true);
+    ctx.syncPolicy = ref<'auto' | 'local'>('auto');
     ctx.buildMode = ref<'github' | 'local'>('github');
     ctx.versionMode = ref<ReleaseVersionMode>('auto');
     ctx.profileReady = ref(false);

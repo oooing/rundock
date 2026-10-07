@@ -131,6 +131,46 @@ test('build health smoke test overrides inherited application data with its isol
   assert.ok(script.indexOf("$psi.EnvironmentVariables['LAUNCHER_DATA_DIR']") < script.indexOf('[Diagnostics.Process]::Start($psi)'))
 })
 
+test('bundler input cleanup preserves original bytes but refuses semantic Cargo changes', () => {
+  for (const semanticChange of [false, true]) {
+    for (const binaryExisted of [false, true]) {
+      const dir = versionFixture(`build-restore-${semanticChange}-${binaryExisted}`, '2.0.27')
+      const cargoPath = path.join(dir, 'src-tauri/Cargo.toml')
+      const original = Buffer.from('[package]\r\nname = "release-test"\r\nversion = "2.0.27"\r\n')
+      writeFileSync(cargoPath, original)
+      const binaryPath = path.join(dir, 'sidecar-fixture.exe')
+      const binary = Buffer.from([0, 255, 254, 127, 42])
+      if (binaryExisted) writeFileSync(binaryPath, binary)
+      const script = path.join(dir, 'restore-fixture.ps1')
+      writeFileSync(script, `
+$ErrorActionPreference = 'Stop'
+. ./scripts/release-build.ps1 -TagName v2.0.27 -ValidateOnly
+$cargo = Join-Path $PWD 'src-tauri/Cargo.toml'
+$binary = Join-Path $PWD 'sidecar-fixture.exe'
+$original = [IO.File]::ReadAllBytes($cargo)
+$exists = Test-Path -LiteralPath $binary
+$previous = if ($exists) { [IO.File]::ReadAllBytes($binary) } else { $null }
+$text = [Text.Encoding]::UTF8.GetString($original).Replace("\`r\`n", "\`n")
+${semanticChange ? "$text = $text.Replace('2.0.27', '9.0.0')" : ''}
+[IO.File]::WriteAllText($cargo, $text, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllBytes($binary, [byte[]]@(1,2,3))
+Restore-BuildInputs $cargo $original $binary $previous $exists
+`)
+      const result = exec(pwsh, ['-NoProfile', '-File', script], dir)
+      if (semanticChange) {
+        assert.notEqual(result.status, 0, result.output)
+        assert.match(result.output, /not just line endings/)
+        assert.match(readFileSync(cargoPath, 'utf8'), /9\.0\.0/)
+      } else {
+        assert.equal(result.status, 0, result.output)
+        assert.deepEqual(readFileSync(cargoPath), original)
+      }
+      assert.equal(existsSync(binaryPath), binaryExisted)
+      if (binaryExisted) assert.deepEqual(readFileSync(binaryPath), binary)
+    }
+  }
+})
+
 test('version validation accepts matching initial, patch, minor and major versions', async t => {
   for (const version of ['2.0.0', '2.0.1', '2.7.13', '3.0.0']) {
     await t.test(version, () => {

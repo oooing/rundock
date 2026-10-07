@@ -71,6 +71,24 @@ function Assert-WorkspaceChild([string]$Path) {
     return $fullPath
 }
 
+function Restore-BuildInputs([string]$CargoPath, [byte[]]$CargoBytes, [string]$BinaryPath, [byte[]]$BinaryBytes, [bool]$BinaryExisted) {
+    # The sidecar path is a temporary bundler input, not a source update.
+    if ($BinaryExisted) {
+        [IO.File]::WriteAllBytes($BinaryPath, $BinaryBytes)
+    } elseif (Test-Path -LiteralPath $BinaryPath -PathType Leaf) {
+        Remove-Item -LiteralPath $BinaryPath -Force
+    }
+    # Tauri normalizes Cargo.toml line endings. Restore ONLY that known rewrite;
+    # a semantic change must still fail the frozen-source guard.
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
+    $before = $utf8.GetString($CargoBytes).Replace("`r`n", "`n")
+    $after = $utf8.GetString([IO.File]::ReadAllBytes($CargoPath)).Replace("`r`n", "`n")
+    if ($before -cne $after) {
+        throw 'Tauri changed Cargo.toml content, not just line endings; refusing to publish.'
+    }
+    [IO.File]::WriteAllBytes($CargoPath, $CargoBytes)
+}
+
 function Read-Versions {
     $package = Get-Content -LiteralPath (Join-Path $codeDirectory 'package.json') -Encoding UTF8 -Raw | ConvertFrom-Json
     $node = Resolve-Tool 'node.exe'
@@ -154,6 +172,10 @@ if (-not $SkipTests) {
 $temporarySidecar = Join-Path $temporaryRoot ("launcher-sidecar-{0}.exe" -f [Guid]::NewGuid().ToString('N'))
 $tauriBinary = Join-Path $codeDirectory 'src-tauri/binaries/launcher-sidecar-x86_64-pc-windows-msvc.exe'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $tauriBinary) | Out-Null
+$cargoPath = Join-Path $codeDirectory 'src-tauri/Cargo.toml'
+$cargoBytes = [IO.File]::ReadAllBytes($cargoPath)
+$binaryExisted = Test-Path -LiteralPath $tauriBinary -PathType Leaf
+$binaryBytes = if ($binaryExisted) { [IO.File]::ReadAllBytes($tauriBinary) } else { $null }
 
 try {
     Write-Host '[release] 编译 Go sidecar'
@@ -219,6 +241,9 @@ try {
 
     Write-Host '[release] 构建 Tauri NSIS + MSI'
     Invoke-Npm @('run', 'tauri', '--', 'build', '--ci', '--bundles', 'nsis,msi', '--', '--locked')
+    if ((Get-FileHash -LiteralPath $tauriBinary -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $temporarySidecar -Algorithm SHA256).Hash) {
+        throw 'The bundler changed the freshly built sidecar; refusing to publish.'
+    }
 
     if (-not $SkipTests) {
         Write-Host '[release] 验证 NSIS 安装/卸载释放后台文件'
@@ -276,7 +301,11 @@ try {
     Write-Host "[release] 完成：$OutputDirectory"
     $checksumLines | ForEach-Object { Write-Host "[release] $_" }
 } finally {
-    if (Test-Path -LiteralPath $temporarySidecar) {
-        Remove-Item -LiteralPath $temporarySidecar -Force
+    try {
+        Restore-BuildInputs $cargoPath $cargoBytes $tauriBinary $binaryBytes $binaryExisted
+    } finally {
+        if (Test-Path -LiteralPath $temporarySidecar) {
+            Remove-Item -LiteralPath $temporarySidecar -Force
+        }
     }
 }

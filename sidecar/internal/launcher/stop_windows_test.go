@@ -76,7 +76,7 @@ func TestStopBatchWaitingForConfirmation(t *testing.T) {
 	for _, entry := range logs {
 		text.WriteString(entry.Text + "\n")
 	}
-	if !strings.Contains(text.String(), "urlDiscoverTimeout=45s grace=1s") || !strings.Contains(text.String(), "[停止] 开始停止") || !strings.Contains(text.String(), "grace=2s") {
+	if strings.Contains(text.String(), "urlDiscoverTimeout=") || !strings.Contains(text.String(), "grace=1s") || !strings.Contains(text.String(), "[停止] 开始停止") || !strings.Contains(text.String(), "grace=2s") {
 		t.Fatalf("start/stop used stale settings:\n%s", text.String())
 	}
 }

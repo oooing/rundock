@@ -8,10 +8,10 @@ import (
 
 // Only resolve a literal first command. Shell expressions and builtins still
 // run in the configured shell; they are never inferred to have passed.
-func missingDirectCheckTool(command string) bool {
+func missingDirectCheckTool(command string) string {
 	s := strings.TrimSpace(command)
 	if s == "" {
-		return false
+		return ""
 	}
 	first := ""
 	if s[0] == '"' || s[0] == '\'' {
@@ -22,19 +22,30 @@ func missingDirectCheckTool(command string) bool {
 		first = strings.Fields(s)[0]
 	}
 	if first == "" || strings.ContainsAny(first, "=$;&|`(){}<>%") {
-		return false
+		return ""
 	}
 	switch strings.ToLower(first) {
 	case "cd", "chdir", "echo", "set", "setlocal", "endlocal", "if", "for", "call", "exit", "dir", "type", "copy", "move", "del", "erase", "ren", "rename", "mkdir", "md", "rmdir", "rd", "start", "rem", "pushd", "popd", "path", "pause", "ver", "verify", "vol", "cls", "color", "title", "chcp", "export", "source", "exec", "test", "true", "false", ":", ".", "[":
-		return false
+		return ""
 	}
 	// Relative executables are checked in the command's configured cwd by the
 	// shell, not relative to the launcher's process directory.
 	if strings.HasPrefix(first, "./") || strings.HasPrefix(first, ".\\") || strings.HasPrefix(first, "../") || strings.HasPrefix(first, "..\\") {
-		return false
+		return ""
 	}
 	_, err := exec.LookPath(first)
-	return err != nil
+	if err != nil {
+		return first
+	}
+	return ""
+}
+
+func missingCheckToolReason(tool string) string {
+	label := redactSensitiveLog(tool)
+	if strings.EqualFold(tool, "pwsh") || strings.EqualFold(tool, "pwsh.exe") {
+		label = "pwsh（PowerShell 7）"
+	}
+	return "找不到检查工具：" + label + "。RunDock 当前进程的 PATH 无法定位该工具，检查尚未执行。"
 }
 
 var privateKeyLog = regexp.MustCompile(`(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`)

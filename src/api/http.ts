@@ -99,6 +99,12 @@ async function startReq(
 }
 
 export const api = {
+  restartPlan: async (id: string, signal?: AbortSignal) => {
+    try { return await req<import('@/utils/restart').RestartPlan>(`/api/apps/${id}/restart-plan`, { method: 'POST', signal }) }
+    catch (error) { if (error instanceof Error && /404|not found/i.test(error.message)) throw new Error(tr('当前后台尚未更新，请退出并用新版启动器打开 RunDock 一次，再使用重启。')); throw error }
+  },
+  confirmRestart: (id: string, confirmationToken: string) => req<StartResponse & { restarting?: boolean; instanceId?: string }>(`/api/apps/${id}/restart-confirm`, { method: 'POST', body: JSON.stringify({ confirmationToken }) }),
+  restartHealth: (signal: AbortSignal) => req<{ instanceId?: string; status?: string; apiVersion?: string }>('/api/health', { signal, cache: 'no-store' }),
   checkRuntime: (id: string) => req<AppView>(`/api/apps/${id}/runtime-check`, { method: 'POST' }),
   discoverStartup: (path: string, signal?: AbortSignal) => req<import('@/types').StartupDiscovery>('/api/import/discover', { method: 'POST', body: JSON.stringify({ path }), signal }),
   // 导入（只读分析）

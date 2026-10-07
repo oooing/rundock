@@ -86,16 +86,50 @@ function versionFixture(name, version, overrides = {}) {
   // The production script resolves version files relative to itself. Copy it into
   // the fixture so regression cases never rewrite the user's working checkout.
   copyFileSync(path.join(root, 'scripts/release-plan.ps1'), path.join(dir, 'scripts/release-plan.ps1'))
-  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: versions['package.json'] }))
+  copyFileSync(path.join(root, 'scripts/release-build.ps1'), path.join(dir, 'scripts/release-build.ps1'))
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    version: versions['package.json'], description: 'RunDock 启动坞，发布与构建测试。',
+  }))
   writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({
     version: versions['package-lock.json'],
     packages: { '': { version: versions['package-lock.json#packages-root'] } },
   }))
-  writeFileSync(path.join(dir, 'src-tauri/tauri.conf.json'), JSON.stringify({ version: versions['src-tauri/tauri.conf.json'] }))
+  writeFileSync(path.join(dir, 'src-tauri/tauri.conf.json'), JSON.stringify({
+    version: versions['src-tauri/tauri.conf.json'], productName: '启动坞',
+  }))
   writeFileSync(path.join(dir, 'src-tauri/Cargo.toml'), `[package]\nname = "release-test"\nversion = "${versions['src-tauri/Cargo.toml']}"\n`)
   copyFileSync(path.join(root, 'src-tauri/Cargo.lock'), path.join(dir, 'src-tauri/Cargo.lock'))
   return dir
 }
+
+test('local build validation reads BOM-less UTF-8 JSON and emits readable Chinese logs', () => {
+  const dir = versionFixture('build-utf8', '2.0.27')
+  const result = exec(pwsh, ['-NoProfile', '-File', path.join(dir, 'scripts/release-build.ps1'),
+    '-TagName', 'v2.0.27', '-ValidateOnly'], dir)
+  assert.equal(result.status, 0, result.output)
+  assert.match(result.output, /版本校验通过：v2\.0\.27/)
+  assert.equal(result.output.includes('\uFFFD'), false, result.output)
+  assert.equal(existsSync(path.join(dir, '.tmp')), false)
+  assert.equal(checked('git', ['tag', '--list'], dir), '')
+})
+
+test('local build validation still rejects invalid JSON and version mismatches', () => {
+  for (const invalidJson of [false, true]) {
+    const dir = versionFixture(`build-invalid-${invalidJson}`, '2.0.27', { 'package.json': '2.0.26' })
+    if (invalidJson) writeFileSync(path.join(dir, 'package.json'), '{"description":"启动坞", broken}')
+    const result = exec(pwsh, ['-NoProfile', '-File', path.join(dir, 'scripts/release-build.ps1'),
+      '-TagName', 'v2.0.27', '-ValidateOnly'], dir)
+    assert.notEqual(result.status, 0, result.output)
+    assert.match(result.output, invalidJson ? /ConvertFrom-Json/ : /版本不一致/)
+    assert.equal(existsSync(path.join(dir, '.tmp')), false)
+  }
+})
+
+test('build health smoke test overrides inherited application data with its isolated directory', () => {
+  const script = readFileSync(path.join(root, 'scripts/release-build.ps1'), 'utf8')
+  assert.match(script, /\$psi\.EnvironmentVariables\['LAUNCHER_DATA_DIR'\] = \$smokeData/)
+  assert.ok(script.indexOf("$psi.EnvironmentVariables['LAUNCHER_DATA_DIR']") < script.indexOf('[Diagnostics.Process]::Start($psi)'))
+})
 
 test('version validation accepts matching initial, patch, minor and major versions', async t => {
   for (const version of ['2.0.0', '2.0.1', '2.7.13', '3.0.0']) {

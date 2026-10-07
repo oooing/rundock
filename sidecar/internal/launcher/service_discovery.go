@@ -18,9 +18,6 @@ import (
 //
 // 与旧逻辑区别：不再只盯第一个端口，而是发现全部端口，每个独立判定，综合出项目状态。
 func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, col *logbus.Collector, readiness *startupReadiness) {
-	readiness.deadline = rt.StartedAt.Add(readiness.timeout)
-	deadline := time.NewTimer(time.Until(readiness.deadline)) // 显式就绪声明的等待时限
-	defer deadline.Stop()
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	rejectedPorts := map[int]int{}             // port -> PID；同一进程的非服务端口不重复探测
@@ -34,7 +31,7 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 	}
 
 	if col != nil {
-		col.Info(fmt.Sprintf("[监测] 开始服务发现 tick=3s discoverTimeout=%s", readiness.timeout))
+		col.Info("[监测] 开始服务发现 tick=3s")
 		if len(declaredRoles) > 0 {
 			parts := make([]string, 0, len(declaredRoles))
 			for p, r := range declaredRoles {
@@ -60,11 +57,6 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 			l.discoverServices(appID, rt, before, manualRoles, declaredRoles, hintedPorts, rejectedPorts, col, scanRound)
 			// 对所有 service 做健康检查，并综合出项目状态
 			l.recheckAndAggregate(appID, rt, col, checks, time.Now(), readiness)
-		case <-deadline.C:
-			l.recheckAndAggregate(appID, rt, col, checks, time.Now(), readiness)
-			if col != nil && len(readiness.urls) == 0 && rt.GetStatus() == app.StatusStarting {
-				col.Warn("[监测] 尚未发现健康服务，继续后台扫描；可用 rundock:ready 明确就绪条件")
-			}
 		}
 	}
 }

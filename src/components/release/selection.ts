@@ -15,7 +15,7 @@ export function installSelection(ctx: ReleaseContext) {
     ctx.newFiles = computed(() => ctx.preflight.value?.changes.filter(ctx.isAddedFile) || []);
     ctx.allFilesSelected = computed(() => !!ctx.preflight.value?.changes.length && ctx.preflight.value.changes.every((file) => ctx.selected.value[file.path]));
     ctx.configuredTargets = computed(() => ctx.releaseConfig.value?.targets || []);
-    ctx.chosenTargets = computed(() => ctx.configuredTargets.value
+    ctx.chosenTargets = computed(() => ctx.gitOnly.value ? [] : ctx.configuredTargets.value
         .filter((target) => ctx.targetChoices.value[target.id]?.selected && ctx.targetAvailable(target))
         .map((target) => ({ target, choice: ctx.targetChoices.value[target.id] })));
     ctx.selectedTargets = computed<SelectedReleaseTarget[]>(() => ctx.gitOnly.value ? [] : ctx.chosenTargets.value
@@ -58,19 +58,6 @@ export function installSelection(ctx: ReleaseContext) {
     ctx.isTagPushTarget = function (target: ReleaseTarget) {
         return target.runner.type.trim().toLowerCase() === 'git-push'
             && ((target.steps.publish || '').trim().toLowerCase() === 'tag-push' || (target.steps.publish || '').startsWith('workflow-dispatch:'));
-    };
-    ctx.canResumeFailedRun = function (run: ReleaseRun) {
-        if (!ctx.canRetryRun(run))
-            return false;
-        const oldLocalStage = ['building_targets', 'target_check', 'target_build', 'target_package'].includes(run.stage);
-        if (!oldLocalStage)
-            return true;
-        return !run.selectedTargets.some((selection) => {
-            if (!selection.build && !selection.package)
-                return false;
-            const currentTarget = ctx.configuredTargets.value.find((target) => target.id === selection.targetId);
-            return !!currentTarget && ctx.isTagPushTarget(currentTarget);
-        });
     };
     ctx.plannedVersions = computed<PlannedVersion[]>(() => {
         const pf = ctx.preflight.value;
@@ -177,11 +164,14 @@ export function installSelection(ctx: ReleaseContext) {
         && (ctx.preflight.value.canRelease || ctx.preflight.value.blockingIssues.length > 0));
     ctx.remoteMissing = computed(() => ctx.pushRemote.value && !!ctx.preflight.value && !ctx.preflight.value.remotes.includes(ctx.remoteName.value));
     ctx.canSubmit = computed(() => {
+        // Current-version packaging uses the isolated local-build API, never release/commit.
+        if (ctx.localBuildOnly.value || (ctx.syncPolicy.value === 'auto' && !ctx.syncRepository.value))
+            return false;
         if (ctx.preferenceStatus.value === 'saving' || ctx.preferenceStatus.value === 'error')
             return false;
         if (ctx.safetySettingsDirty.value)
             return false;
-        if (ctx.unstaging.value || ctx.configFileDirty.value || ctx.configEditorOpen.value || ctx.configSaving.value)
+        if (ctx.unstaging.value || ctx.configFileDirty.value || ctx.configEditorOpen.value || ctx.configSaving.value || ctx.configScanning.value)
             return false;
         if (!ctx.localChecksPassed.value || ctx.remoteMissing.value || ctx.savingProfile.value || ctx.preflightStale.value || ctx.activeRun.value || ctx.publishing.value || !ctx.commitMessage.value.trim())
             return false;

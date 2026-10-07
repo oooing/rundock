@@ -47,13 +47,16 @@ export function installState(ctx: ReleaseContext) {
     ctx.createTag = ref(true);
     ctx.pushRemote = ref(true);
     ctx.syncPolicy = ref<'auto' | 'local'>('auto');
+    ctx.localSyncPolicy = ref<'auto' | 'local'>('auto');
+    // Local packaging is non-mutating unless the user explicitly opts into a new version.
+    ctx.localVersionMode = ref<'current' | 'upgrade'>('current');
     ctx.buildMode = ref<'github' | 'local'>('github');
     ctx.versionMode = ref<ReleaseVersionMode>('auto');
     ctx.profileReady = ref(false);
     ctx.preferenceStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
     ctx.preferenceError = ref('');
     ctx.preferenceRevision = 0;
-    ctx.editedReleaseOptions = new Set<'targets' | 'build' | 'tag' | 'version' | 'push'>();
+    ctx.editedReleaseOptions = new Set<'targets' | 'build' | 'tag' | 'version' | 'push' | 'intent' | 'local-version' | 'checks'>();
     ctx.releaseConfig = ref<ReleaseConfig | null>(null);
     ctx.configDraft = ref<ReleaseConfig | null>(null);
     ctx.configBeforeEdit = ref<ReleaseConfig | null>(null);

@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { tr } from '@/i18n'
 import { useLocalBuilds } from '@/composables/useLocalBuilds'
 import type { LocalBuildRun, LocalBuildTarget } from '@/types/localBuild'
 import CopyErrorButton from './CopyErrorButton.vue'
 import LocalBuildArtifacts from './LocalBuildArtifacts.vue'
+import ReleaseProgressOverview from './ReleaseProgressOverview.vue'
 
-const props = defineProps<{ appId: string; appName: string }>()
-const emit = defineEmits<{ (event: 'settings'): void }>()
+const props = defineProps<{ appId: string; appName: string; embedded?: boolean }>()
+const emit = defineEmits<{ (event: 'settings'): void; (event: 'preferences'): void }>()
 const { preparation, recentRuns, selectedIds, view, pendingRequest, loading, submitting,
   cancelling, readingRun, error, runError, actionError, cancelError, active, existingActive, busy, canStart,
-  load, start, cancel, showRun, readTaskStatus, newBuild } = useLocalBuilds(() => props.appId)
+  load, start, cancel, showRun, readTaskStatus, newBuild, selectionError, selectionRevision, saveSelection } = useLocalBuilds(() => props.appId)
+watch(selectionRevision, () => emit('preferences'))
 const hasAvailableTargets = computed(() => preparation.value?.targets.some(target => target.available))
 const statusLabel = (status: LocalBuildRun['status']) => tr({ queued: '等待构建', running: '构建中',
   succeeded: '本地构建完成', failed: '本地构建失败', cancelled: '已取消构建' }[status])
@@ -40,14 +42,15 @@ function dateOf(value: string) {
 <template>
   <section id="release-panel-local-build" class="local-build-panel">
     <div class="local-build-intro">
-      <h3>{{ tr('构建当前版本') }}</h3>
-      <p>{{ tr('在本机生成安装包，不提交代码、不创建版本、不上传。') }}</p>
+      <h3 v-if="!embedded">{{ tr('构建当前版本') }}</h3>
+      <p v-if="!embedded">{{ tr('在本机生成安装包，不提交代码、不创建版本、不上传。') }}</p>
       <details class="local-build-help"><summary>{{ tr('操作说明') }}</summary><p>{{ tr('选目标 → 开始构建 → 打开产物目录/下载') }}</p><p>{{ tr('使用项目配置的命令；所需依赖仍需安装。源代码在隔离快照中构建。') }}</p></details>
     </div>
 
     <p v-if="loading && !view" class="muted" role="status">{{ tr('正在读取本地构建配置…') }}</p>
     <div v-if="error" class="local-error" role="alert"><p>{{ error }}</p><button v-if="!pendingRequest" type="button" :disabled="loading || busy" @click="load(true)">{{ tr('重新读取配置') }}</button><button v-if="!preparation" type="button" @click="emit('settings')">{{ tr('配置构建目标') }}</button></div>
     <p v-if="actionError" class="local-error" role="alert">{{ actionError }}</p>
+    <p v-if="selectionError" class="local-error" role="alert">{{ selectionError }} <button type="button" @click="saveSelection">{{ tr('重试保存') }}</button></p>
     <div v-if="pendingRequest" class="pending-request" role="status">
       <p>{{ submitting ? tr('正在创建构建任务…') : tr('上次请求结果待确认；确认后不会重复创建任务。') }}</p>
       <button v-if="!submitting" type="button" :disabled="busy" @click="start(true)">{{ tr('确认任务状态') }}</button>
@@ -70,12 +73,13 @@ function dateOf(value: string) {
         <div v-else class="local-build-actions">
           <p v-if="existingActive" class="muted">{{ tr('已有本地构建任务正在运行，请打开任务查看。') }}<button type="button" @click="showRun(existingActive)">{{ tr('查看任务') }}</button></p>
           <p v-else-if="!selectedIds.length" class="muted">{{ tr('请选择至少一个构建目标。') }}</p>
-          <button type="submit" class="primary local-build-start" :disabled="!canStart" :aria-busy="submitting">{{ tr('开始构建') }}</button>
+          <button type="submit" class="primary local-build-start" :disabled="!canStart" :aria-busy="submitting">{{ embedded ? tr('仅本地打包') : tr('开始构建') }}</button>
         </div>
       </form>
     </template>
 
     <section v-if="view" class="local-build-run">
+      <ReleaseProgressOverview class="local-progress-sticky" :run="view.run" :artifacts="view.artifacts" local-only />
       <div class="run-heading"><h4 class="local-build-status" :class="view.run.status" role="status" aria-live="polite">{{ statusLabel(view.run.status) }}</h4><button v-if="active" type="button" :disabled="busy" :aria-busy="cancelling" @click="cancel()">{{ cancelling ? tr('正在取消…') : tr('取消构建') }}</button><button v-else type="button" :disabled="busy || readingRun" @click="newBuild">{{ tr('新建构建') }}</button></div>
       <p v-if="active" class="muted">{{ stageLabel(view.run.stage) }} · {{ tr('关闭此窗口不会停止构建；可从最近任务取回结果。') }}</p>
       <p v-else-if="view.run.status === 'succeeded'" class="muted">{{ tr('产物已验证并保存在本机，可打开目录或下载。') }}</p>
@@ -101,6 +105,7 @@ function dateOf(value: string) {
 
 <style scoped>
 .local-build-panel { display: grid; gap: 1rem; outline-offset: -2px; }
+.local-progress-sticky { position: sticky; top: -18px; z-index: 2; margin-bottom: 12px; border: 1px solid var(--border, #39424e); border-left: 4px solid var(--status-color); border-radius: 8px; }
 .local-build-intro h3 { margin: 0; font-size: 1.1rem; }
 .local-build-intro > p { margin-block: .5rem; line-height: 1.6; }
 .local-build-help, .muted, .local-build-target p { color: var(--text-muted, #b4bdc9); font-size: .875rem; }

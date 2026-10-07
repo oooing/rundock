@@ -1,10 +1,26 @@
 import { tr } from '@/i18n';
 import type { ReleaseTarget, ReleaseVersionGroup } from '@/types';
-import { isAlternateBuildTarget } from '@/utils/releasePresentation';
+import { isAlternateBuildTarget, releaseTargetLabel } from '@/utils/releasePresentation';
 import { computed } from 'vue';
 import type { ExecutionPhase, ProductPlatform, ProductPlatformId, ReleaseContext } from './context';
 // All values belong to this dialog's view model; external data enters through api.
 export function installPlatforms(ctx: ReleaseContext) {
+    // Pair only unambiguous cloud/local counterparts. This is presentation metadata,
+    // never a change to a runner's actual OS constraints or executed target IDs.
+    function alternateTarget(target: ReleaseTarget) {
+        const matches = ctx.configuredTargets.value.filter(other => isAlternateBuildTarget(target, other));
+        if (matches.length !== 1)
+            return undefined;
+        return ctx.configuredTargets.value.filter(other => isAlternateBuildTarget(matches[0], other)).length === 1 ? matches[0] : undefined;
+    }
+    function customPlatformId(target: ReleaseTarget): ProductPlatformId {
+        const alternate = alternateTarget(target);
+        return `custom:${alternate ? [target.id, alternate.id].sort()[0] : target.id}`;
+    }
+    function platformName(targets: ReleaseTarget[], fallback: string) {
+        const names = [...new Set(targets.map(target => releaseTargetLabel(target.name)).filter(Boolean))];
+        return names.length === 1 ? names[0] : fallback;
+    }
     ctx.configConfidence = computed(() => Math.round((ctx.releaseConfig.value?.confidence || 0) * 100));
     ctx.standardPlatforms = computed<Array<{
         id: Exclude<ProductPlatformId, `custom:${string}`>;
@@ -24,7 +40,12 @@ export function installPlatforms(ctx: ReleaseContext) {
         if (kind === 'node')
             return null;
         if (kind === 'desktop') {
-            const systems = target.runner.os.map((value) => value.trim().toLowerCase()).filter(Boolean);
+            let systems = target.runner.os.map((value) => value.trim().toLowerCase()).filter(Boolean);
+            if ((!systems.length || systems.every(os => os === 'any')) && target.runner.type === 'git-push') {
+                const alternate = alternateTarget(target);
+                if (alternate)
+                    systems = alternate.runner.os.map(value => value.trim().toLowerCase()).filter(Boolean);
+            }
             if (systems.length === 1 && systems[0] === 'darwin')
                 return 'mac';
             if (systems.length === 1 && systems[0] === 'windows')
@@ -35,7 +56,7 @@ export function installPlatforms(ctx: ReleaseContext) {
                 if (clue.includes('windows'))
                     return 'pc';
             }
-            return `custom:${target.id}`;
+            return customPlatformId(target);
         }
         if (kind === 'web')
             return 'web';
@@ -47,7 +68,7 @@ export function installPlatforms(ctx: ReleaseContext) {
             return 'mac';
         if (['windows', 'pc'].includes(kind) || clue.includes('windows'))
             return 'pc';
-        return `custom:${target.id}`;
+        return customPlatformId(target);
     };
     ctx.versionGroupDisplayName = function (group: ReleaseVersionGroup) {
         if (group.name && !/^版本\s+\d+\.\d+\.\d+$/.test(group.name) && group.name !== '产品版本')
@@ -81,7 +102,7 @@ export function installPlatforms(ctx: ReleaseContext) {
         const cards: ProductPlatform[] = ctx.standardPlatforms.value.map((platform) => ({
             ...platform,
             // Keep configured combined targets (e.g. Web + backend) visible by name.
-            name: grouped.get(platform.id)?.length === 1 ? grouped.get(platform.id)![0].name || platform.name : platform.name,
+            name: platformName(grouped.get(platform.id) || [], platform.name),
             targets: grouped.get(platform.id) || [],
             configured: !!grouped.get(platform.id)?.length,
         }));
@@ -90,7 +111,7 @@ export function installPlatforms(ctx: ReleaseContext) {
                 continue;
             const target = targets[0];
             const isDesktop = target?.kind.trim().toLowerCase() === 'desktop';
-            cards.push({ id, name: target?.name || (isDesktop ? tr("桌面端") : tr("自定义目标")), icon: isDesktop ? '💻' : '🧩', description: tr("自定义发布目标"), targets, configured: true });
+            cards.push({ id, name: platformName(targets, isDesktop ? tr("桌面端") : tr("自定义目标")), icon: isDesktop ? '💻' : '🧩', description: tr("自定义发布目标"), targets, configured: true });
         }
         // Unconfigured placeholders are not selectable build targets. Keep configured
         // but unavailable targets so their mode/environment explanation remains visible.
@@ -103,14 +124,24 @@ export function installPlatforms(ctx: ReleaseContext) {
     };
     ctx.selectedDelivery = computed(() => ctx.chosenTargets.value.some(({ target, choice }) => !!target.delivery && choice.publish));
     ctx.changeBuildMode = function (mode: 'github' | 'local') {
+        if (ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value)
+            return;
         ctx.editedReleaseOptions.add('build');
         if (ctx.buildMode.value === mode)
             return;
         const platforms = new Set(ctx.productPlatforms.value.filter(ctx.platformHasSelection).map(platform => platform.id));
+        ctx.captureTargetPreferences();
+        if (ctx.releaseIntent.value === 'formal') {
+            if (ctx.buildMode.value === 'local') ctx.localSyncPolicy.value = ctx.syncPolicy.value;
+            ctx.editedReleaseOptions.add('push');
+            // Cloud builds publish remotely; returning to local restores its
+            // separate post-build choice, including a previous no-upload choice.
+            ctx.syncPolicy.value = mode === 'github' ? 'auto' : ctx.localSyncPolicy.value;
+        }
         ctx.buildMode.value = mode;
         for (const target of ctx.configuredTargets.value)
             ctx.targetChoices.value[target.id] = ctx.defaultTargetChoice(target);
-        if (!ctx.gitOnly.value)
+        if (!ctx.restoreTargetPreferences() && !ctx.gitOnly.value)
             for (const platform of ctx.productPlatforms.value) {
                 if (platforms.has(platform.id))
                     ctx.togglePlatform(platform, true);

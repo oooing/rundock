@@ -7,7 +7,9 @@ export function installLifecycle(ctx: ReleaseContext) {
         ctx.gitOnly.value = ctx.releaseIntent.value === 'save-progress';
         ctx.createTag.value = ctx.releaseIntent.value === 'formal';
     }, { flush: 'sync' });
-    watch([ctx.buildMode, ctx.createTag, ctx.versionMode, ctx.syncPolicy], ctx.rememberPreferences);
+    watch([ctx.buildMode, ctx.createTag, ctx.versionMode, ctx.syncPolicy, ctx.releaseIntent, ctx.localVersionMode, ctx.checksEnabled,
+        () => JSON.stringify(Object.entries(ctx.targetChoices.value).map(([id, choice]) => [id, choice.selected]))], ctx.rememberPreferences);
+    watch(ctx.checksEnabled, () => { if (ctx.profileReady.value) ctx.editedReleaseOptions.add('checks'); }, { flush: 'sync' });
     watch(ctx.gitOnly, ctx.applySyncPolicy);
     watch(ctx.pushRemote, () => {
         if (ctx.errorCode.value.startsWith('remote_') || ctx.errorCode.value === 'fetch_failed') {

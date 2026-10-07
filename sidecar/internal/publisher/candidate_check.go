@@ -278,8 +278,8 @@ func runProfileCommand(ctx context.Context, candidateRoot string, profile releas
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if missingDirectCheckTool(profile.Command) {
-		return CheckUnverified, "", "必需检查工具不可用"
+	if tool := missingDirectCheckTool(profile.Command); tool != "" {
+		return CheckUnverified, "", missingCheckToolReason(tool)
 	}
 	cwd := candidateRoot
 	if strings.TrimSpace(profile.WorkingDir) != "" {
@@ -299,7 +299,7 @@ func runProfileCommand(ctx context.Context, candidateRoot string, profile releas
 	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
 		if isMissingTool(err) {
-			return CheckUnverified, "", "必需检查工具不可用"
+			return CheckUnverified, "", missingCheckToolReason(name)
 		}
 		return CheckFailed, "", "无法启动检查命令"
 	}

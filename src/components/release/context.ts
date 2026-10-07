@@ -1,7 +1,9 @@
 import type { AppView, ReleaseCandidate, ReleaseCandidateRequest, ReleaseCheckProfile, ReleaseConfig, ReleaseFileChange, ReleaseFileClassification, ReleaseFileRule, ReleaseLog, ReleaseManualDecision, ReleasePreflight, ReleaseRun, ReleaseTarget, ReleaseVersionGroup, ReleaseVersionMode, SelectedReleaseTarget, VersionStrategy } from '@/types';
 import type { ReleaseArtifact, ReleaseAutomationStatus, ReleaseTargetRun } from '@/types/releaseExecution';
 import type { ComputedRef, Ref } from 'vue';
+import type { ReleasePreferences } from '@/utils/releasePreferences';
 export type ExecutionPhase = 'build' | 'package' | 'publish' | 'deploy';
+export type ReleaseBuildPlan = 'cloud' | 'local-publish' | 'local-current' | 'local-upgrade';
 export type TargetChoice = {
     selected: boolean;
 } & Record<ExecutionPhase, boolean>;
@@ -101,7 +103,7 @@ export interface ReleaseContext {
     preferenceStatus: Ref<'idle' | 'saving' | 'saved' | 'error'>;
     preferenceError: Ref<string, string>;
     preferenceRevision: number;
-    editedReleaseOptions: Set<"build" | "push" | "targets" | "tag" | "version">;
+    editedReleaseOptions: Set<"build" | "push" | "targets" | "tag" | "version" | "intent" | "local-version" | "checks">;
     releaseConfig: Ref<ReleaseConfig | null>;
     configDraft: Ref<ReleaseConfig | null>;
     configBeforeEdit: Ref<ReleaseConfig | null>;
@@ -158,7 +160,6 @@ export interface ReleaseContext {
     selectedVersionFiles: ComputedRef<string[]>;
     visibleCurrentVersions: ComputedRef<Record<string, string>>;
     isTagPushTarget: (target: ReleaseTarget) => boolean;
-    canResumeFailedRun: (run: ReleaseRun) => boolean;
     plannedVersions: ComputedRef<PlannedVersion[]>;
     versionForGroup: (group: ReleaseVersionGroup) => PlannedVersion;
     platformVersions: (platform: ProductPlatform) => PlannedVersion[];
@@ -234,11 +235,17 @@ export interface ReleaseContext {
     phaseAllowed: (phase: ExecutionPhase) => boolean;
     selectedDelivery: ComputedRef<boolean>;
     syncPolicy: Ref<'auto' | 'local'>;
+    localSyncPolicy: Ref<'auto' | 'local'>;
+    localVersionMode: Ref<'current' | 'upgrade'>;
+    localBuildOnly: ComputedRef<boolean>;
+    changeLocalVersionMode: (mode: 'current' | 'upgrade') => void;
     syncRepository: ComputedRef<string>;
     syncDeliveryMissing: ComputedRef<boolean>;
     syncNotice: ComputedRef<string>;
     applySyncPolicy: () => void;
     changeSyncPolicy: (policy: 'auto' | 'local') => void;
+    buildPlan: ComputedRef<ReleaseBuildPlan>;
+    changeBuildPlan: (plan: ReleaseBuildPlan) => void;
     changeBuildMode: (mode: "github" | "local") => void;
     configuredActions: (target: ReleaseTarget) => {
         key: ExecutionPhase;
@@ -290,11 +297,9 @@ export interface ReleaseContext {
     selectAllFiles: (checked: boolean) => void;
     normalizePreflight: (pf: ReleasePreflight) => ReleasePreflight;
     preferenceKey: () => string;
-    readLocalPreferences: () => {
-        buildMode?: 'github' | 'local';
-        createTag?: boolean;
-        versionMode?: ReleaseVersionMode;
-    };
+    readLocalPreferences: () => ReleasePreferences;
+    captureTargetPreferences: () => void;
+    restoreTargetPreferences: () => boolean;
     rememberPreferences: () => void;
     saveRememberedPreferences: () => Promise<void>;
     closeModal: () => Promise<void>;
@@ -306,7 +311,7 @@ export interface ReleaseContext {
     onReleaseNotesInput: () => void;
     applyPreflight: (raw: ReleasePreflight, initial?: boolean, resetFiles?: boolean) => void;
     unstageFiles: () => Promise<void>;
-    load: (resumeFailedRun?: boolean) => Promise<void>;
+    load: () => Promise<void>;
     profileBody: () => {
         buildMode: "github" | "local";
         syncPolicy: "auto" | "local";

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { localBuildApi } from '@/api/localBuild'
 import { tr } from '@/i18n'
+import { artifactSizeSummary, formatArtifactSize } from '@/utils/releaseProgress'
 import type { BuildArtifactMode, LocalBuildArtifact } from '@/types/localBuild'
 
 const props = withDefaults(defineProps<{ runId: string; artifacts: LocalBuildArtifact[]; outputDirectory: string; mode?: BuildArtifactMode }>(), { mode: 'local' })
@@ -26,9 +27,6 @@ onBeforeUnmount(() => {
   for (const [url, timer] of urls) { clearTimeout(timer); URL.revokeObjectURL(url) }
   urls.clear()
 })
-function size(bytes: number) {
-  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
-}
 async function act(artifact?: LocalBuildArtifact) {
   if (busy.value || (artifact && !artifact.available)) return
   const current = ++revision
@@ -73,13 +71,14 @@ async function act(artifact?: LocalBuildArtifact) {
   <section class="local-build-artifacts">
     <div class="artifact-heading">
       <h4>{{ tr('构建产物') }}</h4>
+      <span v-if="artifacts.length" class="artifact-total">{{ tr('总大小：{0}', [artifactSizeSummary(artifacts).size]) }}<template v-if="artifactSizeSummary(artifacts).missing"> · {{ tr('{0} 个大小未知', [artifactSizeSummary(artifacts).missing]) }}</template></span>
       <button v-if="outputDirectory" type="button" :disabled="!!busy || !directoryReady" :aria-busy="busy === 'directory'" @click="act()">{{ busy === 'directory' ? tr('正在打开…') : tr('打开产物目录') }}</button>
     </div>
     <p v-if="outputDirectory" class="saved-path"><span>{{ tr('已保存到') }}</span><code>{{ outputDirectory }}</code></p>
     <p v-if="outputDirectory && !directoryReady" class="muted">{{ tr('有产物不可用，无法打开目录；可用文件仍可下载。') }}</p>
     <ul v-if="artifacts.length" class="artifact-list">
       <li v-for="artifact in artifacts" :key="artifact.id || `${artifact.targetId}-${artifact.name}`">
-        <div><strong>{{ artifact.name }}</strong><small>{{ size(artifact.sizeBytes) }}<template v-if="artifact.sha256"> · SHA-256 {{ artifact.sha256.slice(0, 12) }}</template></small><p v-if="!artifact.available" class="artifact-error">{{ tr(artifact.error || '产物不可用，请重新构建。') }}</p></div>
+        <div><strong>{{ artifact.name }}</strong><small>{{ formatArtifactSize(artifact.sizeBytes) }}<template v-if="artifact.sha256"> · SHA-256 {{ artifact.sha256.slice(0, 12) }}</template></small><p v-if="!artifact.available" class="artifact-error">{{ tr(artifact.error || '产物不可用，请重新构建。') }}</p></div>
         <button v-if="artifact.available" type="button" :disabled="!!busy" :aria-busy="busy === artifact.id" :aria-label="tr('下载 {0}', [artifact.name])" @click="act(artifact)">{{ busy === artifact.id ? tr('下载中…') : tr('下载') }}</button>
       </li>
     </ul>
@@ -92,6 +91,7 @@ async function act(artifact?: LocalBuildArtifact) {
 <style scoped>
 .local-build-artifacts { border-block-start: 1px solid var(--border, #39424e); padding-block-start: .85rem; }
 .artifact-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.artifact-total { color: var(--text-muted, #b4bdc9); font-size: .8rem; margin-inline-end: auto; }
 h4 { margin: 0; font-size: 1rem; }
 .saved-path { display: grid; gap: .35rem; margin-block: .7rem; font-size: .875rem; }
 code { overflow-wrap: anywhere; color: var(--text, #e5e9ef); }

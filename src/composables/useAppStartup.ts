@@ -8,13 +8,10 @@ import type { AppView, StartupIssue } from '@/types'
 export function useAppStartup(app: ComputedRef<AppView>) {
   const appsStore = useAppsStore()
   const runtimeLocked = computed(() => !!app.value.runtimeCheck && app.value.runtimeCheck.state !== 'clear')
-  const recheckingRuntime = ref(false)
-  const runtimeError = ref('')
   const startupIssue = ref<StartupIssue | null>(null)
   const checkingIssue = ref(false)
   const resolvingPorts = ref(false)
   let issueRequest = 0
-  let runtimeRequest = 0
   let disposed = false
   const operationBusy = computed(() => !!appsStore.operationBusy[app.value.id] || resolvingPorts.value)
   const portIssue = computed(() => startupIssue.value?.code === 'port_in_use')
@@ -47,26 +44,10 @@ export function useAppStartup(app: ComputedRef<AppView>) {
       if (!disposed && request === issueRequest) checkingIssue.value = false
     }
   }
-  async function recheckRuntime() {
-    if (recheckingRuntime.value || operationBusy.value) return
-    const request = ++runtimeRequest
-    const id = app.value.id
-    recheckingRuntime.value = true
-    runtimeError.value = ''
-    try { await appsStore.checkRuntime(id) }
-    catch (error: unknown) {
-      if (!disposed && request === runtimeRequest && app.value.id === id) runtimeError.value = error instanceof Error ? error.message : String(error)
-    } finally {
-      if (!disposed && request === runtimeRequest) recheckingRuntime.value = false
-    }
-  }
   watch(() => [app.value.id, app.value.status, app.value.runId], checkStartupIssue, { immediate: true })
   watch(() => app.value.id, () => {
-    runtimeRequest++
-    recheckingRuntime.value = false
-    runtimeError.value = ''
     resolvingPorts.value = false
   })
-  onBeforeUnmount(() => { disposed = true; issueRequest++; runtimeRequest++ })
-  return { runtimeLocked, recheckingRuntime, runtimeError, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel, recheckRuntime, checkStartupIssue }
+  onBeforeUnmount(() => { disposed = true; issueRequest++ })
+  return { runtimeLocked, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel }
 }

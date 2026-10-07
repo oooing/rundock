@@ -5,8 +5,29 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import { parse } from '@vue/compiler-sfc'
 const result=await build({entryPoints:['src/utils/releaseIssues.ts'],bundle:true,write:false,format:'esm',platform:'node'})
-const {groupSensitiveFindings,hasReleaseIssues}=await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
+const {groupSensitiveFindings,hasReleaseIssues,releaseCheckPresentation}=await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 const candidate=overrides=>({sensitiveFindings:[],dependencyFindings:[],checkResults:[],status:'ready',...overrides})
+
+test('check errors expose the actual reason and distinguish unavailable tools from failed tests',()=>{
+ const old=releaseCheckPresentation({status:'unverified',reason:'必需检查工具不可用'});
+ assert.equal(old.label,'无法开始检查');assert.match(old.suggestion,/PATH/);assert.doesNotMatch(old.suggestion,/pwsh/);
+ const missing=releaseCheckPresentation({status:'unverified',reason:'找不到检查工具：pwsh（PowerShell 7）。'});
+ assert.equal(missing.label,'无法开始检查');assert.match(missing.reason,/pwsh/);assert.match(missing.suggestion,/PowerShell 7/);
+ const failed=releaseCheckPresentation({status:'failed',reason:'检查超时',log:'operation timed out'});
+ assert.equal(failed.label,'检查失败');assert.equal(failed.reason,'检查超时');
+ assert.equal(releaseCheckPresentation({status:'blocked',reason:'环境不可用'}).label,'检查被阻止');
+ assert.equal(releaseCheckPresentation({status:'unverified',reason:'版本文件被修改'}).label,'尚未验证');
+ assert.match(releaseCheckPresentation({status:'failed'}).reason,/没有执行日志/);
+ assert.match(releaseCheckPresentation({status:'failed',log:'specific failure'}).reason,/查看执行日志/);
+})
+
+test('failure reason and next action are outside collapsed log details',()=>{
+ const template=parse(readFileSync('src/components/ReleaseCheckIssues.vue','utf8')).descriptor.template.content;
+ assert.match(template,/<p class="check-reason">/);
+ assert.match(template,/<p class="check-suggestion">/);
+ assert.ok(template.indexOf('class="check-reason"')<template.indexOf('<details v-if="check.log"'));
+ assert.doesNotMatch(template,/请根据详情修复/);
+})
 test('group by file without losing individual finding identities',()=>{
  const findings=[{path:'a',fingerprint:'one'},{path:'b',fingerprint:'two'},{path:'a',fingerprint:'three'}]
  const groups=groupSensitiveFindings(findings)

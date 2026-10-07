@@ -28,7 +28,9 @@
 | 你改了 | 怎么办 |
 |---|---|
 | 前端 `.vue` / `.ts` | **不用重启**，浏览器刷新即可（Vite 热更新） |
-| Go 后端 `.go` | 确认允许关闭该实例的子项目后，退出开发窗口 → 重新双击 `dev.bat` |
+| Go 后端 `.go` | 新版启动器下，停止托管项目并等待构建/发布完成，再点 RunDock 卡片的「重启」；旧启动器首次升级需退出开发窗口 → 重新双击 `dev.bat` |
+
+新版「重启 RunDock」仅让开发后台退出并重新编译启动，Vite 和当前页面保持打开。确认窗口显示重新连接进度；后台普通崩溃不会被当成重启请求自动重试。重启后的后台日志为 `backend-1.stdout.log` / `backend-1.stderr.log` 等；编译失败查看同一启动器日志。
 
 端口被其他实例占用或被 Windows 保留时，脚本会报错并停止，不会自动结束占用程序。
 
@@ -120,6 +122,14 @@ RunDock 的 Windows 目标使用 `runner.type=git-push`、`steps.publish=tag-pus
 ---
 
 ## 常见问题
+
+**Q：安装 RunDock 必须安装 PowerShell 7 吗？**
+
+- 不需要。Windows `.ps1` 启动适配器默认使用系统自带的 `powershell.exe`；只有显式设置 `LAUNCHER_PWSH` 才覆盖启动宿主。
+- 发布配置中的 `pwsh` 是项目自己声明的运行依赖，RunDock 不会偷偷替换为 PowerShell 5.1，也不会借用 Codex 的私有运行时。缺少工具时阻止检查并报告原因。
+- 我们维护的 Windows 本地发布脚本以 PowerShell 5.1 为兼容基线；版本、签名、产物完整性检查保留，原生工具用独立参数调用。`-ExecutionPolicy Bypass` 仅限子进程，不改系统策略，组织策略优先。
+- Node、JDK、Android SDK、Rust 等仍是具体项目本地构建的依赖，不是安装 RunDock 的前提。不要把“本地预检查通过”当作“安装包已构建/服务器已部署”。
+- 依据：[Windows 默认包含 PowerShell 5.1](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_windows_powershell_5.1?view=powershell-5.1)、[5.1 与 7 的运行时差异](https://learn.microsoft.com/en-us/powershell/scripting/whats-new/differences-from-windows-powershell)、[Go 的独立进程执行](https://pkg.go.dev/os/exec)。这是本项目零额外 Shell 安装需求下的兼容策略，不代表所有第三方脚本都兼容 5.1。
 
 **Q：双击 dev.bat 没反应 / 后端起不来？**
 

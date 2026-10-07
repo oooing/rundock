@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 
-export const runtimeLimits = { grace_period_seconds: 120, url_discover_timeout_seconds: 600 } as const
+export const runtimeLimits = { grace_period_seconds: 120 } as const
 export type RuntimeKey = keyof typeof runtimeLimits
 type SettingsAPI = { getSettings(): Promise<Record<string, string>>; setSettings(values: Record<string, string>): Promise<unknown> }
 
@@ -8,14 +8,13 @@ type SettingsAPI = { getSettings(): Promise<Record<string, string>>; setSettings
 export function createAutoSettings(api: SettingsAPI) {
   const state = reactive({
     loaded: false, loadError: '',
-    values: { grace_period_seconds: '8', url_discover_timeout_seconds: '30' },
+    values: { grace_period_seconds: '8' },
     fields: {
       grace_period_seconds: { status: 'idle', error: '' },
-      url_discover_timeout_seconds: { status: 'idle', error: '' },
     },
   })
   let queue = Promise.resolve()
-  const revision = { grace_period_seconds: 0, url_discover_timeout_seconds: 0 }
+  const revision = { grace_period_seconds: 0 }
   async function load() {
     state.loadError = ''
     try {

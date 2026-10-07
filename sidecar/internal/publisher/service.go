@@ -22,6 +22,7 @@ type Service struct {
 	targetRunner     commandRunner
 	mu               sync.Mutex
 	active           map[string]bool
+	restarting       bool // Serializes restart with all local build/check/release reservations.
 	diagnostics      *diagnostics.Service
 	candidatesMu     sync.Mutex
 	candidates       map[string]*releaseCandidate

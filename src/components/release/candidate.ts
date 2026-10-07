@@ -77,9 +77,11 @@ export function installCandidate(ctx: ReleaseContext) {
         void ctx.inspectCandidate().finally(() => { ctx.resolvingReview.value = false; });
     };
     ctx.changeReleaseIntent = function (intent: 'formal' | 'save-progress') {
-        if (ctx.checkingCandidate.value)
+        if (ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || ctx.releaseIntent.value === intent)
             return;
         const enteringRelease = intent === 'formal' && ctx.releaseIntent.value !== intent;
+        ctx.captureTargetPreferences();
+        ctx.editedReleaseOptions.add('intent');
         ctx.editedReleaseOptions.add('targets');
         ctx.editedReleaseOptions.add('tag');
         ctx.editedReleaseOptions.add('version');
@@ -93,14 +95,13 @@ export function installCandidate(ctx: ReleaseContext) {
             ctx.gitOnly.value = true;
             ctx.createTag.value = false;
             ctx.applySyncPolicy();
-            for (const choice of Object.values(ctx.targetChoices.value))
-                choice.selected = false;
+            // Keep the release draft for switching back. gitOnly removes these
+            // targets from validation and the execution request, not from memory.
         }
         else {
-            ctx.versionMode.value = 'auto';
             ctx.createTag.value = true;
         }
-        if (enteringRelease)
+        if (enteringRelease && !ctx.restoreTargetPreferences())
             ctx.selectSingleBuildPlatform(true);
         ctx.applySyncPolicy();
         ctx.setDefaultCommitMessage();

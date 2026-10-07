@@ -2,6 +2,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { localBuildApi, LocalBuildError } from '@/api/localBuild'
 import { tr } from '@/i18n'
 import type { LocalBuildPreparation, LocalBuildRequest, LocalBuildRun, LocalBuildView } from '@/types/localBuild'
+import { readReleasePreferences, writeReleasePreferences } from '@/utils/releasePreferences'
 
 const isRunning = (run: LocalBuildRun) => run.status === 'queued' || run.status === 'running'
 const messageOf = (error: unknown) => error instanceof Error ? error.message : tr('操作失败，请重试')
@@ -10,6 +11,18 @@ export function useLocalBuilds(appId: () => string) {
   const preparation = ref<LocalBuildPreparation | null>(null)
   const recentRuns = ref<LocalBuildRun[]>([])
   const selectedIds = ref<string[]>([])
+  const selectionError = ref('')
+  const selectionRevision = ref(0)
+  let selectionLoaded = false
+  function saveSelection() {
+    if (!selectionLoaded) return
+    try {
+      writeReleasePreferences(appId(), { packagingTargets: [...selectedIds.value] })
+      selectionError.value = ''
+      selectionRevision.value++
+    } catch { selectionError.value = tr('无法记住构建端选择，请重试。') }
+  }
+  watch(selectedIds, saveSelection, { deep: true, flush: 'sync' })
   const view = ref<LocalBuildView | null>(null)
   const pendingRequest = ref<LocalBuildRequest | null>(null)
   const loading = ref(false)
@@ -85,8 +98,12 @@ export function useLocalBuilds(appId: () => string) {
         : preparation.value ? '' : tr('本地构建配置暂不可用，请在设置中检查。')
       recentRuns.value = data.recentRuns || []
       const available = preparation.value?.targets.filter(target => target.available) || []
-      selectedIds.value = selectedIds.value.filter(id => available.some(target => target.id === id))
-      if (!selectedIds.value.length && available.length) selectedIds.value = [available[0].id]
+      const remembered = selectionLoaded ? selectedIds.value : readReleasePreferences(id).packagingTargets
+      selectionLoaded = false
+      // An explicit empty selection or removed target must not select a different target silently.
+      selectedIds.value = remembered === undefined ? available.slice(0, 1).map(target => target.id)
+        : remembered.filter(id => available.some(target => target.id === id))
+      selectionLoaded = true
       if (restore && !pendingRequest.value) {
         const run = recentRuns.value.find(isRunning)
           || recentRuns.value.find(run => run.id === readStorage('view'))
@@ -232,7 +249,9 @@ export function useLocalBuilds(appId: () => string) {
     resetRequests()
     preparation.value = null
     recentRuns.value = []
+    selectionLoaded = false
     selectedIds.value = []
+    selectionError.value = ''
     view.value = null
     pendingRequest.value = restorePending()
     submitting.value = false
@@ -244,7 +263,7 @@ export function useLocalBuilds(appId: () => string) {
     void load(true)
   }, { immediate: true, flush: 'sync' })
   onBeforeUnmount(() => { disposed = true; resetRequests() })
-  return { preparation, recentRuns, selectedIds, view, pendingRequest, loading, submitting,
+  return { preparation, recentRuns, selectedIds, selectionError, selectionRevision, saveSelection, view, pendingRequest, loading, submitting,
     cancelling, readingRun, error, runError, actionError, cancelError, active, existingActive, busy, canStart,
     load, start, cancel, showRun, refreshRun, readTaskStatus, newBuild }
 }

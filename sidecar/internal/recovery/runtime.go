@@ -172,7 +172,7 @@ func InspectRuntime(a *store.App, known []*store.AppService, snapshot RuntimeSna
 	sort.Ints(result.ReservedPorts)
 	switch {
 	case result.PID != 0:
-		result.State, result.Message = "running", "检测到项目进程仍在运行，已恢复状态；当前仅监测，未接管启停和实时日志。"
+		result.State, result.Message = "running", "项目在外部启动，当前仅监测；可点击重启核验进程归属，确认后重新启动。"
 	case len(result.Conflicts) > 0:
 		result.State, result.Message = "conflict", "项目端口已被其他程序占用，可查看占用程序并处理。"
 	case len(result.ReservedPorts) > 0:

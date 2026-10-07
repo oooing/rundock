@@ -14,6 +14,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":       "ok",
 		"apiVersion":   "2",
 		"capabilities": "release-v2",
+		"instanceId":   s.instanceID,
 	})
 }
 
@@ -152,6 +153,10 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleStop(w, r, id)
 	case "restart":
 		s.handleRestart(w, r, id)
+	case "restart-plan":
+		s.handleRestartPlan(w, r, id)
+	case "restart-confirm":
+		s.handleRestartConfirm(w, r, id)
 	case "logs":
 		s.handleLogs(w, r, id)
 	case "open-url":

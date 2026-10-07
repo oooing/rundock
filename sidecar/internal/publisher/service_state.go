@@ -1,6 +1,7 @@
 package publisher
 
 import (
+	"fmt"
 	"github.com/launcher-sidecar/internal/delivery"
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/store"
@@ -13,14 +14,14 @@ func (s *Service) repositoryBusy(repo string) bool {
 	key := gitPathKey(canonicalRepositoryPath(repo))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active[key]
+	return s.restarting || s.active[key]
 }
 
 func (s *Service) reserve(repo string) bool {
 	key := gitPathKey(canonicalRepositoryPath(repo))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active[key] {
+	if s.restarting || s.active[key] {
 		return false
 	}
 	unlock, err := delivery.Lock(s.store.ReleaseDataDir(), "repo:"+key)
@@ -33,6 +34,18 @@ func (s *Service) reserve(repo string) bool {
 	s.fileLocks[key] = unlock
 	s.active[key] = true
 	return true
+}
+
+// BeginRestart excludes new commands until the caller finishes stopping/starting.
+// The same mutex is used by reserve, so a check then restart cannot race a build.
+func (s *Service) BeginRestart() (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restarting || len(s.active) != 0 {
+		return nil, fmt.Errorf("有构建、发布或发布检查正在执行，请等待结束后再重启；未停止任何项目")
+	}
+	s.restarting = true
+	return func() { s.mu.Lock(); s.restarting = false; s.mu.Unlock() }, nil
 }
 
 func (s *Service) release(repo string) {

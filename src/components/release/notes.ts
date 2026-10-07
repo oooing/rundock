@@ -80,17 +80,25 @@ export function installNotes(ctx: ReleaseContext) {
         ctx.preReleaseCommand.value = pf.profile?.preReleaseCommand || '';
         if (initial) {
             const remembered = ctx.readLocalPreferences();
-            if (!ctx.editedReleaseOptions.has('push'))
-                ctx.syncPolicy.value = pf.profile?.syncPolicy === 'local' ? 'local' : 'auto';
+            if (!ctx.editedReleaseOptions.has('intent') && remembered.releaseIntent)
+                ctx.releaseIntent.value = remembered.releaseIntent;
+            if (!ctx.editedReleaseOptions.has('local-version') && remembered.localVersionMode)
+                ctx.localVersionMode.value = remembered.localVersionMode;
+            if (!ctx.editedReleaseOptions.has('checks') && remembered.checksEnabled !== undefined)
+                ctx.checksEnabled.value = remembered.checksEnabled;
+            if (!ctx.editedReleaseOptions.has('push')) {
+                ctx.syncPolicy.value = pf.profile?.syncPolicy || remembered.syncPolicy || 'auto';
+                ctx.localSyncPolicy.value = remembered.localSyncPolicy || ctx.syncPolicy.value;
+            }
             const keepTargets = ctx.editedReleaseOptions.has('targets') || ctx.editedReleaseOptions.has('build');
             if (!keepTargets) {
                 ctx.buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github';
                 for (const target of ctx.configuredTargets.value)
                     ctx.targetChoices.value[target.id] = ctx.defaultTargetChoice(target);
-                ctx.selectSingleBuildPlatform();
+                if (!ctx.restoreTargetPreferences()) ctx.selectSingleBuildPlatform();
             }
             if (!ctx.editedReleaseOptions.has('tag'))
-                ctx.createTag.value = remembered.createTag ?? (typeof pf.profile?.createTag === 'boolean' ? pf.profile.createTag : true);
+                ctx.createTag.value = ctx.releaseIntent.value === 'formal';
             if (!ctx.editedReleaseOptions.has('version'))
                 ctx.versionMode.value = remembered.versionMode || (pf.profile?.versionMode === 'manual' || pf.profile?.versionMode === 'auto' ? pf.profile.versionMode : 'auto');
         }

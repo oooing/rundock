@@ -249,6 +249,12 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, id string
 	if s.rejectUnmanagedControl(w, id) {
 		return
 	}
+	resume, err := s.Publisher.BeginRestart()
+	if err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
+	defer resume()
 	// 重启预检：必须在停止旧进程之前完成（确认/同步不通过就不动旧进程）。
 	outcome, err := s.runPreflight(w, id, body.ConfirmedScriptHash)
 	if err != nil || outcome == outcomeAbort {

@@ -166,7 +166,7 @@ fn spawn_sidecar(data_dir: &PathBuf) -> std::io::Result<Child> {
         .append(true)
         .open(&log_path)?;
     let mut cmd = Command::new(exe);
-    cmd.args(["-port", SIDECAR_PORT])
+    cmd.args(["--supervise", "-port", SIDECAR_PORT])
         .env("LAUNCHER_DATA_DIR", data_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))

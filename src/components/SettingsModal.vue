@@ -21,7 +21,6 @@ const runtime = createAutoSettings(api)
 const settings = runtime.state
 const runtimeLabels = {
   grace_period_seconds: '停止等待时间（秒）',
-  url_discover_timeout_seconds: '启动检测超时（秒）',
 }
 const appVersion = ref('0.1.0')
 
@@ -120,7 +119,7 @@ onUnmounted(() => {
               <label :for="key">{{ tr(runtimeLabels[key]) }}</label>
               <input :id="key" type="number" min="1" :max="max" step="1" :value="settings.values[key]" :disabled="!settings.loaded" :aria-invalid="['error', 'invalid'].includes(settings.fields[key].status)" :aria-describedby="`${key}-hint`" class="num" @input="runtime.set(key, ($event.target as HTMLInputElement).value)" />
             </div>
-            <p :id="`${key}-hint`" class="desc">{{ key === 'grace_period_seconds' ? tr('给项目正常退出的时间，超时后强制停止。') : tr('等待启动服务就绪的时间，较慢的项目可适当增加。') }}</p>
+            <p :id="`${key}-hint`" class="desc">{{ tr('给项目正常退出的时间，超时后强制停止。') }}</p>
             <p v-if="settings.fields[key].status === 'invalid'" class="setting-error" role="alert">{{ tr('请输入 1–{0} 的整数', [max]) }}</p>
             <p v-else-if="settings.fields[key].status === 'error'" class="setting-error" role="alert">{{ tr('未保存：') }}{{ settings.fields[key].error }} <button @click="runtime.set(key, settings.values[key])">{{ tr('重试') }}</button></p>
             <p v-else-if="settings.fields[key].status !== 'idle'" class="field-status" role="status">{{ settings.fields[key].status === 'saving' ? tr('保存中…') : tr('已自动保存') }}</p>

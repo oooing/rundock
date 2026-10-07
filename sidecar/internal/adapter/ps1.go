@@ -18,7 +18,8 @@ func (PS1Adapter) Detect(_, entryFile string) int {
 }
 
 func (PS1Adapter) Prepare(in *PrepareInput) (*PrepareOutput, error) {
-	// 优先 pwsh（PowerShell 7+），缺失则回退 Windows PowerShell。
+	// 默认使用 Windows 自带 PowerShell；仅显式 LAUNCHER_PWSH 配置可覆盖。
+	// 不自动把项目声明的 pwsh 命令替换为不兼容的 Windows PowerShell。
 	ps := "powershell.exe"
 	if p := osLookupEnv("LAUNCHER_PWSH"); p != "" {
 		ps = p

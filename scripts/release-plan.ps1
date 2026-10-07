@@ -64,9 +64,9 @@ function Assert-Boolean($Value, [string]$Location) {
 
 function Assert-LauncherVersion([string]$ExpectedVersion) {
     $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-    $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
-    $tauri = Get-Content -LiteralPath (Join-Path $root 'src-tauri/tauri.conf.json') -Raw | ConvertFrom-Json
-    $cargoText = Get-Content -LiteralPath (Join-Path $root 'src-tauri/Cargo.toml') -Raw
+    $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Encoding UTF8 -Raw | ConvertFrom-Json
+    $tauri = Get-Content -LiteralPath (Join-Path $root 'src-tauri/tauri.conf.json') -Encoding UTF8 -Raw | ConvertFrom-Json
+    $cargoText = Get-Content -LiteralPath (Join-Path $root 'src-tauri/Cargo.toml') -Encoding UTF8 -Raw
     $cargoMatch = [regex]::Match($cargoText, '(?ms)^\[package\].*?^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
     if (-not $cargoMatch.Success) {
         Fail-Plan '无法读取 src-tauri/Cargo.toml 的 package.version'

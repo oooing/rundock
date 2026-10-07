@@ -6,6 +6,7 @@ import { useConnectionStore } from '@/stores/connection'
 import { useAppsStore } from '@/stores/apps'
 import { useGroupsStore } from '@/stores/groups'
 import GroupSidebar from '@/components/GroupSidebar.vue'
+import GroupHeading from '@/components/GroupHeading.vue'
 import UiIcon from '@/components/UiIcon.vue'
 import Dashboard from '@/views/Dashboard.vue'
 import ConfirmCard from '@/components/ConfirmCard.vue'
@@ -38,13 +39,14 @@ const groups = useGroupsStore()
 const selectedGroupId = ref<string | null>(null)
 const dropGroupId = ref<string | null>(null)
 const movingGroups = ref<Record<string, boolean>>({})
-const groupPickerOpen = ref(false)
-const groupPickerRef = ref<HTMLElement | null>(null)
-watch(groupPickerOpen, async (open) => {
-  if (open) { await nextTick(); groupPickerRef.value?.focus() }
-})
+const selectedGroup = computed(() => groups.groups.find(g => g.id === selectedGroupId.value))
 const selectedGroupName = computed(() => groups.groups.find(g => g.id === selectedGroupId.value)?.name || tr('未分组'))
-const availableGroupApps = computed(() => apps.apps.filter(a => (a.groupId || '') !== selectedGroupId.value))
+async function renameGroup(id: string, name: string) { await groups.update(id, { name }) }
+async function removeGroup(id: string) {
+  await groups.remove(id)
+  for (const app of apps.apps) if (app.groupId === id) app.groupId = ''
+  if (selectedGroupId.value === id) selectedGroupId.value = ''
+}
 const showSettings = ref(false)
 const showHelp = ref(false)
 const cloudAlerts = ref<CloudBuildStatus[]>([])
@@ -383,7 +385,8 @@ onUnmounted(() => {
     <main class="main">
       <header class="topbar">
         <div class="title">
-          <h1 :title="selectedGroupId === null ? tr('全部应用') : selectedGroupName">{{ selectedGroupId === null ? tr('全部应用') : selectedGroupName }}</h1>
+          <GroupHeading v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup" :rename="renameGroup" :remove="removeGroup" />
+          <h1 v-else :title="selectedGroupId === null ? tr('全部应用') : selectedGroupName">{{ selectedGroupId === null ? tr('全部应用') : selectedGroupName }}</h1>
           <p class="workspace-summary" aria-live="polite">{{ apps.loading && !apps.apps.length ? tr('正在加载项目…') : tr('{0} 个项目 · {1} 个运行中', [appsInGroup.length, runningCount]) }}</p>
         </div>
         <div class="header-actions">
@@ -397,9 +400,6 @@ onUnmounted(() => {
         @dragleave.prevent="dragOver = false"
         @drop.prevent="onContentDrop"
       >
-        <div v-if="selectedGroupId !== null" class="workspace-toolbar">
-          <button class="add-to-group" @click="groupPickerOpen = true" :disabled="!conn.sidecarReady"><UiIcon name="plus" :size="14" />{{ tr('添加项目') }}</button>
-        </div>
         <Dashboard
           :cloud-alerts="cloudAlerts"
           @cloud-details="cloudDetailsAppId = $event"
@@ -468,18 +468,6 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-    <div v-if="groupPickerOpen && selectedGroupId !== null" class="group-picker-overlay" @click.self="groupPickerOpen = false">
-      <section ref="groupPickerRef" class="group-picker" role="dialog" aria-modal="true" tabindex="-1" :aria-label="tr('添加项目')" @keydown.esc="groupPickerOpen = false">
-        <header><h2>{{ tr('添加到“{0}”', [selectedGroupName]) }}</h2><button :aria-label="tr('关闭')" @click="groupPickerOpen = false">✕</button></header>
-        <div class="group-picker-list">
-          <p v-if="!availableGroupApps.length">{{ tr('没有可添加的项目') }}</p>
-          <div v-for="app in availableGroupApps" :key="app.id" class="group-picker-row">
-            <span><strong>{{ app.name }}</strong><small>{{ groups.groups.find(g => g.id === app.groupId)?.name || tr('未分组') }}</small></span>
-            <button :disabled="movingGroups[app.id]" @click="handleMoveGroup(app.id, selectedGroupId!)">{{ movingGroups[app.id] ? tr('保存中…') : tr('添加') }}</button>
-          </div>
-        </div>
-      </section>
-    </div>
     <!-- 置顶通知栏：成功/失败/提示 集中显示在顶部中央，可堆叠、可手动关闭 -->
     <CloudBuildAlerts :app="cloudDetailsApp" @update="cloudAlerts = $event" @open="cloudDetailsAppId = $event" @close="cloudDetailsAppId = null" />
     <div class="toast-stack">
@@ -501,15 +489,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.group-picker-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 20px; }
-.group-picker { width: min(520px,100%); max-height: 85vh; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev); }
-.group-picker header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; }
-.group-picker h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
-.group-picker-list { padding: 0 16px 16px; overflow: auto; }
-.group-picker-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
-.group-picker-row span { min-width: 0; overflow-wrap: anywhere; }
-.group-picker-row small { display: block; margin-top: 4px; color: var(--text-faint); }
-.group-picker-row button { flex-shrink: 0; }
 .layout {
   --workspace-header-top: 28px;
   --workspace-header-bottom: 20px;
@@ -541,8 +520,6 @@ onUnmounted(() => {
 .path-input { flex: 1; min-width: 0; width: 0; font-size: 12.5px; }
 .path-input.incomplete { border-color: var(--amber); }
 .import-description { margin: 10px 0 0; font-size: 12px; color: var(--text-faint); }
-.workspace-toolbar { display: flex; align-items: center; gap: 14px; min-width: 0; margin-bottom: 20px; }
-.add-to-group { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
 @media (max-width: 1100px) {
   .layout { --workspace-header-top: 22px; --workspace-header-bottom: 18px; }
   .topbar { padding-inline: 20px; gap: 16px; }
@@ -551,7 +528,6 @@ onUnmounted(() => {
 }
 @media (max-width: 800px) {
   .layout { --workspace-title-line: 28px; }
-  .workspace-toolbar { flex-wrap: wrap; }
   .title h1 { font-size: 21px; }
 }
 @media (max-width: 600px) {

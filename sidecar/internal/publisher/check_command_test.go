@@ -3,10 +3,38 @@ package publisher
 import (
 	"context"
 	"github.com/launcher-sidecar/internal/releaseconfig"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestMissingCheckToolIdentifiesExecutableNotArguments(t *testing.T) {
+	name := "rundock_intentionally_missing_check_tool_9281"
+	for _, command := range []string{name + " --private-value=do-not-echo", `"` + name + `" --private-value=do-not-echo`} {
+		status, log, reason := runProfileCommand(context.Background(), t.TempDir(), releaseconfig.CheckProfile{Command: command})
+		if status != CheckUnverified || log != "" || !strings.Contains(reason, name) || !strings.Contains(reason, "PATH") || strings.Contains(reason, "do-not-echo") {
+			t.Fatalf("status=%s reason=%s log=%s", status, reason, log)
+		}
+	}
+	for _, command := range []string{"", "echo hello", "./missing-local-tool", `..\missing-local-tool`, "${SHELL} command"} {
+		if got := missingDirectCheckTool(command); got != "" {
+			t.Fatalf("shell or relative command was resolved against the wrong cwd: %q", got)
+		}
+	}
+}
+
+func TestPwshAvailabilityUsesLauncherEnvironment(t *testing.T) {
+	// Models Windows-launched RunDock: the agent's private runtime is not on PATH.
+	t.Setenv("PATH", t.TempDir())
+	if _, err := exec.LookPath("pwsh"); err == nil {
+		t.Skip("pwsh is resolved independently of PATH")
+	}
+	status, log, reason := runProfileCommand(context.Background(), t.TempDir(), releaseconfig.CheckProfile{Command: "pwsh -NoProfile -File check.ps1"})
+	if status != CheckUnverified || log != "" || !strings.Contains(reason, "PowerShell 7") || !strings.Contains(reason, "pwsh") {
+		t.Fatalf("status=%s reason=%s log=%s", status, reason, log)
+	}
+}
 
 func TestCheckCommandQuotedExitAndOutput(t *testing.T) {
 	for _, tc := range []struct{ command, status, log string }{

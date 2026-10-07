@@ -11,25 +11,22 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/launcher-sidecar/internal/app"
-	"github.com/launcher-sidecar/internal/logbus"
 	"github.com/launcher-sidecar/internal/store"
 )
 
-// Optional entry-script comments: rundock:open/ready <local URL> and
-// rundock:timeout <seconds>. Guessed port hints are never requirements.
+// Optional entry-script comments: rundock:open/ready <local URL>.
+// Legacy rundock:timeout is accepted but no longer limits startup readiness.
+// Guessed port hints are never requirements.
 type startupReadiness struct {
-	openURL  string
-	urls     map[int]string
-	timeout  time.Duration
-	deadline time.Time
-	reached  bool
+	openURL string
+	urls    map[int]string
+	reached bool
 }
 
-func readStartupReadiness(path string, timeout time.Duration) (*startupReadiness, error) {
-	r := &startupReadiness{urls: map[int]string{}, timeout: timeout}
+func readStartupReadiness(path string) (*startupReadiness, error) {
+	r := &startupReadiness{urls: map[int]string{}}
 	if path == "" {
 		return r, nil
 	}
@@ -98,7 +95,8 @@ func readStartupReadiness(path string, timeout time.Duration) (*startupReadiness
 			if err != nil || secs < 1 || secs > 600 {
 				return nil, fmt.Errorf("rundock:timeout 需要 1–600 秒")
 			}
-			r.timeout = time.Duration(secs) * time.Second
+			// Validate old declarations for compatibility, but elapsed time alone
+			// cannot distinguish a slow build from a failed startup.
 		default:
 			return nil, fmt.Errorf("未知启动声明: %s", fields[0])
 		}
@@ -133,7 +131,7 @@ func (r *startupReadiness) pending(svcs []*store.AppService) []string {
 }
 
 // Return true while explicit startup requirements block normal aggregation.
-func (l *Launcher) waitForReadiness(rt *app.Runtime, r *startupReadiness, svcs []*store.AppService, now time.Time, col *logbus.Collector) bool {
+func (l *Launcher) waitForReadiness(rt *app.Runtime, r *startupReadiness, svcs []*store.AppService) bool {
 	if r == nil || len(r.urls) == 0 {
 		return false
 	}
@@ -146,17 +144,10 @@ func (l *Launcher) waitForReadiness(rt *app.Runtime, r *startupReadiness, svcs [
 	if r.reached {
 		return false
 	}
-	status := app.StatusStarting
-	if !now.Before(r.deadline) {
-		status = app.StatusDegraded
-	}
-	if rt.GetStatus() != status {
-		if col != nil {
-			if status == app.StatusDegraded {
-				col.Warn("[就绪] 启动等待超时，尚未就绪: " + strings.Join(pending, ", ") + "；继续检查，可自动恢复")
-			}
-		}
-		l.Manager.Transition(rt, status, nil)
+	// Keep waiting until the declared services are ready. Process exit/stop is
+	// handled by the lifecycle watcher, not inferred from a wall-clock limit.
+	if rt.GetStatus() != app.StatusStarting {
+		l.Manager.Transition(rt, app.StatusStarting, nil)
 	}
 	return true
 }

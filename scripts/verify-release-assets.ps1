@@ -12,7 +12,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$' -or $Commit -notmatch '^[a-f0-9]{40,64}
     throw 'Expected a frozen version and commit.'
 }
 $root = (Resolve-Path -LiteralPath $Directory).Path
-$manifest = Get-Content -LiteralPath (Join-Path $root 'release-assets.json') -Raw | ConvertFrom-Json
+$manifest = Get-Content -LiteralPath (Join-Path $root 'release-assets.json') -Encoding UTF8 -Raw | ConvertFrom-Json
 if ($manifest.version -cne $Version -or $manifest.commit -cne $Commit) { throw 'Build manifest does not match the frozen source.' }
 $expected = @("RunDock_${Version}_x64-setup.exe", "RunDock_${Version}_x64_en-US.msi")
 $checksums = @()
@@ -33,7 +33,7 @@ foreach ($name in $expected) {
     }
     $checksums += "$hash  $name"
 }
-$actual = (Get-Content -LiteralPath (Join-Path $root 'SHA256SUMS.txt') | Where-Object { $_.Trim() } | Sort-Object) -join "`n"
+$actual = (Get-Content -LiteralPath (Join-Path $root 'SHA256SUMS.txt') -Encoding UTF8 | Where-Object { $_.Trim() } | Sort-Object) -join "`n"
 if ($actual -cne (($checksums | Sort-Object) -join "`n")) { throw 'SHA256SUMS does not match the complete installer set.' }
 $exeVersion = (Get-Item -LiteralPath (Join-Path $root $expected[0])).VersionInfo.ProductVersion
 if ($exeVersion -notmatch ('^' + [regex]::Escape($Version) + '(\.0)?$')) { throw "Installer embedded version differs: $exeVersion" }

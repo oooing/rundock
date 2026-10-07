@@ -19,9 +19,17 @@ let disposed = false
 let planAbort: AbortController | null = null
 let expiryTimer: ReturnType<typeof setTimeout> | undefined
 const busy = computed(() => loading.value || confirming.value)
-const canConfirm = computed(() => resolution.value?.state === 'conflict' && resolution.value.canResolve
-  && !!resolution.value.confirmationToken && !expired.value && resolution.value.conflicts.length > 0
+const hasAction = computed(() => !error.value && resolution.value?.state === 'conflict' && resolution.value.canResolve
+  && !!resolution.value.confirmationToken && resolution.value.conflicts.length > 0
   && resolution.value.conflicts.every(conflict => conflict.canClose))
+const canConfirm = computed(() => hasAction.value && !expired.value)
+const canRenew = computed(() => hasAction.value && expired.value)
+const resolutionMessage = computed(() => {
+  const result = resolution.value
+  if (result?.state === 'conflict' && !result.canResolve
+    && result.message === '端口被其他程序占用，确认关闭后将自动启动项目') return tr('无法安全关闭占用程序。')
+  return tr(result?.message || '')
+})
 watch(busy, value => emit('busy', value))
 
 function invalidate() {
@@ -112,8 +120,8 @@ defineExpose({ open })
     <h2 :id="`port-resolution-title-${appId}`">{{ tr('处理端口占用') }}</h2>
     <p class="project">{{ appName }}</p>
     <p v-if="loading" role="status">{{ tr('正在检查占用程序…') }}</p>
-    <template v-else-if="resolution">
-      <p class="message">{{ tr(resolution.message) }}</p>
+    <template v-else-if="resolution && !error">
+      <p class="message">{{ resolutionMessage }}</p>
       <ul v-if="resolution.conflicts.length" class="programs">
         <li v-for="conflict in resolution.conflicts" :key="`${conflict.port}-${conflict.pid}`">
           <strong>{{ conflict.name || tr('未知进程') }}</strong>
@@ -124,12 +132,12 @@ defineExpose({ open })
       </ul>
       <p v-if="resolution.reservedPorts.length" class="mono">{{ tr('系统保留端口') }}: {{ resolution.reservedPorts.join('、') }}</p>
       <p v-if="canConfirm" class="warning">{{ tr('关闭程序可能丢失未保存内容。') }}</p>
-      <p v-if="expired" role="status">{{ tr('占用信息已过期，请重新检查。') }}</p>
+      <p v-if="canRenew" role="status">{{ tr('确认信息已过期。更新后需再次确认，才会执行操作。') }}</p>
     </template>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <footer>
-      <button type="button" autofocus :disabled="confirming" @click="close">{{ confirming ? tr('处理中…') : tr('取消') }}</button>
-      <button v-if="!loading && (error || expired || (resolution?.state === 'conflict' && !canConfirm))" type="button" :disabled="confirming" @click="refresh">{{ tr('重新检查') }}</button>
+      <button type="button" autofocus :disabled="confirming" @click="close">{{ confirming ? tr('处理中…') : loading || canConfirm || canRenew || (!error && resolution?.state === 'clear') ? tr('取消') : tr('关闭') }}</button>
+      <button v-if="!busy && canRenew" type="button" @click="refresh">{{ tr('更新确认信息') }}</button>
       <button v-if="canConfirm" type="button" class="primary" :disabled="busy" @click="confirm">{{ tr('关闭并启动') }}</button>
       <button v-else-if="resolution?.state === 'clear' && !error" type="button" class="primary" :disabled="busy" @click="start">{{ tr('启动项目') }}</button>
     </footer>

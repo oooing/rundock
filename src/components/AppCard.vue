@@ -12,6 +12,7 @@ import { cardServices, cardServiceDetails } from '@/utils/cardServices'
 import { useAppStartup } from '@/composables/useAppStartup'
 import AppStartupNotice from './AppStartupNotice.vue'
 import PortResolutionDialog from './PortResolutionDialog.vue'
+import RestartDialog from './RestartDialog.vue'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
 const emit = defineEmits<{
@@ -29,8 +30,9 @@ const emit = defineEmits<{
 
 const a = computed(() => props.app)
 const appsStore = useAppsStore()
-const { runtimeLocked, recheckingRuntime, runtimeError, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel, recheckRuntime, checkStartupIssue } = useAppStartup(a)
+const { runtimeLocked, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel } = useAppStartup(a)
 const portDialog = ref<InstanceType<typeof PortResolutionDialog> | null>(null)
+const restartDialog = ref<InstanceType<typeof RestartDialog> | null>(null)
 const canInspectConflict = computed(() => a.value.runtimeCheck?.state === 'conflict' || (!runtimeLocked.value && a.value.status === 'failed' && portIssue.value))
 const buildFailures = computed(() => (props.cloudAlerts || []).filter(alert => alert.state === 'failed'))
 const buildBadge = computed(() => buildFailures.value.length ? tr('构建失败') : tr('构建待确认'))
@@ -234,12 +236,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
       </div>
       <div class="identity-row">
         <span class="badge" :class="a.restarting ? 'starting' : a.status" role="status"><StartupIndicator v-if="a.status === 'starting' || a.restarting" :effect="startingEffect" /><span v-else class="dot"></span>{{ statusLabel }}</span>
-        <div class="group-row">
-          <select :id="`group-${a.id}`" class="group-select" :aria-label="tr('分组')" :value="a.groupId || ''" :disabled="moving" @change="chooseGroup">
-            <option value="">{{ tr('未分组') }}</option>
-            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
-          </select>
-        </div>
+        <span class="group-row">{{ groups.find(group => group.id === a.groupId)?.name || tr('未分组') }}</span>
       </div>
     </header>
 
@@ -275,22 +272,22 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <span class="k">{{ tr('启动脚本') }}</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
       </div>
-      <AppStartupNotice :app="a" :locked="runtimeLocked" :issue="startupIssue" :checking="checkingIssue" :runtime-error="runtimeError" @log="emit('log', a.id)" @check="checkStartupIssue" />
+      <AppStartupNotice :app="a" :locked="runtimeLocked" :issue="startupIssue" :checking="checkingIssue" @log="emit('log', a.id)" />
     </div>
 
     <fieldset class="actions" :disabled="operationBusy">
       <div class="run-actions">
-        <button v-if="canInspectConflict" class="primary" :disabled="checkingIssue || recheckingRuntime" aria-haspopup="dialog" @click="portDialog?.open()">{{ tr('关闭占用程序并启动') }}</button>
-        <button v-else-if="runtimeLocked" :disabled="recheckingRuntime || a.runtimeCheck?.state === 'checking'" @click="recheckRuntime"><UiIcon name="refresh" :size="14" />{{ recheckingRuntime || a.runtimeCheck?.state === 'checking' ? tr('正在检查') : tr('重新检查') }}</button>
-        <template v-else-if="a.restarting">
+        <button v-if="canInspectConflict" :disabled="checkingIssue" aria-haspopup="dialog" @click="portDialog?.open()">{{ tr('处理端口占用') }}</button>
+        <button v-else-if="runtimeLocked && (a.runtimeCheck?.state === 'running' || isActive)" aria-haspopup="dialog" @click="restartDialog?.open()"><UiIcon name="refresh" :size="14" />{{ tr('重启') }}</button>
+        <template v-else-if="!runtimeLocked && a.restarting">
           <button class="stop-btn" disabled><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
           <button disabled><UiIcon name="refresh" :size="14" />{{ tr('重启中…') }}</button>
         </template>
-        <template v-else-if="isActive">
+        <template v-else-if="!runtimeLocked && isActive">
           <button class="stop-btn" :disabled="appsStore.operationBusy?.[a.id]" @click="emit('stop', a.id)"><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
           <button :disabled="appsStore.operationBusy?.[a.id]" @click="emit('restart', a.id)"><UiIcon name="refresh" :size="14" />{{ tr('重启') }}</button>
         </template>
-        <button v-else class="primary" :disabled="checkingIssue || appsStore.operationBusy?.[a.id]" @click="emit('start', a.id)"><UiIcon :name="a.status === 'failed' ? 'refresh' : 'play'" :size="14" />{{ appsStore.operationBusy?.[a.id] ? tr('正在检查') : a.status === 'failed' ? tr('重新启动') : tr('启动') }}</button>
+        <button v-else-if="!runtimeLocked" class="primary" :disabled="checkingIssue || appsStore.operationBusy?.[a.id]" @click="emit('start', a.id)"><UiIcon :name="a.status === 'failed' ? 'refresh' : 'play'" :size="14" />{{ appsStore.operationBusy?.[a.id] ? tr('正在检查') : a.status === 'failed' ? tr('重新启动') : tr('启动') }}</button>
         <button class="ghost release-btn" :title="tr('Git 版本发布')" @click="emit('release', a.id)"><UiIcon name="upload" :size="14" />{{ tr('发布') }}</button>
       </div>
       <div class="utility-actions">
@@ -300,6 +297,13 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <details ref="manageDetails" class="manage" @toggle="onManageToggle" @focusout="onMenuFocusOut">
           <summary ref="manageSummary" :title="tr('更多操作')" :aria-label="tr('更多操作')" :aria-disabled="operationBusy || undefined" @click="operationBusy && $event.preventDefault()"><UiIcon name="more-vertical" :size="18" /></summary>
           <div class="manage-menu">
+            <label class="menu-group" :for="`group-${a.id}`">
+              <span>{{ tr('所在分组') }}</span>
+              <select :id="`group-${a.id}`" class="group-select" :aria-label="tr('更改分组')" :value="a.groupId || ''" :disabled="moving" @change="chooseGroup">
+                <option value="">{{ tr('未分组') }}</option>
+                <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+              </select>
+            </label>
             <details class="runtime-details">
               <summary><UiIcon name="server" :size="15" />{{ tr('运行详情') }}<UiIcon name="chevron-down" :size="13" /></summary>
               <dl><dt>{{ tr('状态') }}</dt><dd>{{ statusLabel }}</dd><dt>{{ tr('进程编号（PID）') }}</dt><dd class="mono">{{ a.pid || '—' }}</dd></dl>
@@ -332,10 +336,13 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
       </div>
     </fieldset>
     <PortResolutionDialog ref="portDialog" :app-id="a.id" :app-name="a.name" @busy="resolvingPorts = $event" @start="emit('start', a.id)" />
+    <RestartDialog ref="restartDialog" :app-id="a.id" :app-name="a.name" @busy="resolvingPorts = $event" @managed-restart="emit('restart', a.id)" />
   </article>
 </template>
 
 <style scoped>
+.menu-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; font-size: 12px; border-bottom: 1px solid var(--card-border, var(--border)); }
+.menu-group .group-select:focus-visible { outline: 2px solid var(--card-fg, var(--accent)); outline-offset: 2px; }
 .badge.checking, .badge.unknown { color: var(--card-status-amber, var(--amber)); }
 .services-heading { display: flex; justify-content: space-between; color: var(--card-muted, var(--text-dim)); font-size: 11px; margin-bottom: 4px; }
 .svc-source { margin-left: auto; white-space: nowrap; font-size: 10px; color: var(--card-muted, var(--text-faint)); }

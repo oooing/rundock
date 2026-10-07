@@ -203,11 +203,15 @@ export function installConfiguration(ctx: ReleaseContext) {
         ctx.configNotice.value = '';
         try {
             const previous = ctx.releaseConfig.value ? ctx.cloneConfig(ctx.releaseConfig.value) : null;
-            ctx.applyReleaseConfig(await api.scanReleaseConfig(ctx.props.app.id), true);
+            const scanned = ctx.normalizeConfig(await api.scanReleaseConfig(ctx.props.app.id));
+            ctx.configDraft.value = ctx.cloneConfig(scanned);
+            ctx.configEditorOpen.value = true;
             void ctx.switchReleaseTab('settings');
             ctx.configBeforeEdit.value = previous;
             ctx.configEndpointAvailable.value = true;
-            ctx.configNotice.value = tr("自动识别已完成。请检查建议；点击“保存并使用”后才会写入项目。");
+            ctx.configNotice.value = previous?.source === 'file'
+                ? tr('这是重新识别的草稿。保存会替换现有配置；自定义构建方式请保留，或取消修改。')
+                : tr("自动识别已完成。请检查建议；点击“保存并使用”后才会写入项目。");
         }
         catch (reason) {
             if (!ctx.releaseConfig.value)

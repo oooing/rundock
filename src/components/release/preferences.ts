@@ -1,28 +1,30 @@
 import { api, ApiError } from '@/api/http';
 import { tr } from '@/i18n';
 import type { ReleaseTarget, ReleaseVersionMode } from '@/types';
-import { readReleaseSession } from '@/utils/releaseSession';
+import { readReleasePreferences, writeReleasePreferences, releasePreferenceKey } from '@/utils/releasePreferences';
+import type { ReleasePreferences } from '@/utils/releasePreferences';
 import type { ExecutionPhase, ReleaseContext } from './context';
 // All values belong to this dialog's view model; external data enters through api.
 export function installPreferences(ctx: ReleaseContext) {
     ctx.preferenceKey = function () {
-        return `launcher.release-preferences.${ctx.props.app.id}`;
+        return releasePreferenceKey(ctx.props.app.id);
     };
-    ctx.readLocalPreferences = function (): {
-        buildMode?: 'github' | 'local';
-        createTag?: boolean;
-        versionMode?: ReleaseVersionMode;
-    } {
-        try {
-            return JSON.parse(localStorage.getItem(ctx.preferenceKey()) || '{}') as {
-                buildMode?: 'github' | 'local';
-                createTag?: boolean;
-                versionMode?: ReleaseVersionMode;
-            };
+    ctx.readLocalPreferences = () => readReleasePreferences(ctx.props.app.id);
+    const targetSelections = { ...ctx.readLocalPreferences().releaseTargets };
+    ctx.captureTargetPreferences = function () {
+        if (!ctx.profileReady.value) return;
+        targetSelections[ctx.buildMode.value] = ctx.configuredTargets.value
+            .filter(target => target.runner.type.trim().toLowerCase() === (ctx.buildMode.value === 'github' ? 'git-push' : 'local')
+                && ctx.targetChoices.value[target.id]?.selected).map(target => target.id);
+    };
+    ctx.restoreTargetPreferences = function () {
+        const ids = targetSelections[ctx.buildMode.value];
+        if (!ids) return false;
+        for (const target of ctx.configuredTargets.value) {
+            const choice = ctx.targetChoices.value[target.id];
+            if (choice) choice.selected = ids.includes(target.id) && ctx.targetAvailable(target);
         }
-        catch {
-            return {};
-        }
+        return true;
     };
     ctx.rememberPreferences = function () {
         if (!ctx.profileReady.value)
@@ -40,14 +42,18 @@ export function installPreferences(ctx: ReleaseContext) {
         ctx.preferenceTimer = null;
         const body = ctx.profileBody();
         const appId = ctx.props.app.id;
-        const key = ctx.preferenceKey();
-        const preferences = JSON.stringify({ buildMode: ctx.buildMode.value, createTag: ctx.createTag.value, versionMode: ctx.versionMode.value });
+        ctx.captureTargetPreferences();
+        const preferences: ReleasePreferences = { buildMode: ctx.buildMode.value, syncPolicy: ctx.syncPolicy.value,
+            localSyncPolicy: ctx.localSyncPolicy.value,
+            releaseIntent: ctx.releaseIntent.value, localVersionMode: ctx.localVersionMode.value,
+            versionMode: ctx.versionMode.value, checksEnabled: ctx.checksEnabled.value,
+            releaseTargets: structuredClone(targetSelections) };
         const revision = ctx.preferenceRevision;
         ctx.preferenceStatus.value = 'saving';
         ctx.preferenceError.value = '';
         ctx.preferenceSave = ctx.preferenceSave.catch(() => undefined).then(async () => {
             await api.saveReleaseProfile(appId, body);
-            localStorage.setItem(key, preferences);
+            writeReleasePreferences(appId, preferences);
             if (!ctx.disposed && revision === ctx.preferenceRevision)
                 ctx.preferenceStatus.value = 'saved';
         }).catch(reason => {
@@ -111,7 +117,7 @@ export function installPreferences(ctx: ReleaseContext) {
             ctx.unstaging.value = false;
         }
     };
-    ctx.load = async function (resumeFailedRun = true) {
+    ctx.load = async function () {
         ctx.loading.value = true;
         ctx.error.value = '';
         ctx.errorCode.value = '';
@@ -137,11 +143,9 @@ export function installPreferences(ctx: ReleaseContext) {
                 ctx.configNotice.value = tr("当前后端暂未启用自动发布配置，仍可继续使用基础 Git 提交与 Tag 功能。");
             }
             ctx.loading.value = false;
-            const saved = readReleaseSession();
-            const savedRun = saved?.appId === ctx.props.app.id ? ctx.history.value.find((run) => run.id === saved.runId || (!saved.runId && saved.submittedAt &&
-                Date.parse(run.createdAt.includes('T') ? run.createdAt : run.createdAt.replace(' ', 'T') + 'Z') >= saved.submittedAt - 1000)) : undefined;
-            const resumable = savedRun || ctx.history.value.find((run) => run.status === 'queued' || run.status === 'running')
-                || (resumeFailedRun ? ctx.history.value.find(ctx.canResumeFailedRun) : undefined);
+            // "Publish" opens a new configuration, not the previous result.
+            // Only active work resumes automatically; terminal runs remain in history.
+            const resumable = ctx.history.value.find((run) => run.status === 'queued' || run.status === 'running');
             if (resumable)
                 ctx.showRun(resumable);
             const [preflightResult] = await localPreflight;

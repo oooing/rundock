@@ -3,7 +3,7 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$CliArguments)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $env:RELEASE_TEST_STATE) { throw 'Missing isolated release-test state' }
-$state = Get-Content -LiteralPath $env:RELEASE_TEST_STATE -Raw | ConvertFrom-Json
+$state = Get-Content -LiteralPath $env:RELEASE_TEST_STATE -Encoding UTF8 -Raw | ConvertFrom-Json
 $state.calls = @($state.calls) + ,$CliArguments
 $global:LASTEXITCODE = 0
 $result = $null
@@ -36,5 +36,5 @@ switch ($CliArguments[1]) {
     }
     default { throw "Unexpected release action: $($CliArguments[1])" }
 }
-$state | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $env:RELEASE_TEST_STATE -Encoding utf8
+[IO.File]::WriteAllText($env:RELEASE_TEST_STATE, ($state | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 if ($null -ne $result) { Write-Output $result }

@@ -21,7 +21,7 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 		return
 	}
 	if len(svcs) == 0 {
-		l.waitForReadiness(rt, readiness, svcs, checkedAt, col)
+		l.waitForReadiness(rt, readiness, svcs)
 		return
 	}
 
@@ -122,7 +122,7 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 	if cur == app.StatusStopped || cur == app.StatusFailed || cur == app.StatusStopping {
 		return
 	}
-	if l.waitForReadiness(rt, readiness, svcs, checkedAt, col) {
+	if l.waitForReadiness(rt, readiness, svcs) {
 		return
 	}
 	switch {

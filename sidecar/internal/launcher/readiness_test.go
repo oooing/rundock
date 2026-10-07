@@ -36,11 +36,11 @@ func TestReadinessCommentsAreExplicitAndValidated(t *testing.T) {
 			if err := os.WriteFile(p, []byte(c.text), 0600); err != nil {
 				t.Fatal(err)
 			}
-			r, err := readStartupReadiness(p, 30*time.Second)
+			r, err := readStartupReadiness(p)
 			if (err != nil) != c.wantError {
 				t.Fatalf("read: %v, want error %v", err, c.wantError)
 			}
-			if c.name == "batch" && (len(r.urls) != 2 || r.timeout != 60*time.Second) {
+			if c.name == "batch" && len(r.urls) != 2 {
 				t.Fatalf("wrong requirements: %#v", r)
 			}
 			if c.name == "not a directive" && len(r.urls) != 0 {
@@ -50,7 +50,7 @@ func TestReadinessCommentsAreExplicitAndValidated(t *testing.T) {
 	}
 }
 
-func TestReadinessWaitsForOwnedServicesAndRecoversAfterTimeout(t *testing.T) {
+func TestReadinessWaitsWithoutTimeLimitAndStillDetectsRuntimeFailures(t *testing.T) {
 	var frontReady atomic.Bool
 	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The ordinary page can be 200 while the explicit ready endpoint is 503.
@@ -69,7 +69,7 @@ func TestReadinessWaitsForOwnedServicesAndRecoversAfterTimeout(t *testing.T) {
 	r := &startupReadiness{urls: map[int]string{
 		front.Listener.Addr().(*net.TCPAddr).Port: front.URL + "/ready",
 		back.Listener.Addr().(*net.TCPAddr).Port:  back.URL + "/health",
-	}, timeout: 30 * time.Second, deadline: now.Add(30 * time.Second)}
+	}}
 	checks := map[string]*serviceHealthCheck{}
 	tick := func(seconds int, want string) {
 		t.Helper()
@@ -81,7 +81,8 @@ func TestReadinessWaitsForOwnedServicesAndRecoversAfterTimeout(t *testing.T) {
 	tick(0, app.StatusStarting) // No discovered services yet.
 	addHealthTestService(t, l, rt, "back", back)
 	tick(1, app.StatusStarting) // Front port exists but is not owned/discovered.
-	tick(31, app.StatusDegraded)
+	tick(31, app.StatusStarting)
+	tick(601, app.StatusStarting) // Even beyond the old maximum, a missing service is still starting.
 	services, err := l.Store.ListServicesByRun(rt.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -91,12 +92,27 @@ func TestReadinessWaitsForOwnedServicesAndRecoversAfterTimeout(t *testing.T) {
 		t.Fatalf("wrong missing service: %v", pending)
 	}
 	addHealthTestService(t, l, rt, "front", front)
-	tick(35, app.StatusDegraded) // Root page 200 must not mask ready=503.
+	tick(605, app.StatusStarting) // Root page 200 must not mask ready=503.
+	tick(3600, app.StatusStarting)
 	frontReady.Store(true)
-	tick(40, app.StatusRunning)
+	tick(3605, app.StatusRunning)
 	frontReady.Store(false)
-	tick(60, app.StatusRunning) // Retain first-step transient failure protection.
-	tick(65, app.StatusDegraded)
+	tick(3625, app.StatusRunning) // Retain first-step transient failure protection.
+	tick(3630, app.StatusDegraded)
 	frontReady.Store(true)
-	tick(70, app.StatusRunning)
+	tick(3635, app.StatusRunning)
+}
+
+func TestReadinessDoesNotOverrideStoppedOrFailedRuns(t *testing.T) {
+	for _, status := range []string{app.StatusStopping, app.StatusStopped, app.StatusFailed} {
+		t.Run(status, func(t *testing.T) {
+			l, rt := healthTestLauncher(t)
+			l.Manager.Transition(rt, status, nil)
+			r := &startupReadiness{urls: map[int]string{4310: "http://localhost:4310/ready"}}
+			l.recheckAndAggregate(rt.AppID, rt, nil, map[string]*serviceHealthCheck{}, time.Now().Add(time.Hour), r)
+			if rt.GetStatus() != status {
+				t.Fatalf("readiness replaced %s with %s", status, rt.GetStatus())
+			}
+		})
+	}
 }

@@ -19,7 +19,7 @@ func TestPreferredOpenURL(t *testing.T) {
 	if err := os.WriteFile(entry, []byte("rem rundock:open http://127.0.0.1:4310/library\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	config, err := readStartupReadiness(entry, 0)
+	config, err := readStartupReadiness(entry)
 	if err != nil || len(config.urls) != 0 {
 		t.Fatal("open must not create readiness requirement", err)
 	}
@@ -39,7 +39,7 @@ func TestPreferredOpenURL(t *testing.T) {
 		if err := os.WriteFile(entry, []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := readStartupReadiness(entry, 0); err == nil {
+		if _, err := readStartupReadiness(entry); err == nil {
 			t.Fatal("invalid open accepted", text)
 		}
 	}

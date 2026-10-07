@@ -81,6 +81,8 @@ try {
     $env:LAUNCHER_DATA_DIR = $DataDir
     $env:LAUNCHER_PORT = "$backendPort"
     $env:LAUNCHER_DEV = '1'
+    # This independent launcher owns the backend; it survives worker restarts.
+    $env:LAUNCHER_SUPERVISOR_PID = "$PID"
     $env:VITE_LAUNCHER_BASE = "http://127.0.0.1:$backendPort"
     $logDir = Join-Path $DataDir ('dev-logs\' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -119,7 +121,23 @@ try {
     Write-Host "Backend: http://127.0.0.1:$backendPort | logs: $logDir"
     if (-not $NoBrowser -and -not $SmokeTest) { Start-Process "http://127.0.0.1:$frontendPort" }
     if (-not $SmokeTest) {
-        while (-not $backend.HasExited -and -not $frontend.HasExited) { Start-Sleep -Milliseconds 500 }
+        $generation = 0
+        while (-not $frontend.HasExited) {
+            if ($backend.HasExited) {
+                if ($backend.ExitCode -ne 75) { break }
+                Write-Host 'Restart requested: rebuilding backend; frontend stays open.'
+                Assert-PortFree $backendPort
+                Push-Location (Join-Path $codeDir 'sidecar')
+                try {
+                    & $go build -o $sidecarExe ./cmd/launcher-sidecar
+                    if ($LASTEXITCODE -ne 0) { throw "Backend rebuild failed (exit $LASTEXITCODE). See launcher logs." }
+                } finally { Pop-Location }
+                $generation++
+                $backend = Start-DevProcess $sidecarExe @('-port', "$backendPort") $codeDir "backend-$generation"
+                Wait-Ready $backend "http://127.0.0.1:$backendPort/api/health" $true
+            }
+            Start-Sleep -Milliseconds 500
+        }
         throw 'A development service exited. Stopping the paired service.'
     }
 } catch {

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import ReleaseFindingSource from './ReleaseFindingSource.vue'
 import { tr } from '@/i18n'
-import { groupSensitiveFindings, hasReleaseIssues } from '@/utils/releaseIssues'
+import { groupSensitiveFindings, hasReleaseIssues, releaseCheckPresentation } from '@/utils/releaseIssues'
 import type { ReleaseCandidate, ReleaseFileClassification } from '@/types'
 const props = defineProps<{appId:string;candidate:ReleaseCandidate;files:ReleaseFileClassification[];selected:Record<string,boolean>;busy:boolean;stale:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean}>()
 const emit = defineEmits<{choose:[file:ReleaseFileClassification,included:boolean];check:[];exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
@@ -30,10 +30,11 @@ function include(path:string){const file=addableFile(path);if(file && !props.bus
       <button v-if="addableFile(finding.missing)" :disabled="busy || stale" @click="include(finding.missing)">{{tr('加入本次提交')}}</button>
       <details class="issue-details"><summary>{{tr('查看详情')}}</summary><p>{{finding.path}} → {{finding.reference}}</p><p>{{finding.reason}}</p></details>
     </article>
-    <article v-for="check in failedChecks" :key="check.id" class="issue-card">
-      <strong>{{check.name}} · {{tr('未通过')}}</strong>
-      <p>{{tr('请根据详情修复，完成后重新检查；无需重新发布版本。')}}</p>
-      <details class="issue-details"><summary>{{tr('查看详情')}}</summary><p>{{check.reason}}</p><pre v-if="check.log">{{check.log}}</pre></details>
+    <article v-for="check in failedChecks" :key="check.id" class="issue-card check-failure">
+      <strong>{{check.name}} · {{tr(releaseCheckPresentation(check).label)}}</strong>
+      <p class="check-reason">{{tr(releaseCheckPresentation(check).reason)}}</p>
+      <p class="check-suggestion">{{tr(releaseCheckPresentation(check).suggestion)}}</p>
+      <details v-if="check.log" class="issue-details"><summary>{{tr('执行日志')}}</summary><pre>{{check.log}}</pre></details>
     </article>
     <p v-if="resolvingReview" class="review-progress" role="status">{{tr('已处理全部问题，正在统一验证。')}}</p>
     <div v-else-if="(!pendingCount || stale) && (hasReleaseIssues(candidate) || stale)" class="issue-next">
@@ -46,7 +47,7 @@ function include(path:string){const file=addableFile(path);if(file && !props.bus
     </details>
     <details class="issue-details diagnostics"><summary>{{tr('检查详情')}}</summary>
       <p v-for="warning in candidate.warnings" :key="warning">{{warning}}</p>
-      <div v-for="check in candidate.checkResults" :key="check.id"><p>{{check.name}} · {{check.status}}</p><p>{{check.reason}}</p><pre v-if="check.log">{{check.log}}</pre></div>
+      <div v-for="check in candidate.checkResults" :key="check.id"><p>{{check.name}} · {{tr(releaseCheckPresentation(check).label)}}</p><p>{{check.reason}}</p><pre v-if="check.log">{{check.log}}</pre></div>
       <small>{{tr('候选标识')}} {{candidate.id}}</small>
     </details>
   </div>

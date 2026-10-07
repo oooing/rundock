@@ -22,6 +22,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--supervise" {
+		os.Exit(supervise(os.Args[2:]))
+	}
+	os.Exit(run())
+}
+
+func run() int {
 	addrFlag := flag.String("addr", "", "监听地址（覆盖默认/环境变量）")
 	portFlag := flag.Int("port", 0, "固定端口（0=随机）；非 0 时覆盖 addr")
 	flag.Parse()
@@ -88,11 +95,17 @@ func main() {
 	defer cancel()
 	go func() {
 		<-ctx.Done()
-		os.Exit(0)
+		if ctx.Err() == context.DeadlineExceeded {
+			os.Exit(1)
+		}
 	}()
 	_ = server.Shutdown()
 	removePortFile(cfg.DataDir)
 	log.Printf("bye")
+	if server.RestartRequested() {
+		return restartExitCode
+	}
+	return 0
 }
 
 // 端口发现文件

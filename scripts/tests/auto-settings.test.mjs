@@ -48,9 +48,23 @@ test('a pending save does not erase a newer invalid edit or its error state',asy
   let release
   const s=createAutoSettings({getSettings:async()=>({}),setSettings:()=>new Promise(resolve=>{release=resolve})})
   await s.load()
-  const pending=s.set('url_discover_timeout_seconds','60');await Promise.resolve()
-  await s.set('url_discover_timeout_seconds','')
+  const pending=s.set('grace_period_seconds','60');await Promise.resolve()
+  await s.set('grace_period_seconds','')
   release();await pending
-  assert.equal(s.state.values.url_discover_timeout_seconds,'')
-  assert.equal(s.state.fields.url_discover_timeout_seconds.status,'invalid')
+  assert.equal(s.state.values.grace_period_seconds,'')
+  assert.equal(s.state.fields.grace_period_seconds.status,'invalid')
+})
+
+test('legacy startup timeout is not offered or rewritten by runtime settings', async () => {
+  const saved = { grace_period_seconds: '8', url_discover_timeout_seconds: '30' }
+  const writes = []
+  const s = createAutoSettings({ getSettings: async () => saved, setSettings: async patch => { writes.push(patch); Object.assign(saved, patch) } })
+  await s.load()
+  assert.deepEqual(Object.keys(exports.runtimeLimits), ['grace_period_seconds'])
+  assert.equal('url_discover_timeout_seconds' in s.state.values, false)
+  await s.set('grace_period_seconds', '15')
+  assert.deepEqual(writes, [{ grace_period_seconds: '15' }])
+  assert.equal(saved.url_discover_timeout_seconds, '30')
+  const settingsView = readFileSync(new URL('../../src/components/SettingsModal.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(settingsView, /启动检测超时|等待启动服务就绪的时间/)
 })

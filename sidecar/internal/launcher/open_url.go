@@ -5,7 +5,7 @@ import "github.com/launcher-sidecar/internal/store"
 // PreferredOpenURL chooses a project page, never a health-check path by guess.
 // Explicit script metadata is optional; invalid metadata is rejected by Start.
 func PreferredOpenURL(entryScript, lastURL string, services []*store.AppService) string {
-	if config, err := readStartupReadiness(entryScript, 0); err == nil && config.openURL != "" {
+	if config, err := readStartupReadiness(entryScript); err == nil && config.openURL != "" {
 		return config.openURL
 	}
 	var frontend string

@@ -12,6 +12,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Windows PowerShell 5.1 otherwise uses the legacy code page for redirected logs.
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $OutputEncoding
+
 $codeDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $codeDirectory 'dist'
@@ -68,7 +72,7 @@ function Assert-WorkspaceChild([string]$Path) {
 }
 
 function Read-Versions {
-    $package = Get-Content -LiteralPath (Join-Path $codeDirectory 'package.json') -Raw | ConvertFrom-Json
+    $package = Get-Content -LiteralPath (Join-Path $codeDirectory 'package.json') -Encoding UTF8 -Raw | ConvertFrom-Json
     $node = Resolve-Tool 'node.exe'
     $packageLockPath = Join-Path $codeDirectory 'package-lock.json'
     $readLockScript = "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const root=p.packages&&p.packages[''];process.stdout.write(JSON.stringify({version:p.version,rootVersion:(root&&root.version)||''}));"
@@ -77,8 +81,8 @@ function Read-Versions {
         throw "无法读取 package-lock.json：$packageLockText"
     }
     $packageLock = $packageLockText | ConvertFrom-Json
-    $tauri = Get-Content -LiteralPath (Join-Path $codeDirectory 'src-tauri/tauri.conf.json') -Raw | ConvertFrom-Json
-    $cargoText = Get-Content -LiteralPath (Join-Path $codeDirectory 'src-tauri/Cargo.toml') -Raw
+    $tauri = Get-Content -LiteralPath (Join-Path $codeDirectory 'src-tauri/tauri.conf.json') -Encoding UTF8 -Raw | ConvertFrom-Json
+    $cargoText = Get-Content -LiteralPath (Join-Path $codeDirectory 'src-tauri/Cargo.toml') -Encoding UTF8 -Raw
     $cargoMatch = [regex]::Match($cargoText, '(?ms)^\[package\].*?^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
     if (-not $cargoMatch.Success) {
         throw '无法读取 src-tauri/Cargo.toml 的 package.version'
@@ -167,6 +171,8 @@ try {
     $psi.CreateNoWindow = $true
     $psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
     $psi.EnvironmentVariables['APPDATA'] = $smokeData
+    # This takes precedence over APPDATA. Never inherit the running app's database.
+    $psi.EnvironmentVariables['LAUNCHER_DATA_DIR'] = $smokeData
     $process = [Diagnostics.Process]::Start($psi)
     try {
         $healthy = $false

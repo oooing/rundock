@@ -27,6 +27,8 @@ import (
 type Server struct {
 	startupMu         sync.Mutex
 	closing           atomic.Bool
+	restartRequested  atomic.Bool
+	instanceID        string
 	shutdownRequested chan struct{}
 	Store             *store.Store
 	Manager           *app.Manager
@@ -42,6 +44,7 @@ type Server struct {
 	runtimeMonitor    *runtimeMonitor
 	runtimeDone       chan struct{}
 	portPlans         map[string]portPlan // Guarded by startupMu; short-lived, single-use.
+	restartPlans      map[string]portPlan // Same confirmation boundary as port resolution, separate tokens.
 	portBackendPort   int                 // Actual bound HTTP port; Host headers never grant origin authority.
 }
 
@@ -81,7 +84,7 @@ func New(s *store.Store, hub *logbus.Hub, reg *adapter.Registry) *Server {
 	if hub != nil {
 		pub.OnCloudBuildChange = hub.BroadcastCloudBuild
 	}
-	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg, shutdownRequested: make(chan struct{})}
+	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg, instanceID: time.Now().UTC().Format(time.RFC3339Nano), shutdownRequested: make(chan struct{})}
 }
 
 // Router 构建路由（含 CORS 中间件）。

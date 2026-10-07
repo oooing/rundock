@@ -36,12 +36,17 @@ func verifyIdentity(h windows.Handle, p Process) error {
 }
 
 func externalPermission(h windows.Handle, p Process) error {
+	return processPermission(h, p, false)
+}
+
+func processPermission(h windows.Handle, p Process, projectShell bool) error {
 	if p.PID == os.Getpid() {
 		return fmt.Errorf("RunDock 后台受保护，请从软件退出")
 	}
 	windir, err := windows.GetWindowsDirectory()
-	if err != nil || Inside(windir, p.Executable) {
-		return fmt.Errorf("Windows 系统程序受保护，请手动处理")
+	allowedShell := projectShell && (samePath(p.Executable, filepath.Join(windir, "System32", "cmd.exe")) || samePath(p.Executable, filepath.Join(windir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")))
+	if err != nil || (Inside(windir, p.Executable) && !allowedShell) {
+		return fmt.Errorf("Windows 系统程序 %s 受保护，请手动处理", filepath.Base(p.Executable))
 	}
 	blocked := map[string]bool{"system": true, "registry": true, "smss.exe": true, "csrss.exe": true, "wininit.exe": true, "winlogon.exe": true, "services.exe": true, "lsass.exe": true, "svchost.exe": true, "fontdrvhost.exe": true, "dwm.exe": true}
 	if blocked[strings.ToLower(filepath.Base(p.Executable))] {
@@ -70,6 +75,49 @@ func externalPermission(h windows.Handle, p Process) error {
 		return fmt.Errorf("该程序不属于当前登录会话，请手动关闭")
 	}
 	return nil
+}
+
+// Keep verified handles open as a group. The caller supplies only the confirmed
+// entry process and its creation-checked descendants, never a name/port kill.
+func OpenRestartGroup(processes []Process) (func() error, func(), error) {
+	var handles []windows.Handle
+	closeAll := func() {
+		for _, h := range handles {
+			windows.CloseHandle(h)
+		}
+		handles = nil
+	}
+	for _, p := range processes {
+		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(p.PID))
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("无法核验 PID %d 的关闭权限，未停止任何程序", p.PID)
+		}
+		handles = append(handles, h)
+		if err = verifyIdentity(h, p); err == nil {
+			err = processPermission(h, p, true)
+		}
+		if err != nil {
+			closeAll()
+			return nil, nil, err
+		}
+	}
+	stop := func() error {
+		// Roots precede children, preventing the launcher from respawning them.
+		for i, h := range handles {
+			if status, _ := windows.WaitForSingleObject(h, 0); status == windows.WAIT_OBJECT_0 {
+				continue
+			}
+			if err := windows.TerminateProcess(h, 1); err != nil {
+				return fmt.Errorf("关闭 PID %d 失败，已停止的进程不会自动恢复：%w", processes[i].PID, err)
+			}
+			if status, err := windows.WaitForSingleObject(h, 3000); err != nil || status != windows.WAIT_OBJECT_0 {
+				return fmt.Errorf("PID %d 尚未退出，未启动新实例", processes[i].PID)
+			}
+		}
+		return nil
+	}
+	return stop, closeAll, nil
 }
 
 func CanCloseExternal(p Process) error {

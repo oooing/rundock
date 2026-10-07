@@ -98,9 +98,8 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		return fmt.Errorf("app already running: %s", appID)
 	}
 
-	urlTimeout := durationFromSetting(l.Store, "url_discover_timeout_seconds", 30)
 	gracePeriod := durationFromSetting(l.Store, "grace_period_seconds", 8)
-	readiness, err := readStartupReadiness(a.EntryScript, urlTimeout)
+	readiness, err := readStartupReadiness(a.EntryScript)
 	if err != nil {
 		return fmt.Errorf("启动就绪配置: %w", err)
 	}
@@ -182,8 +181,8 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	collector.Info(fmt.Sprintf("[启动] cwd=%s", cwd))
 	collector.Info(fmt.Sprintf("[启动] cmd=%s args=%v preparedByAdapter=%v", cmd, args, preparedByAdapter))
 	collector.Debug(fmt.Sprintf("[启动] portHints=%v healthUrl=%q envKeys=%v", a.PortHints, a.HealthURL, envKeys))
-	collector.Debug(fmt.Sprintf("[启动] 启动前系统监听端口数=%d urlDiscoverTimeout=%s grace=%ds",
-		len(beforePorts), urlTimeout, int(gracePeriod/time.Second)))
+	collector.Debug(fmt.Sprintf("[启动] 启动前系统监听端口数=%d grace=%ds",
+		len(beforePorts), int(gracePeriod/time.Second)))
 
 	// 先占位 runState：日志回调可能在 spawn 返回前就打出 URL，不能丢。
 	rs := &runState{collector: collector, cancel: cancel, exitDone: make(chan struct{})}

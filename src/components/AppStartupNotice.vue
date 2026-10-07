@@ -4,8 +4,14 @@ import { tr } from '@/i18n'
 import type { AppView, StartupIssue } from '@/types'
 import UiIcon from './UiIcon.vue'
 
-const props = defineProps<{ app: AppView; locked: boolean; issue: StartupIssue | null; checking: boolean; runtimeError: string }>()
-const emit = defineEmits<{ (event: 'log' | 'check'): void }>()
+const props = defineProps<{ app: AppView; locked: boolean; issue: StartupIssue | null; checking: boolean }>()
+const emit = defineEmits<{ (event: 'log'): void }>()
+const runtimeMessage = computed(() => {
+  const message = props.app.runtimeCheck?.message || ''
+  // Older backends ask for a manual recheck even though monitoring is automatic.
+  return message === '暂时无法确认项目状态，已暂停启动，请稍后重新检查。'
+    ? tr('暂时无法确认项目状态，尚未启动项目。状态会自动更新。') : tr(message)
+})
 const title = computed(() => {
   if (props.checking) return tr('正在检查失败原因…')
   if (props.issue?.conflicts.length) return tr('端口 {0} 被占用', [[...new Set(props.issue.conflicts.map(conflict => conflict.port))].join('、')])
@@ -13,7 +19,6 @@ const title = computed(() => {
 })
 const description = computed(() => {
   if (props.checking) return ''
-  if (props.issue?.code === 'port_in_use') return tr('查看占用程序后，可关闭并重新启动。')
   return props.issue?.reason ? tr(props.issue.reason) : tr('打开日志查看失败原因。')
 })
 </script>
@@ -22,10 +27,9 @@ const description = computed(() => {
   <div v-if="locked" class="runtime-notice" role="status">
     <UiIcon :name="app.runtimeCheck?.state === 'running' ? 'server' : 'alert-circle'" :size="15" />
     <div>
-      <p>{{ tr(app.runtimeCheck?.message || '') }}</p>
+      <p>{{ runtimeMessage }}</p>
       <p v-for="conflict in app.runtimeCheck?.conflicts" :key="`${conflict.port}-${conflict.pid}`" class="mono">:{{ conflict.port }} · {{ conflict.name || tr('未知进程') }} · PID {{ conflict.pid }}</p>
       <p v-if="app.runtimeCheck?.reservedPorts?.length" class="mono">{{ tr('系统保留端口') }}: {{ app.runtimeCheck.reservedPorts.join('、') }}</p>
-      <p v-if="runtimeError" role="alert">{{ runtimeError }}</p>
     </div>
   </div>
   <template v-else-if="app.status === 'failed'">
@@ -39,7 +43,6 @@ const description = computed(() => {
           <p v-for="conflict in issue.conflicts" :key="`${conflict.port}-${conflict.pid}`" class="mono">:{{ conflict.port }} · {{ conflict.name || tr('未知进程') }} · PID {{ conflict.pid }}</p>
         </details>
         <div class="issue-links">
-          <button v-if="issue?.code === 'port_in_use'" class="ghost" :disabled="checking" @click="emit('check')">{{ tr('重新检查') }}</button>
           <button class="ghost" @click="emit('log')">{{ tr('查看日志') }}<UiIcon name="arrow-right" :size="12" /></button>
         </div>
       </div>

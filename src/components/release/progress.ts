@@ -131,6 +131,6 @@ export function installProgress(ctx: ReleaseContext) {
         ctx.releaseNotesGeneratedFor.value = '';
         ctx.releaseNotesError.value = '';
         ctx.commitMessageDirty.value = false;
-        void ctx.load(false);
+        void ctx.load();
     };
 }

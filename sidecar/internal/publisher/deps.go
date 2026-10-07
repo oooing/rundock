@@ -92,12 +92,10 @@ func localImportSpecs(from, content string) []string {
 	ext := strings.ToLower(path.Ext(from))
 	specs := []string{}
 	switch ext {
-	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue":
-		for _, match := range jsImport.FindAllStringSubmatch(content, -1) {
-			if len(match) >= 2 {
-				specs = append(specs, match[1])
-			}
-		}
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx":
+		return localJSImportSpecs(content)
+	case ".vue":
+		return localVueImportSpecs(content)
 	case ".py":
 		for _, match := range pyImport.FindAllStringSubmatch(content, -1) {
 			spec := match[1]
@@ -190,7 +188,6 @@ func moduleCandidates(joined string) []string {
 }
 
 var (
-	jsImport     = regexp.MustCompile(`(?m)(?:import\s+(?:[^'"\n]+from\s+)?|export\s+[^'"\n]*from\s+|require\s*\(\s*)['"](\.[^'"]+)['"]`)
 	pyImport     = regexp.MustCompile(`(?m)(?:from\s+(\.[\w.]*)\s+import|import\s+(\.[\w.]*))`)
 	jsExtensions = []string{".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".vue", ".json"}
 )

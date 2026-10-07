@@ -12,3 +12,7 @@ func CanCloseExternal(Process) error { return fmt.Errorf("当前平台需要从�
 func TerminateExternal(Process) error {
 	return fmt.Errorf("当前平台需要从原程序手动退出")
 }
+
+func OpenRestartGroup([]Process) (func() error, func(), error) {
+	return nil, nil, fmt.Errorf("当前平台需要从原程序手动退出")
+}

@@ -94,7 +94,15 @@ SHA256SUMS.txt                  ← 安装包完整性校验值
 
 GitHub 自动发布使用同一个 `release-build.ps1`：推送严格的 annotated `vX.Y.Z` Tag 后，Actions 会校验 Tag 中的隐藏发布计划。选择 Windows 时自动打包并创建 GitHub Release；明确选择“仅提交代码”时只发布源码。Actions 的手动运行入口永远是 dry-run，不会创建真实 Release。
 
-> 当前安装包未配置 Windows 代码签名，浏览器下载后可能出现 SmartScreen 提示。GitHub Release 也不等于客户端自动更新；应用内更新需要单独接入 Tauri updater。
+> 当前安装包未配置 Windows 代码签名，浏览器下载后可能出现 SmartScreen 提示。客户端已接入安装包下载及 SHA-256 校验；GitHub Release 发布不代表所有运行中的客户端立即收到通知，目前自动检查仍在启动时进行，也可以在设置中手动检查。
+
+### 客户端升级与安装语言
+
+- 应用内确认“退出并安装”后，EXE 使用 NSIS `/UPDATE /P /R`：原位升级、显示进度、不弹出卸载选择，成功后重新打开客户端。MSI 使用 `/i /passive /norestart AUTOLAUNCHAPP=True`，不主动重启 Windows。校验、后台安全退出失败时仍停止升级并报告原因。
+- EXE 内置 `English`、`SimpChinese`，不弹语言选择框。NSIS 按 Windows 显示语言匹配，中文各地区匹配简体中文，其他未支持语言回退到第一项英文，与客户端首次启动规则一致。客户端手动保存的语言不会被升级或系统检测覆盖。
+- MSI 仍保留现有 `en-US` 企业部署包。WiX 多语言配置会生成多个独立 MSI，并非一个包自动切换语言；不能把 EXE 的语言行为套用于 MSI。
+- 手动双击 EXE 仍是正常安装向导，应用内更新才使用进度模式；旧 `Launcher` 更名迁移以及 MSI/EXE 安装器之间迁移仍保留保护，不绕过迁移检查。
+- 验证语言：设置 `RUNDOCK_MAKENSIS` 为 NSIS 编译器路径后执行 `node --test scripts/tests/installer-language.test.mjs`。仅编译并运行写入语言结果的隔离程序，覆盖 10 种语言，不安装真实客户端。
 
 ### 不公开发布的验收
 

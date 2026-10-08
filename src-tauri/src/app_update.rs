@@ -368,6 +368,12 @@ pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
         let state = app.state::<UpdateState>();
         let mut session = state.0.try_lock().map_err(|_| "正在处理更新，请稍后重试")?;
         verify_ready(session.ready.as_ref().ok_or("请先下载安装包")?)?;
+        // Validate the handoff before stopping anything. A click on "install"
+        // is the confirmation; the installer should only show upgrade progress.
+        let mut command = installer_command(
+            &session.ready.as_ref().ok_or("请先下载安装包")?.path,
+            std::env::var_os("SystemRoot").as_deref(),
+        )?;
         let port = super::sidecar_data_dir()
             .and_then(|dir| super::read_port_file(&dir))
             .or_else(|| session.stopped_port.clone())
@@ -394,16 +400,6 @@ pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
         {
             return Err("后台尚未退出，请稍后重试安装".into());
         }
-        let ready = session.ready.as_ref().ok_or("请先下载安装包")?;
-        let mut command = if ready.path.extension().is_some_and(|e| e == "msi") {
-            let system_root = std::env::var_os("SystemRoot").ok_or("无法找到 Windows 安装服务")?;
-            let mut c =
-                std::process::Command::new(PathBuf::from(system_root).join("System32/msiexec.exe"));
-            c.arg("/i").arg(&ready.path);
-            c
-        } else {
-            std::process::Command::new(&ready.path)
-        };
         command
             .spawn()
             .map_err(|e| format!("无法打开安装程序，可重新启动 RunDock 后重试：{e}"))?;
@@ -414,9 +410,69 @@ pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+// Keep argument construction separate so tests never execute an installer.
+fn installer_command(
+    path: &Path,
+    system_root: Option<&std::ffi::OsStr>,
+) -> Result<std::process::Command, String> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("exe") => {
+            let mut command = std::process::Command::new(path);
+            // Tauri NSIS: preserve the installation and user data, show progress,
+            // then reopen the app. No maintenance/uninstall selection wizard.
+            command.args(["/UPDATE", "/P", "/R"]);
+            Ok(command)
+        }
+        Some("msi") => {
+            let root = system_root.ok_or("无法找到 Windows 安装服务")?;
+            let mut command =
+                std::process::Command::new(PathBuf::from(root).join("System32/msiexec.exe"));
+            command
+                .arg("/i")
+                .arg(path)
+                .args(["/passive", "/norestart", "AUTOLAUNCHAPP=True"]);
+            Ok(command)
+        }
+        _ => Err("安装包格式不受支持，请重新检查更新".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nsis_handoff_is_a_visible_in_place_update_not_an_uninstall() {
+        let path = Path::new("C:/test cache/中文/RunDock_2.0.27_x64-setup.exe");
+        let command = installer_command(path, None).unwrap();
+        assert_eq!(command.get_program(), path.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["/UPDATE", "/P", "/R"]
+        );
+    }
+
+    #[test]
+    fn msi_handoff_uses_windows_installer_without_reboot_or_uninstall() {
+        let path = Path::new("C:/test cache/中文/RunDock_2.0.27_x64_en-US.msi");
+        let command = installer_command(path, Some(std::ffi::OsStr::new("C:/Windows"))).unwrap();
+        assert_eq!(
+            Path::new(command.get_program()),
+            Path::new("C:/Windows/System32/msiexec.exe")
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("/i"),
+                path.as_os_str(),
+                std::ffi::OsStr::new("/passive"),
+                std::ffi::OsStr::new("/norestart"),
+                std::ffi::OsStr::new("AUTOLAUNCHAPP=True"),
+            ]
+        );
+        assert!(installer_command(path, None).is_err());
+        assert!(installer_command(Path::new("C:/unexpected.cmd"), None).is_err());
+    }
+
     fn release(version: &str) -> Release {
         let tag = format!("v{version}");
         Release {

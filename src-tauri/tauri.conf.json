@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RunDock",
-  "version": "2.0.27",
+  "version": "2.0.28",
   "identifier": "com.launcher.platform",
   "plugins": {
     "shell": { "open": "^https://github\\.com/oooing/rundock(/releases)?$" }
@@ -39,7 +39,11 @@
     "externalBin": ["binaries/launcher-sidecar"],
     "windows": {
       "wix": { "upgradeCode": "3dab43c3-d2d7-5eba-adb3-07bfe05728bb" },
-      "nsis": { "installerHooks": "windows/installer-hooks.nsh" },
+      "nsis": {
+        "installerHooks": "windows/installer-hooks.nsh",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": false
+      },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }

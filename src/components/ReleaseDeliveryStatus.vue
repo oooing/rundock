@@ -27,19 +27,18 @@ let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 onMounted(() => {
   const poll = async () => {
-    if (props.deliveries.some(item => item.state === 'published' && ['pending', 'deployment_requested', 'deploying'].includes(item.syncState))) await act('sync')
+    if (props.deliveries.some(item => item.state === 'published' && ['pending', 'deployment_requested', 'deploying'].includes(item.syncState))) await checkSync()
     if (!disposed) timer = setTimeout(poll, 15000)
   }
   timer = setTimeout(poll, 15000)
 })
 onUnmounted(() => { disposed = true; clearTimeout(timer); timer = undefined })
 const workflowUrl = (message: string) => message.match(/https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/\d+/)?.[0] || ''
-async function act(action: 'cancel' | 'sync') {
+async function checkSync() {
   if (busy.value) return
   busy.value = true; error.value = ''
   try {
-    if (action === 'cancel') await api.cancelRelease(props.run.id)
-    else await api.checkReleaseSync(props.run.id)
+    await api.checkReleaseSync(props.run.id)
     emit('refresh')
   } catch (reason) { error.value = reason instanceof Error ? reason.message : tr('操作失败，请重试') }
   finally { busy.value = false }
@@ -66,8 +65,7 @@ async function act(action: 'cancel' | 'sync') {
       <small>{{ tr('产物清单 SHA-256') }}: <code>{{ item.manifestSha256 }}</code></small>
     </div>
     <div class="actions">
-      <button v-if="['queued', 'running'].includes(run.status)" :disabled="busy" :aria-busy="busy" @click="act('cancel')">{{ tr(busy ? '正在处理…' : '取消执行') }}</button>
-      <button v-if="deliveries.some(item => item.state === 'published' && item.syncState !== 'unconfigured')" :disabled="busy" :aria-busy="busy" @click="act('sync')">{{ tr('重新检查服务器同步') }}</button>
+      <button v-if="deliveries.some(item => item.state === 'published' && item.syncState !== 'unconfigured')" :disabled="busy" :aria-busy="busy" @click="checkSync">{{ tr('重新检查服务器同步') }}</button>
     </div>
     <p v-if="error" role="alert">{{ error }}</p>
   </section>

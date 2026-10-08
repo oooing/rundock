@@ -159,3 +159,17 @@
 @media (pointer: coarse) {
   .publish-toolbar .intent-choice button, #release-panel-publish .choice-option { min-height: 44px; }
 }
+
+/* Execution details stay subordinate to the fixed progress and stop controls. */
+.progress-block .progress-title { gap: 12px; margin: 4px 0 12px; font-size: 13px; }
+.progress-block .release-version { color: var(--text-dim); font: 11px/1.5 Consolas, monospace; text-align: right; overflow-wrap: anywhere; }
+.progress-block .run-targets { gap: 8px; margin: 0 0 18px; }
+.progress-block .run-target { min-height: 48px; padding: 10px 14px; border-radius: 9px; font-size: 12px; }
+.progress-block .run-target.waiting { color: var(--text-faint); }
+.progress-block .run-target.running { background: #203047; }
+.progress-block .run-target.failed { background: #42272e; }
+.progress-block .run-target.succeeded { background: #1c332c; }
+.progress-block .execution-details { border-top: 1px solid var(--border); padding-top: 8px; }
+.progress-block .execution-details > summary { padding: 10px 0; }
+.progress-block .log-box { padding: 14px; font-size: 11px; line-height: 1.75; }
+@media (max-width: 600px) { .progress-block .progress-title { align-items: flex-start; flex-direction: column; gap: 4px; }.progress-block .release-version { text-align: left; } }

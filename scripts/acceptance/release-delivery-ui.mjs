@@ -272,6 +272,15 @@ try {
  await page.locator('.m-head button').click();
  await page.getByRole('button',{name:'重新打开发布',exact:true}).click();
  await page.locator('.release-progress-overview.running').waitFor();
+ const fixedCancel=page.locator('.release-progress-overview').getByRole('button',{name:'取消执行',exact:true});
+ assert.equal(await page.getByRole('button',{name:'取消执行',exact:true}).count(),1);
+ assert.ok((await fixedCancel.boundingBox()).height>=44);
+ const cancelPosition=await fixedCancel.boundingBox();
+ await page.locator('.m-body').evaluate(el=>{el.scrollTop=el.scrollHeight});
+ assert.deepEqual(await fixedCancel.boundingBox(),cancelPosition);
+ await page.locator('.m-body').evaluate(el=>{el.scrollTop=0});
+ await page.screenshot({path:path.join(evidence,'release-running-controls.png')});
+ report.checks.push('one large cancel button stays fixed in the actual release modal while details scroll');
  assert.equal(await page.locator('.publish-submit').count(),0);
  run=completedRun;history=[run,oldRun];
  await page.getByText('构建与发布已完成',{exact:true}).waitFor();

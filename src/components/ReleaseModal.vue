@@ -19,6 +19,7 @@ import ReleaseBuildChoice from './ReleaseBuildChoice.vue'
 import ReleaseSetupOverview from './ReleaseSetupOverview.vue'
 import SavedReleaseArtifacts from './SavedReleaseArtifacts.vue'
 import ReleaseProgressOverview from './ReleaseProgressOverview.vue'
+import ReleaseCancelButton from './ReleaseCancelButton.vue'
 const props = defineProps<{ app: AppView }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 const {
@@ -120,7 +121,9 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
         <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="panelTab === 'settings'" :tabindex="panelTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting || !!activeRun" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
       </nav>
 
-      <ReleaseProgressOverview v-if="activeRun" :run="activeRun" :targets="runTargets" :deliveries="runDeliveries" :definitions="configuredTargets" :artifacts="runArtifacts" :cloud-handoff="automationHandedOff" :cloud-build="cloudBuild" />
+      <ReleaseProgressOverview v-if="activeRun" :run="activeRun" :targets="runTargets" :deliveries="runDeliveries" :definitions="configuredTargets" :artifacts="runArtifacts" :cloud-handoff="automationHandedOff" :cloud-build="cloudBuild">
+        <template #actions><ReleaseCancelButton :key="activeRun.id" :run-id="activeRun.id" :status="activeRun.status" @refresh="poll" /></template>
+      </ReleaseProgressOverview>
 
       <div ref="bodyRef" class="m-body" :inert="publishing || autoSubmitting">
         <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
@@ -143,7 +146,7 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             </section>
             <div v-else-if="activeRun.status !== 'failed' && cloudExecutionNotice" class="cloud-execution-notice" role="note"><strong>{{ cloudExecutionNotice.title }}</strong><p>{{ cloudExecutionNotice.text }}</p></div>
             <ReleaseDeliveryStatus :run="activeRun" :deliveries="runDeliveries" :artifacts="runArtifacts" :definitions="configuredTargets" @refresh="poll" />
-            <div class="progress-title"><strong>{{ activeRun.createTag === false ? tr("代码更新") : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</strong><span v-if="activeRun.status !== 'succeeded'" class="status" :class="activeRun.status">{{ activeRunStatusLabel }}</span></div>
+            <div class="progress-title"><strong>{{ runTargets.length ? tr('构建目标') : tr('本次操作') }}</strong><span class="release-version">{{ activeRun.createTag === false ? tr("代码更新") : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</span></div>
             <div v-if="runTargets.length" class="run-targets"><div v-for="target in runTargets" :key="target.targetId" class="run-target" :class="targetProgress(target, runDeliveries, configuredTargets).state"><strong>{{ configuredTargets.find((item) => item.id === target.targetId)?.name || target.targetId }}</strong><span>{{ tr(targetProgress(target, runDeliveries, configuredTargets).label) }}</span><em :class="targetProgress(target, runDeliveries, configuredTargets).state">{{ tr(progressLabels[targetProgress(target, runDeliveries, configuredTargets).state]) }}</em></div></div>
             <details class="execution-details" :open="activeRun.status !== 'succeeded'"><summary>{{ tr("执行日志") }}</summary><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">{{ tr("等待发布日志…") }}</div></div></details>
             <SavedReleaseArtifacts v-if="hasLocalSavedOutputs" :run-id="activeRun.id" @sealed="sealedArtifactsPresent = $event" />

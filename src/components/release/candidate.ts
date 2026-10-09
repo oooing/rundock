@@ -114,8 +114,25 @@ export function installCandidate(ctx: ReleaseContext) {
             ctx.error.value = ctx.messageOf(reason);
         }
     };
+    ctx.ignoreSafetyFile = async function (file: ReleaseFileClassification) {
+        if (ctx.ignoringFile.value || ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || file.tracked)
+            throw new Error(tr('当前不能修改忽略清单，请稍后重试。'));
+        ctx.ignoringFile.value = true;
+        try {
+            const result = await api.ignoreReleaseFile(ctx.props.app.id, file.path, file.contentFingerprint);
+            if (!ctx.disposed) {
+                ctx.candidate.value = null;
+                ctx.candidateSignature.value = '';
+                ctx.manualDecisions.value = ctx.manualDecisions.value.filter(item => item.path !== file.path);
+                ctx.applyPreflight(result.preflight, false, true);
+            }
+            return result.ignoreFile;
+        } finally {
+            ctx.ignoringFile.value = false;
+        }
+    };
     ctx.inspectCandidate = async function () {
-        if (ctx.checkingCandidate.value || !ctx.preflight.value)
+        if (ctx.checkingCandidate.value || ctx.ignoringFile.value || !ctx.preflight.value)
             return false;
         ctx.checkingCandidate.value = true;
         ctx.error.value = '';
@@ -143,7 +160,8 @@ export function installCandidate(ctx: ReleaseContext) {
                 return prepared.canSaveProgress && prepared.status === 'ready';
             if (request.skipChecks)
                 return prepared.checksSkipped === true && prepared.accepted && prepared.status === 'skipped';
-            if (prepared.sensitiveFindings.length || prepared.dependencyFindings.some(item => item.blocked))
+            if (prepared.sensitiveFindings.length || prepared.dependencyFindings.some(item => item.blocked) ||
+                prepared.checkResults.some(check => check.id === 'rundock:scope' && check.status === 'blocked'))
                 return false;
             ctx.candidate.value = { ...prepared, status: 'running' };
             const poll = async () => {

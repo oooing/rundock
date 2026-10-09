@@ -24,7 +24,7 @@ func automaticCandidateChecks(secrets []SensitiveFinding, deps []DependencyFindi
 		{ID: "rundock:dependencies", Name: "本地文件依赖", Status: CheckPassed, Required: true, Reason: "已检查可识别的本地文件引用，未发现阻断问题；不代表构建或测试已通过。"},
 	}
 	if unresolved > 0 {
-		results[0].Status = CheckFailed
+		results[0].Status = CheckBlocked
 		results[0].Reason = "仍有文件用途需要确认，请在文件范围中处理。"
 	}
 	if len(secrets) > 0 {
@@ -175,13 +175,17 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 		cand.View.Warnings = append(cand.View.Warnings, warning)
 		return cloneView(cand.View), nil
 	}
-	failed, unverified, cancelled, pendingRequired, applicable := false, false, false, false, 0
+	failed, blocked, unverified, cancelled, pendingRequired, applicable := false, false, false, false, false, 0
 	for _, result := range results {
 		if result.Status == CheckSkipped {
 			continue
 		}
 		applicable++
 		switch result.Status {
+		case CheckBlocked:
+			if result.Required {
+				blocked = true
+			}
 		case CheckFailed:
 			if result.Required {
 				failed = true
@@ -205,6 +209,10 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 		cand.View.CanFormal = false
 	case failed:
 		cand.View.Status = CheckFailed
+		cand.View.Accepted = false
+		cand.View.CanFormal = false
+	case blocked:
+		cand.View.Status = CheckBlocked
 		cand.View.Accepted = false
 		cand.View.CanFormal = false
 	case unverified || pendingRequired || applicable == 0:

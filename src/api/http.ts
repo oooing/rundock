@@ -149,6 +149,8 @@ export const api = {
     req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, { method: 'POST' }),
   previewReleaseFile: (id: string, path: string, signal?: AbortSignal) =>
     req<import('@/types').ReleaseFilePreview>(`/api/apps/${encodeURIComponent(id)}/release/file-preview?path=${encodeURIComponent(path)}`, { signal }),
+  ignoreReleaseFile: (id: string, path: string, contentFingerprint: string) =>
+    req<{ignoreFile:string;preflight:ReleasePreflight}>('/api/apps/'+encodeURIComponent(id)+'/release/ignore-file', {method:'POST',body:JSON.stringify({path,contentFingerprint})}),
   releaseFindingContext: (id:string,candidateId:string,fingerprint:string,expanded:boolean,signal?:AbortSignal) =>
     req<import('@/types').ReleaseFindingContext>(`/api/apps/${encodeURIComponent(id)}/release/finding-context?${new URLSearchParams({candidateId,fingerprint,expanded:String(expanded)})}`,{signal}),
   prepareReleaseCandidate: (id: string, body: ReleaseCandidateRequest, signal?:AbortSignal) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate`, {method:'POST', body:JSON.stringify(body),signal}).then(normalizeReleaseCandidate),

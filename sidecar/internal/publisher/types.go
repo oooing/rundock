@@ -46,6 +46,7 @@ const (
 	CheckRunning    = "running"
 	CheckPassed     = "passed"
 	CheckFailed     = "failed"
+	CheckBlocked    = "blocked"
 	CheckCancelled  = "cancelled"
 	CheckUnverified = "unverified"
 	CheckStale      = "stale"

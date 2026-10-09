@@ -26,7 +26,7 @@ const {
   phaseOptions, loading, savingProfile, publishing, autoSubmitting,
   unstaging, unstageNotice, error, errorCode, versionPlanNotice,
   preflight, history, selected, releaseIntent, manualDecisions,
-  sensitiveExceptions, candidate, checkingCandidate, checksEnabled, candidateSignature,
+  sensitiveExceptions, candidate, checkingCandidate, ignoringFile, ignoreSafetyFile, checksEnabled, candidateSignature,
   reviewSignature, findingDecisions, resolvingReview, safetySettingsDirty, candidatePoll,
   candidateEpoch, candidateAbort, safetyFiles, candidateRequest, currentCandidateSignature,
   submissionPlanSignature, candidateStale, reviewStale, pendingFindings, candidateReady,
@@ -156,7 +156,7 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             <details v-if="runFailureDetails" class="execution-details"><summary>{{ tr('查看技术详情') }}</summary><pre class="log-box">{{ runFailureDetails }}</pre></details>
             <div v-if="retryable && !customRetryConfirmation" class="alert info" role="note">{{ retryGuidance }}</div>
             <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
-            <div v-if="activeRun.status !== 'queued' && activeRun.status !== 'running'" class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button><button v-else class="primary" type="button" @click="startNew">{{ tr('准备新发布') }}</button></div>
+            <div v-if="activeRun.status !== 'queued' && activeRun.status !== 'running' && (retryable || uploadPaused || activeRun.status === 'failed')" class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
             <p v-if="uploadPaused" class="muted">{{ tr('关闭后会保留本次记录，可在“最近发布”中打开记录继续上传。') }}</p>
           </section>
         </template>
@@ -230,7 +230,7 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             <p v-else class="section-help">{{ tr('不创建版本 Tag') }}</p>
           </section>
 
-          <ReleaseSafetyPanel v-model:checks-enabled="checksEnabled" :locked="autoSubmitting || publishing" :app-id="app.id" :intent="releaseIntent" :cloud-build="releaseIntent==='formal' && buildMode==='github'" :files="safetyFiles" :selected="selected" :decisions="manualDecisions" :candidate="candidate" :busy="checkingCandidate" :stale="reviewStale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @choose="chooseSafetyFile" @recommend="adoptRecommended" @cancel="cancelCandidate" @refresh="refreshSafety" @check="inspectCandidate" @exception="recordSensitiveException" />
+          <ReleaseSafetyPanel v-model:checks-enabled="checksEnabled" :locked="autoSubmitting || publishing || ignoringFile" :ignore-file="ignoreSafetyFile" :app-id="app.id" :intent="releaseIntent" :cloud-build="releaseIntent==='formal' && buildMode==='github'" :files="safetyFiles" :selected="selected" :decisions="manualDecisions" :candidate="candidate" :busy="checkingCandidate" :stale="reviewStale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @choose="chooseSafetyFile" @recommend="adoptRecommended" @cancel="cancelCandidate" @refresh="refreshSafety" @check="inspectCandidate" @exception="recordSensitiveException" />
           <section v-if="preflight.aheadCount" class="file-picker">
             <details v-if="preflight.aheadCount" class="unpushed-files">
               <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>

@@ -2,10 +2,11 @@
 import { computed } from 'vue'
 import ReleaseFindingSource from './ReleaseFindingSource.vue'
 import { tr } from '@/i18n'
-import { groupSensitiveFindings, hasReleaseIssues, releaseCheckPresentation } from '@/utils/releaseIssues'
+import { groupSensitiveFindings, hasReleaseIssues, isFileReviewCheck, releaseCheckPresentation } from '@/utils/releaseIssues'
 import type { ReleaseCandidate, ReleaseFileClassification } from '@/types'
 const props = defineProps<{appId:string;candidate:ReleaseCandidate;files:ReleaseFileClassification[];selected:Record<string,boolean>;busy:boolean;stale:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean}>()
-const emit = defineEmits<{choose:[file:ReleaseFileClassification,included:boolean];check:[];exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
+const emit = defineEmits<{choose:[file:ReleaseFileClassification,included:boolean];check:[];review:[];exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
+const needsFileReview=computed(()=>props.candidate.checkResults.some(isFileReviewCheck))
 const secretGroups=computed(()=>groupSensitiveFindings(props.candidate.sensitiveFindings))
 const pendingCount=computed(()=>props.candidate.sensitiveFindings.filter(f=>props.stale || !props.findingDecisions?.[f.fingerprint]).length)
 const missing=computed(()=>props.candidate.dependencyFindings.filter(f=>f.blocked))
@@ -30,14 +31,15 @@ function include(path:string){const file=addableFile(path);if(file && !props.bus
       <button v-if="addableFile(finding.missing)" :disabled="busy || stale" @click="include(finding.missing)">{{tr('加入本次提交')}}</button>
       <details class="issue-details"><summary>{{tr('查看详情')}}</summary><p>{{finding.path}} → {{finding.reference}}</p><p>{{finding.reason}}</p></details>
     </article>
-    <article v-for="check in failedChecks" :key="check.id" class="issue-card check-failure">
+    <article v-for="check in failedChecks" :key="check.id" class="issue-card" :class="isFileReviewCheck(check)?'check-review':'check-failure'">
       <strong>{{check.name}} · {{tr(releaseCheckPresentation(check).label)}}</strong>
       <p class="check-reason">{{tr(releaseCheckPresentation(check).reason)}}</p>
       <p class="check-suggestion">{{tr(releaseCheckPresentation(check).suggestion)}}</p>
+      <button v-if="isFileReviewCheck(check) && !stale" type="button" :disabled="busy" @click="emit('review')">{{tr('确认文件用途')}}</button>
       <details v-if="check.log" class="issue-details"><summary>{{tr('执行日志')}}</summary><pre>{{check.log}}</pre></details>
     </article>
     <p v-if="resolvingReview" class="review-progress" role="status">{{tr('已处理全部问题，正在统一验证。')}}</p>
-    <div v-else-if="(!pendingCount || stale) && (hasReleaseIssues(candidate) || stale)" class="issue-next">
+    <div v-else-if="(!needsFileReview || stale) && (!pendingCount || stale) && (hasReleaseIssues(candidate) || stale)" class="issue-next">
       <span>{{tr('处理后点“重新检查”，通过后再确认发布。')}}</span>
       <button class="primary" :disabled="busy" @click="emit('check')">{{busy?tr('检查中…'):tr('重新检查')}}</button>
     </div>
@@ -53,5 +55,6 @@ function include(path:string){const file=addableFile(path);if(file && !props.bus
   </div>
 </template>
 <style scoped>
+.issue-card.check-review{border-color:var(--amber);background:color-mix(in srgb,var(--amber) 6%,transparent)}.check-review strong{color:var(--amber)}
 .check-issues{display:grid;gap:10px;min-width:0}.issue-heading{color:var(--amber);margin:0;font-size:13px}.issue-card{border:1px solid var(--border);border-radius:8px;padding:12px;min-width:0}.issue-card strong{font-size:13px}.issue-path{display:block;margin:8px 0;overflow-wrap:anywhere;font-size:12px}.check-issues p{font-size:12px;line-height:1.6;color:var(--text-dim);overflow-wrap:anywhere}.issue-card button,.issue-next button{font-size:12px;padding:7px 10px}.issue-details{font-size:12px;color:var(--text-dim);margin-top:10px}.issue-details summary{cursor:pointer}.issue-detail{border-top:1px solid var(--border);padding-top:6px;margin-top:8px}.issue-detail input{width:100%;margin-bottom:8px;box-sizing:border-box}.issue-next{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px}.issue-details pre{max-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.diagnostics small{overflow-wrap:anywhere}
 </style>

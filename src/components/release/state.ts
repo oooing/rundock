@@ -21,6 +21,7 @@ export function installState(ctx: ReleaseContext) {
     ctx.sensitiveExceptions = ref<NonNullable<ReleaseCandidateRequest['sensitiveExceptions']>>([]);
     ctx.candidate = ref<ReleaseCandidate | null>(null);
     ctx.checkingCandidate = ref(false);
+    ctx.ignoringFile = ref(false);
     ctx.checksEnabled = ref(true);
     ctx.candidateSignature = ref('');
     ctx.reviewSignature = ref('');

@@ -507,7 +507,7 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
 }
-.topbar { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--workspace-header-height); padding: var(--workspace-header-top) 28px var(--workspace-header-bottom); }
+.topbar { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--workspace-header-height); padding: var(--workspace-header-top) 28px var(--workspace-header-bottom); background: var(--bg); }
 .title { min-width: 0; }
 .title h1 { margin: 0; font-size: 24px; line-height: var(--workspace-title-line); font-weight: 600; letter-spacing: -.025em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-summary { margin: var(--workspace-heading-gap) 0 0; color: var(--text-faint); font-size: 12px; line-height: var(--workspace-subtitle-line); font-variant-numeric: tabular-nums; }
@@ -555,10 +555,10 @@ onUnmounted(() => {
 }
 .content {
   flex: 1;
+  min-height: 0;
   overflow: auto;
-  /* Extend into the header gap for the glow without lowering the first row. */
-  margin-top: -28px;
-  padding: 28px 28px 28px;
+  /* Keep the scroll viewport below the header, including after its padding scrolls away. */
+  padding: 0 28px 28px;
   position: relative;
   transition: background 0.15s;
 }

@@ -260,8 +260,10 @@ try {
  await page.locator('.history-panel summary').click();
  await page.getByRole('button',{name:'查看 v2.0.21 的发布记录',exact:true}).click();
  await page.getByText('构建与发布已完成',{exact:true}).waitFor();
- await page.getByRole('button',{name:'准备新发布',exact:true}).click();
- await githubChoice.waitFor();
+ assert.equal(await page.getByRole('button',{name:'准备新发布',exact:true}).count(),0);
+ assert.equal(await page.locator('#release-panel-publish > .button-row').count(),0);
+ await reopen();
+ report.checks.push('completed result has no prepare-new-release button or empty action row; closing and reopening still opens configuration');
  await page.locator('.history-panel summary').click();
  await page.getByRole('button',{name:'查看 v2.0.19 的发布记录',exact:true}).click();
  await page.locator('.progress-error').filter({hasText:oldRun.errorMessage}).waitFor();

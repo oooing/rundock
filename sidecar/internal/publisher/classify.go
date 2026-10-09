@@ -329,6 +329,16 @@ func looksReleaseSource(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	lower := strings.ToLower(rel)
 	base := strings.ToLower(path.Base(rel))
+	// License notices belong with the source they license. Do not recommend
+	// arbitrary .txt files (or private .key/.pem files) by extension alone.
+	licenseName := base
+	if ext := path.Ext(base); ext == ".txt" || ext == ".md" || ext == ".rst" {
+		licenseName = strings.TrimSuffix(base, ext)
+	}
+	if path.Ext(licenseName) == "" && (licenseName == "license" || licenseName == "licence" || licenseName == "copying" ||
+		strings.HasPrefix(licenseName, "license-") || strings.HasPrefix(licenseName, "license_")) {
+		return true
+	}
 	if strings.Contains(lower, "/migrations/") || strings.HasPrefix(lower, "migrations/") || strings.HasSuffix(lower, ".sql") {
 		return true
 	}
@@ -336,7 +346,7 @@ func looksReleaseSource(rel string) bool {
 		return true
 	}
 	switch base {
-	case "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "go.mod", "go.sum",
+	case ".gitignore", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "go.mod", "go.sum",
 		"cargo.toml", "cargo.lock", "gemfile", "gemfile.lock", "pipfile", "poetry.lock",
 		"makefile", "dockerfile", "tsconfig.json", "vite.config.ts", "vite.config.js":
 		return true
@@ -345,7 +355,7 @@ func looksReleaseSource(rel string) bool {
 	switch ext {
 	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".py", ".rs", ".java", ".kt",
 		".c", ".h", ".cpp", ".cc", ".cs", ".rb", ".php", ".swift", ".css", ".scss", ".html",
-		".json", ".yml", ".yaml", ".toml", ".md", ".svg", ".sh", ".ps1", ".bat", ".cmd":
+		".json", ".yml", ".yaml", ".toml", ".md", ".svg", ".sh", ".ps1", ".bat", ".cmd", ".nsi", ".nsh":
 		if strings.HasSuffix(base, ".test.js") || strings.HasSuffix(base, ".test.ts") || strings.HasSuffix(base, ".spec.ts") || strings.HasSuffix(base, ".spec.js") || strings.HasSuffix(base, "_test.go") {
 			return true
 		}

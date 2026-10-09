@@ -3,21 +3,69 @@ import {readFileSync} from 'node:fs'
 import test from 'node:test'
 import ts from 'typescript'
 import {computed, ref} from 'vue'
-import {parse} from '@vue/compiler-sfc'
-const source=parse(readFileSync(new URL('../../src/components/ReleaseModal.vue',import.meta.url),'utf8')).descriptor.scriptSetup.content
-const ast=ts.createSourceFile('modal.ts',source,ts.ScriptTarget.Latest,true)
-const code=ts.transpileModule(ast.statements.filter(s=>['inspectCandidate','cancelCandidate','submitRelease'].includes(s.name?.text)).map(s=>s.getText(ast)).join('\n'),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText
+const names=['inspectCandidate','cancelCandidate','submitRelease','ignoreSafetyFile']
+const functions=[]
+for(const file of ['candidate','submission']){
+ const source=readFileSync(new URL('../../src/components/release/'+file+'.ts',import.meta.url),'utf8')
+ const ast=ts.createSourceFile(file+'.ts',source,ts.ScriptTarget.Latest,true)
+ function visit(node){
+  if(ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) &&
+     node.left.expression.getText(ast)==='ctx' && names.includes(node.left.name.text)){
+   functions.push('const '+node.left.name.text+'='+node.right.getText(ast).replace(/\bctx\./g,''))
+  }
+  ts.forEachChild(node,visit)
+ }
+ visit(ast)
+}
+assert.equal(functions.length,names.length,'test must use the current production functions')
+const code=ts.transpileModule(functions.join(';\n'),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}}
 function fixture(){
  const candidate=ref(null),checkingCandidate=ref(false),checks=[],polls=[],timers=[],applied=[],published=[]
- const prepared={id:'test',status:'pending',accepted:false,sensitiveFindings:[],dependencyFindings:[]}
+ const prepared={id:'test',status:'pending',accepted:false,sensitiveFindings:[],dependencyFindings:[],checkResults:[]}
  const canSubmit=ref(true),candidateReady=computed(()=>!checkingCandidate.value && (candidate.value?.accepted || candidate.value?.status==='ready' && candidate.value?.canSaveProgress))
  const deps={autoSubmitting:ref(false),canSubmit,candidateReady,canPublish:computed(()=>canSubmit.value && candidateReady.value),submissionPlanSignature:ref('original-plan'),publish:async()=>{published.push(candidate.value.id)},nextTick:async()=>{},bodyRef:ref(null),tr:v=>v,checkingCandidate,preflight:ref({}),error:ref(''),disposed:false,props:{app:{id:'app'}},candidate,candidateSignature:ref(''),candidateRequest:ref({intent:'formal'}),profileBody:()=>({}),applyPreflight:value=>applied.push(value),messageOf:String,
  api:{saveReleaseProfile:async()=>{},releasePreflight:async()=>({}),prepareReleaseCandidate:async()=>({...prepared}),checkReleaseCandidate:()=>{const d=deferred();checks.push(d);return d.promise},getReleaseCandidate:()=>{const d=deferred();polls.push(d);return d.promise},cancelReleaseCandidate:async()=>({...prepared,status:'cancelled'})},setTimeout:callback=>{timers.push(callback);return timers.length},clearTimeout:()=>{}}
- const actions=new Function(...Object.keys(deps),`let candidateEpoch=0,candidatePoll=null,candidateAbort=null;${code};return {inspectCandidate,cancelCandidate,submitRelease,dispose:()=>{disposed=true}}`)(...Object.values(deps))
+ Object.assign(deps,{reviewSignature:ref(''),findingDecisions:ref({}),ignoringFile:ref(false),publishing:ref(false),manualDecisions:ref([])})
+ const actions=new Function(...Object.keys(deps),`let candidateEpoch=0,candidatePoll=null,candidateAbort=null;${code};return {inspectCandidate,cancelCandidate,submitRelease,ignoreSafetyFile,dispose:()=>{disposed=true}}`)(...Object.values(deps))
  return {...actions,...deps,checks,polls,timers,applied,published}
 }
 async function until(test){for(let i=0;i<30&&!test();i++)await Promise.resolve();assert.ok(test(),'asynchronous stage not reached')}
+test('permanent ignore refreshes files without committing or discarding other decisions',async()=>{
+ const f=fixture(),pending=deferred(),file={path:'notes/local.txt',contentFingerprint:'same',tracked:false},calls=[]
+ f.candidate.value={id:'old',accepted:true};f.candidateSignature.value='old'
+ f.manualDecisions.value=[{path:file.path,decision:'exclude'},{path:'other.txt',decision:'include'}]
+ f.api.ignoreReleaseFile=(...args)=>{calls.push(args);return pending.promise}
+ const run=f.ignoreSafetyFile(file)
+ assert.equal(f.ignoringFile.value,true)
+ await assert.rejects(f.ignoreSafetyFile(file))
+ assert.equal(await f.inspectCandidate(),false)
+ pending.resolve({ignoreFile:'.gitignore',preflight:{changes:[]}})
+ assert.equal(await run,'.gitignore')
+ assert.deepEqual(calls,[['app',file.path,'same']]);assert.equal(f.ignoringFile.value,false)
+ assert.equal(f.candidate.value,null);assert.equal(f.candidateSignature.value,'')
+ assert.deepEqual(f.manualDecisions.value,[{path:'other.txt',decision:'include'}])
+ assert.deepEqual(f.applied,[{changes:[]}]);assert.deepEqual(f.published,[])
+})
+test('failed ignore preserves review and tracked files never invoke the API',async()=>{
+ const f=fixture(),calls=[],file={path:'local.txt',contentFingerprint:'same',tracked:false}
+ f.candidate.value={id:'old'};f.manualDecisions.value=[{path:'other.txt',decision:'include'}]
+ f.api.ignoreReleaseFile=async()=>{calls.push('ignore');throw new Error('file changed')}
+ await assert.rejects(f.ignoreSafetyFile(file),/file changed/)
+ assert.equal(f.ignoringFile.value,false);assert.equal(f.candidate.value.id,'old')
+ assert.deepEqual(f.applied,[]);assert.equal(f.manualDecisions.value.length,1)
+ await assert.rejects(f.ignoreSafetyFile({...file,tracked:true}))
+ assert.deepEqual(calls,['ignore']);assert.deepEqual(f.published,[])
+})
+test('unconfirmed file choices stop before command checks or publication',async()=>{
+ const f=fixture()
+ f.api.prepareReleaseCandidate=async()=>({id:'review',status:'blocked',accepted:false,sensitiveFindings:[],dependencyFindings:[],checkResults:[{id:'rundock:scope',status:'blocked',required:true}]})
+ await f.submitRelease()
+ assert.equal(f.candidate.value.status,'blocked')
+ assert.equal(f.checks.length,0)
+ assert.deepEqual(f.published,[])
+})
+
 test('late poll cannot overwrite completed candidate with a pending snapshot',async()=>{
  const f=fixture(),run=f.inspectCandidate();await until(()=>f.checks.length===1)
  const poll=f.timers[0]();await until(()=>f.polls.length===1)

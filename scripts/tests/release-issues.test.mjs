@@ -7,6 +7,20 @@ import { parse } from '@vue/compiler-sfc'
 const result=await build({entryPoints:['src/utils/releaseIssues.ts'],bundle:true,write:false,format:'esm',platform:'node'})
 const {groupSensitiveFindings,hasReleaseIssues,releaseCheckPresentation}=await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 const candidate=overrides=>({sensitiveFindings:[],dependencyFindings:[],checkResults:[],status:'ready',...overrides})
+const {hasOnlyFileReviewBlock}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text).toString('base64'))
+
+test('file confirmation is amber review, including old failed snapshots, never masking real failures',()=>{
+ for(const status of ['blocked','failed']){
+  const check={id:'rundock:scope',required:true,status,reason:'仍有文件用途需要确认，请在文件范围中处理。'}
+  assert.equal(releaseCheckPresentation(check).label,'待确认文件')
+  assert.match(releaseCheckPresentation(check).suggestion,/本次不提交.*以后忽略/)
+  assert.equal(hasOnlyFileReviewBlock(candidate({status,checkResults:[check]})),true)
+  assert.equal(hasOnlyFileReviewBlock(candidate({status,checkResults:[check,{id:'test',required:true,status:'failed'}]})),false)
+  assert.equal(hasOnlyFileReviewBlock(candidate({status,checkResults:[check],sensitiveFindings:[{path:'.env'}]})),false)
+  for(const state of ['cancelled','stale','ready','running']) assert.equal(hasOnlyFileReviewBlock(candidate({status:state,checkResults:[check]})),false)
+ }
+ assert.equal(releaseCheckPresentation({id:'rundock:scope',status:'failed',reason:'版本无效'}).label,'检查失败')
+})
 
 test('check errors expose the actual reason and distinguish unavailable tools from failed tests',()=>{
  const old=releaseCheckPresentation({status:'unverified',reason:'必需检查工具不可用'});

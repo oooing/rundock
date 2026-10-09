@@ -164,6 +164,7 @@ export function installSelection(ctx: ReleaseContext) {
         && (ctx.preflight.value.canRelease || ctx.preflight.value.blockingIssues.length > 0));
     ctx.remoteMissing = computed(() => ctx.pushRemote.value && !!ctx.preflight.value && !ctx.preflight.value.remotes.includes(ctx.remoteName.value));
     ctx.canSubmit = computed(() => {
+        if (ctx.ignoringFile.value) return false;
         // Current-version packaging uses the isolated local-build API, never release/commit.
         if (ctx.localBuildOnly.value || (ctx.syncPolicy.value === 'auto' && !ctx.syncRepository.value))
             return false;

@@ -32,7 +32,7 @@ test('current Tauri bundler compiles bilingual hooks and supports the updater ha
       windows: { nsis: config.bundle.windows.nsis, webviewInstallMode: { type: 'skip' } } },
   }
   writeFileSync(path.join(native, 'tauri.conf.json'), JSON.stringify(fixtureConfig))
-  for (const file of ['installer-hooks.nsh', 'stop-installed-app.ps1']) {
+  for (const file of ['installer.nsi', 'installer-hooks.nsh', 'stop-installed-app.ps1']) {
     copyFileSync(path.join(root, 'src-tauri/windows', file), path.join(native, 'windows', file))
   }
   execFileSync('rustc', [main, '-o', path.join(native, 'target/release/rundock-installer-test.exe')], { windowsHide: true })
@@ -43,6 +43,8 @@ test('current Tauri bundler compiles bilingual hooks and supports the updater ha
   assert.match(template, /MUI_LANGUAGE "English"/)
   assert.match(template, /MUI_LANGUAGE "SimpChinese"/)
   assert.match(template, /DISPLAYLANGUAGESELECTOR "false"/)
+  assert.match(template, /Call RunDockChooseInPlaceUpgrade/)
+  assert.match(template, /RUNDOCK BEGIN leave-guard/)
   assert.match(template, /GetOptions[^\n]*"\/UPDATE"/)
   assert.match(template, /GetOptions[^\n]*"\/P"/)
   assert.match(template, /GetOptions[^\n]*"\/R"/)

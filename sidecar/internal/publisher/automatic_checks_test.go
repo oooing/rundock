@@ -77,9 +77,58 @@ func TestAutomaticChecksDoNotBypassRequiredProjectCheck(t *testing.T) {
 
 func TestAutomaticChecksReportBlockingFindings(t *testing.T) {
 	checks := automaticCandidateChecks([]SensitiveFinding{{Kind: "private-key"}}, []DependencyFinding{{Blocked: true}}, 1)
-	for _, check := range checks {
-		if check.Status != CheckFailed || !check.Required {
+	for i, check := range checks {
+		want := CheckFailed
+		if i == 0 {
+			want = CheckBlocked
+		}
+		if check.Status != want || !check.Required {
 			t.Fatalf("blocking check reported success: %+v", check)
 		}
+	}
+}
+
+func TestUnresolvedFilesStayBlockedUntilReviewed(t *testing.T) {
+	svc, repo, cleanup := newReleaseFixture(t)
+	defer cleanup()
+	writeCheckProfiles(t, repo, nil)
+	writeTestFile(t, filepath.Join(repo, "tracked.txt"), "changed\n")
+	writeTestFile(t, filepath.Join(repo, "unknown.bin"), "unknown local material\n")
+	pf, err := svc.PreflightLocal(context.Background(), "app1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := CandidateRequest{StatusFingerprint: pf.StatusFingerprint, SelectedPaths: []string{"tracked.txt"}, Intent: IntentFormal}
+	view, err := svc.PrepareCandidate(context.Background(), "app1", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != CheckBlocked || view.Accepted || view.CanFormal {
+		t.Fatalf("pending confirmation was not blocked: %+v", view)
+	}
+	var fingerprint string
+	for _, item := range view.Classifications {
+		if item.Path == "unknown.bin" {
+			fingerprint = item.ContentFingerprint
+		}
+	}
+	view, err = svc.RunCandidateChecks(context.Background(), "app1", view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != CheckBlocked || view.Accepted || view.CanFormal {
+		t.Fatalf("recheck bypassed pending confirmation or reported test failure: %+v", view)
+	}
+	req.ManualDecisions = []ManualDecision{{Path: "unknown.bin", Decision: DecisionExclude, ContentFingerprint: fingerprint}}
+	view, err = svc.PrepareCandidate(context.Background(), "app1", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err = svc.RunCandidateChecks(context.Background(), "app1", view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != CheckPassed || !view.Accepted {
+		t.Fatalf("valid file choice did not unblock: %+v", view)
 	}
 }

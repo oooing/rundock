@@ -53,6 +53,8 @@ export interface ReleaseContext {
     sensitiveExceptions: Ref<NonNullable<ReleaseCandidateRequest['sensitiveExceptions']>>;
     candidate: Ref<ReleaseCandidate | null>;
     checkingCandidate: Ref<boolean, boolean>;
+    ignoringFile: Ref<boolean>;
+    ignoreSafetyFile: (file: ReleaseFileClassification) => Promise<string>;
     checksEnabled: Ref<boolean, boolean>;
     candidateSignature: Ref<string, string>;
     reviewSignature: Ref<string, string>;

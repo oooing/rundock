@@ -169,6 +169,8 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleReleasePreflight(w, r, id)
 	case "release/file-preview":
 		s.handleReleaseFilePreview(w, r, id)
+	case "release/ignore-file":
+		s.handleReleaseIgnore(w, r, id)
 	case "release/finding-context":
 		s.handleFindingContext(w, r, id)
 	case "release/unstage":

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { tr } from '@/i18n'
+import UiIcon from './UiIcon.vue'
 import { artifactSizeSummary, progressLabels, releaseProgress } from '@/utils/releaseProgress'
 import type { ProgressRun } from '@/utils/releaseProgress'
 import type { CloudBuildStatus, ReleaseTarget } from '@/types'
@@ -8,7 +9,9 @@ import type { ReleaseDelivery, ReleaseTargetRun } from '@/types/releaseExecution
 const props = withDefaults(defineProps<{
   run: ProgressRun; targets?: ReleaseTargetRun[]; deliveries?: ReleaseDelivery[]; definitions?: ReleaseTarget[];
   artifacts?: Array<{ sizeBytes?: number }>; cloudHandoff?: boolean; cloudBuild?: CloudBuildStatus | null; localOnly?: boolean;
+  canRetryUpload?: boolean; retrying?: boolean; retryDisabled?: boolean;
 }>(), { targets: () => [], deliveries: () => [], definitions: () => [], artifacts: () => [] })
+const emit = defineEmits<{ retry: [] }>()
 const progress = computed(() => releaseProgress({ ...props, deliveryPlanned: ['queued', 'running'].includes(props.run.status) && props.run.selectedTargets.some(choice => choice.publish && props.definitions.some(item => item.id === choice.targetId && item.delivery)) }))
 const size = computed(() => artifactSizeSummary(props.artifacts))
 const currentName = computed(() => {
@@ -34,7 +37,11 @@ const currentName = computed(() => {
     <ol class="release-step-list" :style="{ '--step-count': progress.steps.length }" :aria-label="tr('本次流程')">
       <li v-for="(step, index) in progress.steps" :key="step.id" :class="step.state" :aria-current="step.state === 'running' ? 'step' : undefined">
         <span class="step-mark" aria-hidden="true">{{ step.state === 'succeeded' ? '✓' : step.state === 'failed' ? '!' : step.state === 'cancelled' || step.state === 'skipped' ? '−' : index + 1 }}</span>
-        <span class="step-copy"><span class="step-label">{{ tr(step.label) }}</span><small>{{ tr(progressLabels[step.state]) }}</small></span>
+        <span class="step-copy"><span class="step-label">{{ tr(step.label) }}</span><small>{{ tr(progressLabels[step.state]) }}</small>
+          <button v-if="canRetryUpload && run.status === 'failed' && progress.state === 'failed' && step.state === 'failed' && ['push', 'upload', 'release'].includes(step.id)" type="button" class="step-retry" :disabled="retrying || retryDisabled" :aria-busy="!!retrying" :aria-label="tr(retrying ? '正在重新上传：{0}' : '重新上传：{0}', [tr(step.label)])" @click="emit('retry')">
+            <UiIcon name="refresh" :size="12" /><span>{{ tr(retrying ? '正在重新上传…' : '重新上传') }}</span>
+          </button>
+        </span>
       </li>
     </ol>
     <div class="progress-meta">
@@ -66,10 +73,14 @@ const currentName = computed(() => {
 .release-step-list .succeeded { color: #7fd8b3; }li.succeeded .step-mark { border-color: #3c7a64; background: #203c32; }
 .release-step-list .running { color: #acd0ff; font-weight: 650; }li.running .step-mark { color: #111e33; border-color: #93beff; background: #93beff; box-shadow: 0 0 0 4px #93beff16; }
 .release-step-list .failed { color: #ffaaaa; font-weight: 650; }li.failed .step-mark { color: #2b161c; border-color: #ffaaaa; background: #ffaaaa; }
+.step-retry { display: inline-flex; align-items: center; justify-content: center; gap: 5px; max-width: 100%; min-height: 32px; margin-top: 8px; padding: 5px 8px; border: 1px solid #ffaaaa66; border-radius: 8px; color: #ffd3d3; background: #ffaaaa12; font-size: 11px; font-weight: 600; line-height: 1.4; cursor: pointer; }
+.step-retry span { min-width: 0; overflow-wrap: anywhere; }.step-retry:disabled { opacity: .55; cursor: default; }.step-retry:focus-visible { outline: 2px solid #ffaaaa; outline-offset: 3px; }
+@media (hover: hover) { .step-retry:not(:disabled):hover { background: #ffaaaa24; border-color: #ffaaaaaa; } }
+@media (prefers-reduced-motion: no-preference) { .step-retry { transition: transform 150ms ease-out, background-color 150ms ease-out, border-color 150ms ease-out; }.step-retry:not(:disabled):active { transform: scale(.96); } }
 .release-step-list .cancelled { color: #f3cf8c; }.release-step-list .skipped { color: #929cab; }
 .progress-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-top: 12px; border-top: 1px solid #ffffff0d; font-size: 11px; color: var(--text-dim, #acb5c4); }.progress-meta:empty { display: none; }.artifact-total { margin-left: auto; }
 .progress-error { margin: 16px 0 0; padding: 12px 14px; border: 1px solid #94535f; border-radius: 8px; background: #482932; font-size: 13px; line-height: 1.6; color: #ffe0e0; overflow-wrap: anywhere; max-height: 7em; overflow: auto; }.sync-pending { margin: 12px 0 0; color: #f3cf8c; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .release-spinner { animation: none; } }
 @media (max-width: 600px) { .release-progress-overview { padding: 14px; }.headline-copy strong { font-size: 17px; }.progress-topline { flex-wrap: wrap; gap: 12px; }.progress-topline :deep(.release-cancel) { flex: 1 0 100%; }.release-step-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; margin: 16px 0 12px; }.release-step-list li { flex-direction: row; text-align: left; align-items: flex-start; gap: 6px; font-size: 10px; }.release-step-list li::after { display: none; }.step-mark { flex-shrink: 0; width: 20px; height: 20px; font-size: 10px; }.step-copy { padding: 0; }.release-step-list small { display: none; }.artifact-total { margin-left: 0; }.status-symbol { width: 40px; height: 40px; } }
-@media (max-width: 600px) { .release-step-list li { font-size: 11px; }.step-label { min-height: 0; text-wrap: wrap; }.release-step-list small { display: block; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } }
+@media (max-width: 600px) { .release-step-list li { font-size: 11px; }.step-copy { min-width: 0; }.step-label { min-height: 0; text-wrap: wrap; }.step-retry { min-height: 36px; padding: 5px 4px; gap: 4px; }.release-step-list small { display: block; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } }
 </style>

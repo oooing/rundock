@@ -28,12 +28,21 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 	now := checkedAt.UTC().Format(time.RFC3339)
 	healthy, unhealthy := 0, 0
 	for _, svc := range svcs {
+		scope := serviceStatusScope(readiness, svc.Port)
+		if svc.StatusScope != scope {
+			svc.StatusScope = scope
+			_ = l.Store.UpdateServiceStatusScope(svc.ID, scope)
+		}
+		required := scope == "required"
 		check := checks[svc.ID]
 		if check == nil {
 			check = &serviceHealthCheck{}
 			checks[svc.ID] = check
 		}
 		if checkedAt.Before(check.nextCheck) {
+			if !required {
+				continue
+			}
 			switch svc.Health {
 			case "healthy":
 				healthy++
@@ -59,6 +68,10 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 		}
 		check.nextCheck = checkedAt.Add(probeDuration).Add(healthRetryInterval)
 		ok := hr != nil && hr.Reachable
+		probeURL := svc.URL
+		if hr != nil {
+			probeURL = hr.URL
+		}
 		if l.Diagnostics != nil && (probeDuration >= 500*time.Millisecond || !ok) {
 			status := "reachable"
 			severity := "info"
@@ -76,8 +89,10 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 			check.failures = 0
 			check.nextCheck = checkedAt.Add(probeDuration).Add(healthyCheckInterval)
 			svc.Health = "healthy"
-			_ = l.Store.UpdateServiceHealth(svc.ID, "healthy", now)
-			healthy++
+			_ = l.Store.UpdateServiceProbe(svc.ID, "healthy", now, "", probeURL)
+			if required {
+				healthy++
+			}
 			if col != nil && prev != "healthy" {
 				detail := ""
 				if hr != nil {
@@ -95,17 +110,22 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 			}
 			if prev == "healthy" && check.failures < healthFailureThreshold {
 				// 单次失败暂不翻转运行状态，但记录探测时间并快速复查。
-				_ = l.Store.UpdateServiceHealth(svc.ID, prev, now)
-				healthy++
+				_ = l.Store.UpdateServiceProbe(svc.ID, prev, now, "", probeURL)
+				if required {
+					healthy++
+				}
 				if col != nil {
 					col.Warn(fmt.Sprintf("[健康] %s port=%d 首次失败，等待复查确认", svc.URL, svc.Port))
 				}
 			} else {
 				svc.Health = "unhealthy"
-				_ = l.Store.UpdateServiceHealth(svc.ID, "unhealthy", now)
-				unhealthy++
+				reason := healthFailureReason(hr)
+				_ = l.Store.UpdateServiceProbe(svc.ID, "unhealthy", now, reason, probeURL)
+				if required {
+					unhealthy++
+				}
 				if col != nil && prev != "unhealthy" {
-					col.Warn(fmt.Sprintf("[健康] %s port=%d %s → unhealthy（不可达）", svc.URL, svc.Port, prev))
+					col.Warn(fmt.Sprintf("[健康] %s port=%d %s → unhealthy（原因=%s scope=%s probe=%s）", svc.URL, svc.Port, prev, reason, scope, probeURL))
 				}
 			}
 		}
@@ -148,6 +168,19 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 			col.Debug(fmt.Sprintf("[状态] 保持 starting（services=%d healthy=%d unhealthy=%d）", len(svcs), healthy, unhealthy))
 		}
 	}
+}
+
+func healthFailureReason(hr *probe.HealthResult) string {
+	if hr == nil {
+		return "connection_failed"
+	}
+	if hr.StatusCode > 0 {
+		return fmt.Sprintf("http_status:%d", hr.StatusCode)
+	}
+	if hr.Error != "" {
+		return hr.Error
+	}
+	return "connection_failed"
 }
 
 // probeService 单次健康检查某 URL，返回含响应头/Title 的结果（供角色识别复用）。

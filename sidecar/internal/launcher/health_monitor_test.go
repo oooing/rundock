@@ -180,3 +180,49 @@ func TestHealthMonitorDoesNotResurrectStoppedRun(t *testing.T) {
 		}
 	}
 }
+
+func TestDeclaredServicesExcludeAuxiliaryFailureButRetainRealFailures(t *testing.T) {
+	var code atomic.Int32
+	code.Store(http.StatusOK)
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(int(code.Load())) }))
+	defer primary.Close()
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer secondary.Close()
+	aux := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
+	defer aux.Close()
+	l, rt := healthTestLauncher(t)
+	addHealthTestService(t, l, rt, "primary", primary)
+	addHealthTestService(t, l, rt, "secondary", secondary)
+	addHealthTestService(t, l, rt, "aux", aux)
+	r := &startupReadiness{urls: map[int]string{primary.Listener.Addr().(*net.TCPAddr).Port: primary.URL, secondary.Listener.Addr().(*net.TCPAddr).Port: secondary.URL}}
+	checks := map[string]*serviceHealthCheck{}
+	l.recheckAndAggregate(rt.AppID, rt, nil, checks, time.Now(), r)
+	if rt.GetStatus() != app.StatusRunning {
+		t.Fatal("auxiliary port degraded healthy project", rt.GetStatus())
+	}
+	a := healthTestSnapshot(t, l, rt, "aux")
+	if a.StatusScope != "auxiliary" || a.Health != "unhealthy" || a.HealthReason != "http_status:400" {
+		t.Fatalf("auxiliary details missing: %+v", a)
+	}
+	// Also exercise cached health (not-yet-due probes).
+	l.recheckAndAggregate(rt.AppID, rt, nil, checks, time.Now(), r)
+	if rt.GetStatus() != app.StatusRunning {
+		t.Fatal("cached auxiliary failure leaked into aggregate")
+	}
+	code.Store(http.StatusServiceUnavailable)
+	for i := 0; i < 2; i++ {
+		l.recheckAndAggregate(rt.AppID, rt, nil, checks, checks["primary"].nextCheck.Add(time.Millisecond), r)
+	}
+	if rt.GetStatus() != app.StatusDegraded {
+		t.Fatal("required failure was hidden")
+	}
+	s := healthTestSnapshot(t, l, rt, "primary")
+	if s.HealthReason != "http_status:503" || s.HealthProbeURL != primary.URL || s.StatusScope != "required" {
+		t.Fatalf("required failure details missing: %+v", s)
+	}
+	code.Store(http.StatusOK)
+	l.recheckAndAggregate(rt.AppID, rt, nil, checks, checks["primary"].nextCheck.Add(time.Millisecond), r)
+	if rt.GetStatus() != app.StatusRunning || healthTestSnapshot(t, l, rt, "primary").HealthReason != "" {
+		t.Fatal("recovery retained failure notice")
+	}
+}

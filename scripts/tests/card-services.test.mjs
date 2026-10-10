@@ -9,6 +9,12 @@ new Function('exports', compiled)(exports)
 const { cardServices, cardServiceDetails } = exports
 const service = (port, role = 'unknown') => ({ id: `${port}`, port, role, url: `http://localhost:${port}`, health: 'healthy' })
 
+test('required services remain visible before auxiliary ports regardless of role', () => {
+  const app = { status: 'running', services: [{ ...service(5284, 'frontend'), statusScope: 'auxiliary' }, service(17655, 'backend'), service(17656, 'frontend')] }
+  assert.deepEqual(cardServices(app).map(r => r.port), [17656, 17655, 5284])
+  assert.equal(cardServices(app)[2].statusScope, 'auxiliary')
+})
+
 test('three current services never become five by merging historical and proxy ports', () => {
   const app = { id: 'app', status: 'running', services: [service(8081), service(18009, 'backend'), service(9100, 'frontend')],
     knownServices: [service(8009, 'backend'), service(9100)], portHints: [18009, 9100, 8081, 7890] }

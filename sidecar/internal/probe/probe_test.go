@@ -5,7 +5,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestHealthFailurePreservesReasonWithoutDuplicateRequests(t *testing.T) {
+	requests := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path == "/api/health" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer s.Close()
+	hr := CheckHealth(context.Background(), s.URL)
+	if hr.Reachable || hr.StatusCode != 503 || hr.URL != s.URL+"/api/health" {
+		t.Fatalf("failure overwritten: %+v", hr)
+	}
+	if requests != 4 {
+		t.Fatalf("expected one probe per candidate, got %d", requests)
+	}
+	s.Close()
+	if got := CheckURL(context.Background(), s.URL); got.Error != "connection_refused" {
+		t.Fatalf("connection failure reason: %+v", got)
+	}
+	timeoutServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { time.Sleep(30 * time.Millisecond) }))
+	defer timeoutServer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	if got := CheckURL(ctx, timeoutServer.URL); got.Error != "timeout" {
+		t.Fatalf("timeout reason: %+v", got)
+	}
+}
 
 func TestCheckRootDoesNotUseHealthEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

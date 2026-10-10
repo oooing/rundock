@@ -52,6 +52,9 @@ func TestUpgradeFromOldSchema(t *testing.T) {
 	if got.RoleSource != RoleSourceAuto {
 		t.Errorf("old service roleSource should default to auto, got %q", got.RoleSource)
 	}
+	if got.StatusScope != "required" || got.HealthReason != "" || got.HealthProbeURL != "" {
+		t.Fatalf("old service diagnostics defaults: %+v", got)
+	}
 }
 
 // 验证老库兼容：手动建一个缺 card_color 列的 apps 表，再 Open 升级。

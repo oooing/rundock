@@ -76,16 +76,19 @@ type PortEntry struct {
 
 // AppService 项目下的一个服务（对应一个监听端口）。
 type AppService struct {
-	ID          string `json:"id"`
-	AppID       string `json:"appId"`
-	AppRunID    string `json:"appRunId"`
-	Port        int    `json:"port"`
-	URL         string `json:"url"`
-	Health      string `json:"health"` // healthy/unhealthy/unknown
-	LastChecked string `json:"lastChecked"`
-	DetectedAt  string `json:"detectedAt"`
-	Role        string `json:"role"`       // frontend|backend|database|unknown
-	RoleSource  string `json:"roleSource"` // auto|manual
+	ID             string `json:"id"`
+	AppID          string `json:"appId"`
+	AppRunID       string `json:"appRunId"`
+	Port           int    `json:"port"`
+	URL            string `json:"url"`
+	Health         string `json:"health"` // healthy/unhealthy/unknown
+	LastChecked    string `json:"lastChecked"`
+	DetectedAt     string `json:"detectedAt"`
+	Role           string `json:"role"`        // frontend|backend|database|unknown
+	RoleSource     string `json:"roleSource"`  // auto|manual
+	StatusScope    string `json:"statusScope"` // required|auxiliary; independent of role.
+	HealthReason   string `json:"healthReason,omitempty"`
+	HealthProbeURL string `json:"healthProbeUrl,omitempty"`
 }
 
 // AppService 的 role 取值常量。
@@ -108,12 +111,14 @@ const (
 // ON CONFLICT 不覆盖 role/role_source —— 角色更新走 SetServiceRole/UpdateServiceRoleIfAuto,
 // 避免 upsert 把手动标注(manual)抹掉。
 func (s *Store) UpsertService(svc *AppService) error {
-	_, err := s.db.Exec(`INSERT INTO app_services (id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source)
-		VALUES (?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET health=excluded.health, last_checked=excluded.last_checked, url=excluded.url`,
+	_, err := s.db.Exec(`INSERT INTO app_services (id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source,status_scope,health_reason,health_probe_url)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET health=excluded.health, last_checked=excluded.last_checked, url=excluded.url,
+		status_scope=excluded.status_scope, health_reason=excluded.health_reason, health_probe_url=excluded.health_probe_url`,
 		svc.ID, svc.AppID, svc.AppRunID, svc.Port, svc.URL, svc.Health,
 		nullableStringEmpty(svc.LastChecked), svc.DetectedAt,
-		strDefault(svc.Role, RoleUnknown), strDefault(svc.RoleSource, RoleSourceAuto))
+		strDefault(svc.Role, RoleUnknown), strDefault(svc.RoleSource, RoleSourceAuto),
+		strDefault(svc.StatusScope, "required"), svc.HealthReason, svc.HealthProbeURL)
 	return err
 }
 
@@ -126,14 +131,24 @@ func (s *Store) HasService(runID string, port int) bool {
 
 // UpdateServiceHealth 更新某服务的健康状态。
 func (s *Store) UpdateServiceHealth(id, health, lastChecked string) error {
-	_, err := s.db.Exec(`UPDATE app_services SET health=?, last_checked=? WHERE id=?`,
+	_, err := s.db.Exec(`UPDATE app_services SET health=?, last_checked=?, health_reason='', health_probe_url='' WHERE id=?`,
 		health, nullableStringEmpty(lastChecked), id)
+	return err
+}
+
+func (s *Store) UpdateServiceProbe(id, health, lastChecked, reason, probeURL string) error {
+	_, err := s.db.Exec(`UPDATE app_services SET health=?,last_checked=?,health_reason=?,health_probe_url=? WHERE id=?`, health, nullableStringEmpty(lastChecked), reason, probeURL, id)
+	return err
+}
+
+func (s *Store) UpdateServiceStatusScope(id, scope string) error {
+	_, err := s.db.Exec(`UPDATE app_services SET status_scope=? WHERE id=?`, scope, id)
 	return err
 }
 
 // ListServicesByApp 返回某项目下所有服务（按端口排序）。
 func (s *Store) ListServicesByApp(appID string) ([]*AppService, error) {
-	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
+	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source,status_scope,health_reason,health_probe_url
 		FROM app_services WHERE app_id=? ORDER BY port ASC`, appID)
 	if err != nil {
 		return nil, err
@@ -145,7 +160,7 @@ func (s *Store) ListServicesByApp(appID string) ([]*AppService, error) {
 // ListLatestServicesByApp retains one last-known address per port, independently
 // of whether the latest attempt reached service discovery.
 func (s *Store) ListLatestServicesByApp(appID string) ([]*AppService, error) {
-	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
+	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source,status_scope,health_reason,health_probe_url
 		FROM app_services WHERE rowid IN (SELECT MAX(rowid) FROM app_services WHERE app_id=? GROUP BY port) ORDER BY port`, appID)
 	if err != nil {
 		return nil, err
@@ -164,7 +179,7 @@ func (s *Store) PruneServiceHistory(appID string) error {
 
 // ListServicesByRun 返回某次运行发现的所有服务。
 func (s *Store) ListServicesByRun(runID string) ([]*AppService, error) {
-	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
+	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source,status_scope,health_reason,health_probe_url
 		FROM app_services WHERE app_run_id=? ORDER BY port ASC`, runID)
 	if err != nil {
 		return nil, err
@@ -180,7 +195,7 @@ func scanServices(rows *sql.Rows) ([]*AppService, error) {
 		svc := &AppService{}
 		var lastChecked sql.NullString
 		if err := rows.Scan(&svc.ID, &svc.AppID, &svc.AppRunID, &svc.Port, &svc.URL, &svc.Health,
-			&lastChecked, &svc.DetectedAt, &svc.Role, &svc.RoleSource); err != nil {
+			&lastChecked, &svc.DetectedAt, &svc.Role, &svc.RoleSource, &svc.StatusScope, &svc.HealthReason, &svc.HealthProbeURL); err != nil {
 			return nil, err
 		}
 		if lastChecked.Valid {
@@ -193,12 +208,12 @@ func scanServices(rows *sql.Rows) ([]*AppService, error) {
 
 // GetService 按 ID 查询单个服务。
 func (s *Store) GetService(id string) (*AppService, error) {
-	row := s.db.QueryRow(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source
+	row := s.db.QueryRow(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source,status_scope,health_reason,health_probe_url
 		FROM app_services WHERE id=?`, id)
 	svc := &AppService{}
 	var lastChecked sql.NullString
 	if err := row.Scan(&svc.ID, &svc.AppID, &svc.AppRunID, &svc.Port, &svc.URL, &svc.Health,
-		&lastChecked, &svc.DetectedAt, &svc.Role, &svc.RoleSource); err != nil {
+		&lastChecked, &svc.DetectedAt, &svc.Role, &svc.RoleSource, &svc.StatusScope, &svc.HealthReason, &svc.HealthProbeURL); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -368,7 +383,7 @@ func (s *Store) ResetRuntimeState() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`UPDATE app_services SET health='unknown', last_checked=NULL WHERE health <> 'unknown' OR last_checked IS NOT NULL`); err != nil {
+	if _, err := tx.Exec(`UPDATE app_services SET health='unknown', last_checked=NULL, health_reason='',health_probe_url='' WHERE health <> 'unknown' OR last_checked IS NOT NULL OR health_reason<>'' OR health_probe_url<>''`); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

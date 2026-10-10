@@ -77,8 +77,11 @@ func (s *Store) ensureSchema() error {
 		return err
 	}
 	wanted := map[string]string{
-		"role":        "TEXT NOT NULL DEFAULT 'unknown'",
-		"role_source": "TEXT NOT NULL DEFAULT 'auto'",
+		"role":             "TEXT NOT NULL DEFAULT 'unknown'",
+		"role_source":      "TEXT NOT NULL DEFAULT 'auto'",
+		"status_scope":     "TEXT NOT NULL DEFAULT 'required'",
+		"health_reason":    "TEXT NOT NULL DEFAULT ''",
+		"health_probe_url": "TEXT NOT NULL DEFAULT ''",
 	}
 	for col, def := range wanted {
 		if !cols[strings.ToUpper(col)] {

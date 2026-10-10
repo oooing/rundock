@@ -3,9 +3,11 @@ import { computed } from 'vue'
 import { tr } from '@/i18n'
 import type { AppView, StartupIssue } from '@/types'
 import UiIcon from './UiIcon.vue'
+import { serviceHealthReason } from '@/utils/serviceHealth'
 
 const props = defineProps<{ app: AppView; locked: boolean; issue: StartupIssue | null; checking: boolean }>()
 const emit = defineEmits<{ (event: 'log'): void }>()
+const unhealthyServices = computed(() => (props.app.services || []).filter(service => service.statusScope !== 'auxiliary' && service.health === 'unhealthy'))
 const runtimeMessage = computed(() => {
   const message = props.app.runtimeCheck?.message || ''
   // Older backends ask for a manual recheck even though monitoring is automatic.
@@ -32,6 +34,13 @@ const description = computed(() => {
       <p v-if="app.runtimeCheck?.reservedPorts?.length" class="mono">{{ tr('系统保留端口') }}: {{ app.runtimeCheck.reservedPorts.join('、') }}</p>
     </div>
   </div>
+  <div v-else-if="app.status === 'degraded'" class="health-notice" role="status">
+    <div class="health-heading"><UiIcon name="alert-circle" :size="16" /><strong>{{ tr('部分服务异常') }}</strong><button type="button" @click="emit('log')">{{ tr('查看日志') }}<UiIcon name="arrow-right" :size="12" /></button></div>
+    <ul v-if="unhealthyServices.length">
+      <li v-for="service in unhealthyServices" :key="service.id"><span class="mono">:{{ service.port }}</span> {{ serviceHealthReason(service) }}<small v-if="service.healthProbeUrl">{{ service.healthProbeUrl }}</small></li>
+    </ul>
+    <p v-else>{{ tr('服务健康检查未通过，查看日志了解详情。') }}</p>
+  </div>
   <template v-else-if="app.status === 'failed'">
     <button type="button" class="failure-log-link" @click="emit('log')"><UiIcon name="alert-circle" :size="18" /><strong>{{ title }}</strong><span>{{ tr('查看失败日志') }}</span><UiIcon name="arrow-right" :size="14" /></button>
     <details class="startup-error" :aria-busy="checking">
@@ -51,6 +60,8 @@ const description = computed(() => {
 </template>
 
 <style scoped>
+.health-notice { margin-top: 10px; padding: 10px; border: 1px solid var(--card-status-amber, var(--amber)); border-radius: 7px; background: var(--card-panel, var(--bg)); color: var(--card-fg, var(--text)); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.health-heading { display: flex; align-items: center; gap: 6px; color: var(--card-status-amber, var(--amber)); }.health-heading strong { flex: 1; }.health-heading button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: inherit; font-size: 11px; min-height: 28px; padding: 2px 4px; }.health-heading button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }.health-notice ul { list-style: none; padding: 0; margin: 6px 0 0; }.health-notice li + li { margin-top: 6px; }.health-notice small { display: block; color: var(--card-muted, var(--text-dim)); font-size: 11px; }.health-notice p { margin: 6px 0 0; }
 .runtime-notice { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; color: var(--card-muted, var(--text-dim)); font-size: 11px; line-height: 1.6; }
 .runtime-notice svg { flex: 0 0 auto; margin-top: 2px; }
 .runtime-notice p { margin: 0 0 4px; overflow-wrap: anywhere; }

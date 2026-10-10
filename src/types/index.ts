@@ -176,6 +176,9 @@ export interface AppService {
   detectedAt: string
   role: ServiceRole
   roleSource: 'auto' | 'manual'
+  statusScope?: 'required' | 'auxiliary'
+  healthReason?: string
+  healthProbeUrl?: string
 }
 
 /** WebSocket 消息信封 */

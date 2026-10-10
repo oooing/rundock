@@ -18,11 +18,24 @@ test('failed card has a direct icon button for this project log, outside collaps
   globalThis.window = { addEventListener() {}, removeEventListener() {} }
   const calls = []
   const read = path => readFileSync(new URL('../../' + path, import.meta.url), 'utf8')
+  const common = {
+    vue, '@/i18n': { tr: (text, values = []) => text.replace(/\{(\d+)\}/g, (_, index) => String(values[index])) },
+    '@/stores/apps': { useAppsStore: () => ({ operationBusy: {}, load() {} }) },
+    '@/api/http': { api: { startupIssue: async () => ({ code: 'port_in_use', ports: [3000], conflicts: [], canRecover: true }) } },
+  }
+  const icon = { default: { props: ['name'], setup: p => () => vue.h('svg', { 'data-icon': p.name }) } }
+  const notice = parse(read('src/components/AppStartupNotice.vue')).descriptor
+  const noticeComponent = compile(compileScript(notice, { id: 'startup-notice-test', inlineTemplate: true }).content, {
+    ...common, './UiIcon.vue': icon,
+    '@/utils/serviceHealth': compile(read('src/utils/serviceHealth.ts'), common),
+  }).default
   const { descriptor } = parse(read('src/components/AppCard.vue'))
   const component = compile(compileScript(descriptor, { id: 'app-card-test', inlineTemplate: true }).content, {
-    vue, '@/i18n': { tr: text => text }, '@/stores/apps': { useAppsStore: () => ({ load() {} }) },
-    '@/api/http': { api: { startupIssue: async () => ({ code: 'port_in_use', ports: [3000], conflicts: [], canRecover: true }) } },
-    '@/components/UiIcon.vue': { default: { props: ['name'], setup: p => () => vue.h('svg', { 'data-icon': p.name }) } },
+    ...common, '@/components/UiIcon.vue': icon,
+    '@/composables/useAppStartup': compile(read('src/composables/useAppStartup.ts'), common),
+    './AppStartupNotice.vue': { default: noticeComponent },
+    './PortResolutionDialog.vue': { default: { setup: () => () => null } },
+    './RestartDialog.vue': { default: { setup: () => () => null } },
     '@/utils/cardServices': compile(read('src/utils/cardServices.ts')),
     '@/utils/cardColors': compile(read('src/utils/cardColors.ts')),
     '@/stores/motion': { runningEffect: vue.ref('breathe'), startingEffect: vue.ref('sweep') },
@@ -30,7 +43,7 @@ test('failed card has a direct icon button for this project log, outside collaps
   }).default
   const node = (type, text = '') => ({ type, text, props: {}, children: [], parent: null })
   const renderer = vue.createRenderer({
-    createElement: node, createText: text => node('text', text), createComment: () => node('comment'),
+    createElement: type => node(type), createText: text => node('text', text), createComment: () => node('comment'),
     setText(el,text) { el.text=text }, setElementText(el,text) { el.text=text;el.children=[] },
     patchProp(el,key,old,value) { el.props[key]=value },
     insert(el,parent,anchor) { el.parent=parent;const i=parent.children.indexOf(anchor);parent.children.splice(i<0?parent.children.length:i,0,el) },
@@ -78,6 +91,21 @@ test('failed card has a direct icon button for this project log, outside collaps
       await vue.nextTick()
       assert.equal(all(root).filter(el => el.props.class === 'svc-row').length, 0, status + ' must not fall back to stale ports')
     }
+    fixture.status = 'degraded'
+    fixture.services = [{ ...service(17655, 'backend'), health: 'unhealthy', healthReason: 'http_status:503', healthProbeUrl: 'http://localhost:17655/api/health' },
+      { ...service(5284), health: 'unhealthy', statusScope: 'auxiliary', healthReason: 'http_status:400' }]
+    await vue.nextTick()
+    const healthNotice = all(root).find(el => el.props.class === 'health-notice')
+    assert.equal(healthNotice.props.role, 'status')
+    const noticeText = all(healthNotice).map(el => el.text).join(' ')
+    assert.match(noticeText, /17655.*HTTP 503/)
+    assert.doesNotMatch(noticeText, /5284|HTTP 400/)
+    all(healthNotice).find(el => el.type === 'button').props.onClick()
+    assert.deepEqual(calls, ['failed-project', 'failed-project'])
+    fixture.status = 'running'
+    await vue.nextTick()
+    assert.ok(!all(root).some(el => el.props.class === 'health-notice'), 'recovery removes the warning')
+    fixture.services = []
     fixture.status = 'stopped'
     await vue.nextTick()
     const stoppedRows = all(root).filter(el => el.props.class === 'svc-row')
@@ -88,8 +116,10 @@ test('failed card has a direct icon button for this project log, outside collaps
       fixture.status = state === 'running' ? 'running' : state === 'conflict' ? 'stopped' : state
       await vue.nextTick()
       const current = all(root)
-      const labels = current.filter(el => el.type === 'button').map(el => all(el).map(n => n.text).join(''))
-      assert.ok(!labels.some(text => ['启动','停止','重启','重新启动','释放端口并重试'].includes(text)), state + ' must not offer unsafe controls')
+      const labels = current.filter(el => el.type === 'button').map(el => all(el).map(n => n.text).join('').trim())
+      const unsafe = state === 'running' ? ['启动', '停止', '重新启动', '释放端口并重试'] : ['启动', '停止', '重启', '重新启动', '释放端口并重试']
+      assert.ok(!labels.some(text => unsafe.includes(text)), state + ' must not offer unsafe controls')
+      if (state === 'running') assert.ok(labels.includes('重启'), 'observed running projects retain the verified restart dialog entry')
       assert.ok(current.some(el => el.props.class === 'runtime-notice'))
       assert.ok(current.some(el => el.type === 'button' && el.props['aria-label'] === '查看日志'))
     }

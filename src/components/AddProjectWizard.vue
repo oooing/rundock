@@ -36,6 +36,8 @@ let discoveryAbort: AbortController | null = null
 let entryAbort: AbortController | null = null
 let pendingSource = ''
 let detectedSource = ''
+let backdropPointerId: number | null = null
+let backdropClickReady = false
 const hasDanger = computed(() => candidate.value?.findings?.some(finding => finding.level === 'danger'))
 const cleanPath = computed(() => path.value.trim().replace(/^["']|["']$/g, ''))
 const completePath = computed(() => /^(?:[a-z]:[\\/]|\/|\\\\)/i.test(cleanPath.value))
@@ -44,6 +46,22 @@ const existing = computed(() => candidate.value && apps.apps.find(app => normali
 const selectedOption = computed(() => result.value?.options.find(option => option.path === selected.value))
 const entrySummary = computed(() => selectedOption.value?.command || selectedOption.value?.relativePath || '')
 const recognizing = computed(() => busy.value || loadingEntry.value)
+// Browsers can retarget click to the backdrop when an input selection ends outside.
+// Dismiss only when both ends of the same primary gesture occur on the backdrop.
+function beginBackdropGesture(event: PointerEvent) {
+  backdropClickReady = false
+  backdropPointerId = event.isPrimary && event.button === 0 && event.target === event.currentTarget ? event.pointerId : null
+}
+function endBackdropGesture(event: PointerEvent) {
+  backdropClickReady = backdropPointerId === event.pointerId && event.target === event.currentTarget
+  backdropPointerId = null
+}
+function resetBackdropGesture() { backdropPointerId = null; backdropClickReady = false }
+function closeFromBackdrop() {
+  const ready = backdropClickReady
+  resetBackdropGesture()
+  if (ready && !saving.value) emit('close')
+}
 function invalidateSource() {
   discoveryRequest++; entryRequest++
   clearTimeout(debounceTimer)
@@ -176,7 +194,7 @@ onUnmounted(() => { disposed = true; invalidateSource(); if (previousFocus?.isCo
 </script>
 
 <template>
-  <div class="add-overlay" @click.self="!saving && emit('close')" @dragover.prevent @drop.prevent.stop="handleDrop">
+  <div class="add-overlay" @pointerdown="beginBackdropGesture" @pointerup="endBackdropGesture" @pointercancel="resetBackdropGesture" @click.self="closeFromBackdrop" @dragover.prevent @drop.prevent.stop="handleDrop">
     <section ref="modal" class="add-modal" tabindex="-1" role="dialog" aria-modal="true" :aria-label="tr('添加项目')" @keydown="trapFocus" @keydown.esc="!saving && emit('close')">
       <header><h2>{{ tr('添加项目') }}</h2><button :aria-label="tr('关闭')" :disabled="saving" @click="emit('close')"><UiIcon name="close" /></button></header>
       <div class="add-body">

@@ -6,7 +6,7 @@ const activeStates = ['starting', 'running', 'degraded', 'stopping']
 const validPort = (port: number) => Number.isInteger(port) && port >= 1 && port <= 65535
 const roleOrder = { frontend: 0, backend: 1, database: 2, unknown: 3 }
 const sortServices = (rows: CardService[]) => rows.sort((a, b) =>
-  (roleOrder[a.role || 'unknown'] - roleOrder[b.role || 'unknown']) || a.port - b.port)
+  (Number(a.statusScope === 'auxiliary') - Number(b.statusScope === 'auxiliary')) || (roleOrder[a.role || 'unknown'] - roleOrder[b.role || 'unknown']) || a.port - b.port)
 
 // The card count describes discovered services, never configuration candidates.
 export function cardServices(app: AppView): CardService[] {

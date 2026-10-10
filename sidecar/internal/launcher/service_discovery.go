@@ -14,7 +14,7 @@ import (
 
 // watchServices 多服务监测核心循环。
 // 周期性扫描本进程树新增的所有监听端口，每个端口记为一个 service 并做健康检查。
-// 项目状态按木桶原则综合：所有 service healthy => running；任一 unhealthy => degraded。
+// 项目状态按必要服务综合：显式 ready 声明以外的端口仅供辅助观察。
 //
 // 与旧逻辑区别：不再只盯第一个端口，而是发现全部端口，每个独立判定，综合出项目状态。
 func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, col *logbus.Collector, readiness *startupReadiness) {
@@ -54,7 +54,7 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 			}
 			scanRound++
 			// 扫描新增端口，登记为 service
-			l.discoverServices(appID, rt, before, manualRoles, declaredRoles, hintedPorts, rejectedPorts, col, scanRound)
+			l.discoverServices(appID, rt, before, manualRoles, declaredRoles, hintedPorts, rejectedPorts, col, scanRound, readiness)
 			// 对所有 service 做健康检查，并综合出项目状态
 			l.recheckAndAggregate(appID, rt, col, checks, time.Now(), readiness)
 		}
@@ -75,7 +75,7 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 //   - 进程树断裂的项目（batch）→ 证据2 命中，仍能发现
 //   - 无关端口 → 两证据都不满足，排除
 //   - 多项目并存 → 各自日志只提自己的 URL，互不干扰
-func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, rejectedPorts map[int]int, col *logbus.Collector, scanRound int) {
+func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, rejectedPorts map[int]int, col *logbus.Collector, scanRound int, readiness *startupReadiness) {
 	clear(rejectedPorts) // 仅在本轮去重；慢启动服务必须在下一轮重新探测。
 	all := probe.SnapshotListeners()
 
@@ -139,6 +139,11 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 		url := probe.JoinHostPort("localhost", p.Port)
 		if !isServicePort(p.Port, logEvidence, declaredRoles[p.Port], hintedPorts[p.Port], nil) {
 			root := l.probeRole(url)
+			if root != nil && root.StatusCode > 0 && !root.Reachable {
+				// API-only servers may have no root route. Require a successful
+				// health endpoint instead of treating every HTTP error as a service.
+				root = l.probeService(url)
+			}
 			if !isServicePort(p.Port, logEvidence, declaredRoles[p.Port], hintedPorts[p.Port], root) {
 				rejectedPorts[p.Port] = p.PID
 				if col != nil {
@@ -169,15 +174,16 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 			evidence = "log-url"
 		}
 		svc := &store.AppService{
-			ID:         app.NewID(),
-			AppID:      appID,
-			AppRunID:   rt.RunID,
-			Port:       p.Port,
-			URL:        url,
-			Health:     "unknown",
-			DetectedAt: time.Now().UTC().Format(time.RFC3339),
-			Role:       roleStr,
-			RoleSource: roleSource,
+			ID:          app.NewID(),
+			AppID:       appID,
+			AppRunID:    rt.RunID,
+			Port:        p.Port,
+			URL:         url,
+			Health:      "unknown",
+			DetectedAt:  time.Now().UTC().Format(time.RFC3339),
+			Role:        roleStr,
+			RoleSource:  roleSource,
+			StatusScope: serviceStatusScope(readiness, p.Port),
 		}
 		_ = l.Store.UpsertService(svc)
 		_ = l.Store.InsertPort(rt.RunID, p.Port, "tcp")
@@ -190,7 +196,7 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 			l.Hub.BroadcastURL(appID, url, []int{p.Port})
 		}
 		a, _ := l.Store.GetApp(appID)
-		if a != nil && a.LastURL == "" {
+		if a != nil && a.LastURL == "" && svc.StatusScope != "auxiliary" {
 			_ = l.Store.TouchAppRuntime(appID, "", url, "")
 		}
 		// 异步用 HTTP 响应头升级 role（仅当当前置信度不足 High，即非 DB 端口/非 manual）。
@@ -204,11 +210,18 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 }
 
 func isServicePort(port int, logEvidence bool, declaredRole probe.Role, hinted bool, root *probe.HealthResult) bool {
-	if logEvidence || declaredRole != "" || hinted || (root != nil && root.StatusCode > 0) {
+	if logEvidence || declaredRole != "" || hinted || (root != nil && root.Reachable) {
 		return true
 	}
 	role, _ := probe.Classify(probe.ClassifyInput{Port: port})
 	return role == probe.RoleDatabase
+}
+
+func serviceStatusScope(readiness *startupReadiness, port int) string {
+	if readiness != nil && len(readiness.urls) > 0 && readiness.urls[port] == "" {
+		return "auxiliary"
+	}
+	return "required"
 }
 
 const (

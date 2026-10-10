@@ -8,13 +8,16 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -68,9 +71,10 @@ type HealthResult struct {
 	Reachable   bool   `json:"reachable"`
 	Title       string `json:"title"`
 	Server      string `json:"server"`
-	PoweredBy   string `json:"poweredBy"`   // X-Powered-By 头(Express/FastAPI/Next 等)
-	ContentType string `json:"contentType"` // Content-Type 头(供角色识别)
-	Body        string `json:"-"`           // 仅供本地角色识别，不对外返回
+	PoweredBy   string `json:"poweredBy"`       // X-Powered-By 头(Express/FastAPI/Next 等)
+	ContentType string `json:"contentType"`     // Content-Type 头(供角色识别)
+	Body        string `json:"-"`               // 仅供本地角色识别，不对外返回
+	Error       string `json:"error,omitempty"` // Stable diagnostic code, never raw network errors.
 }
 
 var httpClient = &http.Client{Timeout: 3 * time.Second}
@@ -83,18 +87,36 @@ func CheckURL(ctx context.Context, url string) *HealthResult { return probeURL(c
 
 func CheckHealth(ctx context.Context, baseURL string) *HealthResult {
 	candidates := healthPaths(baseURL)
-	for _, u := range candidates {
-		if r := probeURL(ctx, u); r != nil && r.Reachable {
-			return r
-		}
-	}
-	// 没有一个可达，返回最后探测结果（含状态码供诊断）或空
+	var failure *HealthResult
 	for _, u := range candidates {
 		if r := probeURL(ctx, u); r != nil {
-			return r
+			if r.Reachable {
+				return r
+			}
+			// Keep a concrete server failure rather than replacing it with a
+			// missing fallback route or a later exhausted context.
+			if failure == nil || failurePriority(r) > failurePriority(failure) {
+				failure = r
+			}
 		}
 	}
+	if failure != nil {
+		return failure
+	}
 	return &HealthResult{URL: baseURL}
+}
+
+func failurePriority(r *HealthResult) int {
+	if r.StatusCode >= 500 {
+		return 4
+	}
+	if r.StatusCode > 0 && r.StatusCode != 404 && r.StatusCode != 405 {
+		return 3
+	}
+	if r.StatusCode > 0 {
+		return 2
+	}
+	return 1
 }
 
 // CheckRoot 固定探测服务根路径，仅用于角色识别，避免把代理的健康端点误当成服务本身。
@@ -118,11 +140,20 @@ func healthPaths(base string) []string {
 func probeURL(ctx context.Context, u string) *HealthResult {
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return nil
+		return &HealthResult{URL: u, Error: "invalid_url"}
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return &HealthResult{URL: u}
+		code := "connection_failed"
+		var netErr net.Error
+		// Windows sockets use WSAECONNREFUSED (10061), not the compatibility
+		// ECONNREFUSED constant. Match the errno, not localized error text.
+		if errors.Is(err, syscall.ECONNREFUSED) || (runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10061))) {
+			code = "connection_refused"
+		} else if errors.As(err, &netErr) && netErr.Timeout() {
+			code = "timeout"
+		}
+		return &HealthResult{URL: u, Error: code}
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))

@@ -257,10 +257,11 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
               <button class="reidentify" @click="reidentify(svc.id)"><UiIcon name="refresh" :size="14" />{{ tr('重新识别') }}</button>
             </div>
           </div>
-          <span class="svc-dot" :class="svc.source === 'current' ? svc.health : 'inactive'" :title="serviceState(svc)" role="img" :aria-label="serviceState(svc)"></span>
+          <span class="svc-dot" :class="svc.source === 'current' && svc.statusScope !== 'auxiliary' ? svc.health : 'inactive'" :title="svc.statusScope === 'auxiliary' ? tr('辅助端口，不参与项目运行状态判定') : serviceState(svc)" role="img" :aria-label="svc.statusScope === 'auxiliary' ? tr('辅助端口，不参与项目运行状态判定') : serviceState(svc)"></span>
           <a v-if="svc.url && svc.role !== 'database'" class="svc-url mono" :class="{ dim: svc.source !== 'current' }" :href="svc.url" :title="svc.url + ' · ' + serviceState(svc)" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
           <span v-else class="svc-url">{{ svc.role === 'database' ? tr('数据库') : tr('待发现服务地址') }}</span>
           <span v-if="svc.source !== 'current'" class="svc-source">{{ serviceState(svc) }}</span>
+          <span v-else-if="svc.statusScope === 'auxiliary'" class="svc-source" :title="tr('辅助端口，不参与项目运行状态判定')">{{ tr('辅助') }}</span>
           <span class="svc-port mono">:{{ svc.port }}</span>
         </div>
       </div>

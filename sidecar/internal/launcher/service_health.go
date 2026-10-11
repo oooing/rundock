@@ -174,11 +174,11 @@ func healthFailureReason(hr *probe.HealthResult) string {
 	if hr == nil {
 		return "connection_failed"
 	}
-	if hr.StatusCode > 0 {
-		return fmt.Sprintf("http_status:%d", hr.StatusCode)
-	}
 	if hr.Error != "" {
 		return hr.Error
+	}
+	if hr.StatusCode > 0 {
+		return fmt.Sprintf("http_status:%d", hr.StatusCode)
 	}
 	return "connection_failed"
 }
@@ -200,7 +200,7 @@ func (l *Launcher) probeRole(url string) *probe.HealthResult {
 	}
 	cctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	return probe.CheckRoot(cctx, url)
+	return probe.CheckRole(cctx, url)
 }
 
 // healthResultToHeaders 把 HealthResult 的响应头字段拼成 ClassifyInput.Headers(键大小写不敏感)。

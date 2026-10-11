@@ -88,6 +88,7 @@ func CheckURL(ctx context.Context, url string) *HealthResult { return probeURL(c
 func CheckHealth(ctx context.Context, baseURL string) *HealthResult {
 	candidates := healthPaths(baseURL)
 	var failure *HealthResult
+	onlyMissingRoutes := len(candidates) > 0
 	for _, u := range candidates {
 		if r := probeURL(ctx, u); r != nil {
 			if r.Reachable {
@@ -97,6 +98,17 @@ func CheckHealth(ctx context.Context, baseURL string) *HealthResult {
 			// missing fallback route or a later exhausted context.
 			if failure == nil || failurePriority(r) > failurePriority(failure) {
 				failure = r
+			}
+			onlyMissingRoutes = onlyMissingRoutes && missingRoute(r)
+		}
+	}
+	// WXT serves extension entrypoints rather than a web homepage. Its Vite
+	// client is a verifiable readiness endpoint even when all normal routes
+	// are absent. Never hide a real 5xx, authorization or network failure.
+	if onlyMissingRoutes {
+		if r := checkViteClient(ctx, baseURL); r != nil {
+			if r.Reachable || failure == nil || failurePriority(r) > failurePriority(failure) {
+				return r
 			}
 		}
 	}
@@ -122,6 +134,41 @@ func failurePriority(r *HealthResult) int {
 // CheckRoot 固定探测服务根路径，仅用于角色识别，避免把代理的健康端点误当成服务本身。
 func CheckRoot(ctx context.Context, baseURL string) *HealthResult {
 	return probeURL(ctx, strings.TrimRight(baseURL, "/")+"/")
+}
+
+// CheckRole inspects the service itself, not a potentially proxied /health.
+// Extension-only Vite servers can be identified by their actual dev client.
+func CheckRole(ctx context.Context, baseURL string) *HealthResult {
+	r := CheckRoot(ctx, baseURL)
+	if missingRoute(r) {
+		if client := checkViteClient(ctx, baseURL); client != nil && client.Reachable {
+			return client
+		}
+	}
+	return r
+}
+
+func missingRoute(r *HealthResult) bool {
+	return r != nil && (r.StatusCode == http.StatusNotFound || r.StatusCode == http.StatusMethodNotAllowed)
+}
+
+func checkViteClient(ctx context.Context, baseURL string) *HealthResult {
+	u, err := url.Parse(baseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil
+	}
+	ip := net.ParseIP(u.Hostname())
+	if !strings.EqualFold(u.Hostname(), "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return nil
+	}
+	u.Path = "/@vite/client"
+	r := probeURL(ctx, u.String())
+	if r.Reachable && (r.StatusCode != http.StatusOK || !isViteClient(r.ContentType, r.Body)) {
+		r.Reachable = false
+		r.Error = "unrecognized_dev_endpoint"
+	}
+	return r
 }
 
 func healthPaths(base string) []string {

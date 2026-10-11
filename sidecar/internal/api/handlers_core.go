@@ -195,6 +195,8 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		s.handlePortResolution(w, r, id)
 	case "resolve-ports":
 		s.handleResolvePorts(w, r, id)
+	case "temporary-port-start":
+		s.handleTemporaryPortStart(w, r, id)
 	default:
 		// services/{sid}/role 与 services/{sid}/reidentify:多段子路径
 		if sid, sub := pathTail("services/", rest); sid != "" {

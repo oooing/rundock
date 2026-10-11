@@ -65,7 +65,7 @@ const tips = computed(() => ([
   tr("改名：双击卡片名称，或悬停后点 ✎"),
   tr("改代码后：前端自动热更新；后端需重启 dev.bat 重新编译"),
   tr("关窗口/关服务：正在运行的应用会停止，配置永久保留在数据库"),
-  tr("数据位置：%APPDATA%\\launcher-sidecar\\launcher.db"),
+  tr("项目数据：{0}", ['%APPDATA%\\launcher-sidecar\\launcher.db']),
 ]))
 </script>
 

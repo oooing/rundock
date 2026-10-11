@@ -33,7 +33,7 @@ const appsStore = useAppsStore()
 const { runtimeLocked, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel } = useAppStartup(a)
 const portDialog = ref<InstanceType<typeof PortResolutionDialog> | null>(null)
 const restartDialog = ref<InstanceType<typeof RestartDialog> | null>(null)
-const canInspectConflict = computed(() => a.value.runtimeCheck?.state === 'conflict' || (!runtimeLocked.value && a.value.status === 'failed' && portIssue.value))
+const canInspectConflict = computed(() => ['conflict', 'reserved'].includes(a.value.runtimeCheck?.state || '') || (!runtimeLocked.value && a.value.status === 'failed' && portIssue.value))
 const buildFailures = computed(() => (props.cloudAlerts || []).filter(alert => alert.state === 'failed'))
 const buildBadge = computed(() => buildFailures.value.length ? tr('构建失败') : tr('构建待确认'))
 
@@ -269,6 +269,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <span class="k">{{ tr('访问地址') }}</span>
         <a class="v mono" :href="a.lastUrl" :title="a.lastUrl + (urlReachable ? '' : tr('（服务未运行）'))" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
       </div>
+      <p v-if="a.temporaryPort" class="temporary-port-note" role="status">{{ tr('本次临时端口：{0} → {1}（原配置未修改）', [a.temporaryPort.originalPort, a.temporaryPort.port]) }}</p>
       <div class="meta-row path" :title="a.entryScript">
         <span class="k">{{ tr('启动脚本') }}</span>
         <span class="v mono ellipsis">{{ a.entryScript }}</span>
@@ -278,7 +279,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 
     <fieldset class="actions" :disabled="operationBusy">
       <div class="run-actions">
-        <button v-if="canInspectConflict" :disabled="checkingIssue" aria-haspopup="dialog" @click="portDialog?.open()">{{ tr('处理端口占用') }}</button>
+        <button v-if="canInspectConflict" :disabled="checkingIssue" aria-haspopup="dialog" @click="portDialog?.open()">{{ tr(a.runtimeCheck?.state === 'reserved' ? '处理端口问题' : '处理端口占用') }}</button>
         <button v-else-if="runtimeLocked && (a.runtimeCheck?.state === 'running' || isActive)" aria-haspopup="dialog" @click="restartDialog?.open()"><UiIcon name="refresh" :size="14" />{{ tr('重启') }}</button>
         <template v-else-if="!runtimeLocked && a.restarting">
           <button class="stop-btn" disabled><UiIcon name="square" :size="14" />{{ tr('停止') }}</button>
@@ -393,6 +394,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 .card .drag-handle:hover, .card .drag-handle:focus-visible { background: var(--card-panel, var(--bg)); border-color: transparent; outline: none; }
 .drag-handle:active { cursor: grabbing; }
 .name-edit { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; padding: 3px 6px; color: var(--card-fg, var(--text)); background: var(--card-panel, var(--bg)); border-color: var(--card-border, var(--border)); border-radius: 4px; }
+.temporary-port-note { margin: 8px 0; color: var(--card-fg, var(--text)); font-size: 12px; line-height: 1.5; }
 /* Inputs already have a border: use that edge for focus instead of a second ring. */
 .card :is(.name-edit, .group-select):focus { border-color: var(--card-muted, var(--text-dim)); outline: none; box-shadow: none; }
 .card :is(.name-edit, .group-select):focus-visible { outline: none; box-shadow: none; }

@@ -25,27 +25,28 @@ import (
 
 // Server 汇总所有依赖。
 type Server struct {
-	startupMu         sync.Mutex
-	closing           atomic.Bool
-	restartRequested  atomic.Bool
-	instanceID        string
-	shutdownRequested chan struct{}
-	Store             *store.Store
-	Manager           *app.Manager
-	Hub               *logbus.Hub
-	Launcher          *launcher.Launcher
-	Publisher         *publisher.Service
-	ReleaseConfig     *releaseconfig.Service
-	Diagnostics       *diagnostics.Service
-	Registry          *adapter.Registry
-	httpSrv           *http.Server
-	cloudCancel       context.CancelFunc
-	cloudDone         chan struct{}
-	runtimeMonitor    *runtimeMonitor
-	runtimeDone       chan struct{}
-	portPlans         map[string]portPlan // Guarded by startupMu; short-lived, single-use.
-	restartPlans      map[string]portPlan // Same confirmation boundary as port resolution, separate tokens.
-	portBackendPort   int                 // Actual bound HTTP port; Host headers never grant origin authority.
+	startupMu          sync.Mutex
+	closing            atomic.Bool
+	restartRequested   atomic.Bool
+	instanceID         string
+	shutdownRequested  chan struct{}
+	Store              *store.Store
+	Manager            *app.Manager
+	Hub                *logbus.Hub
+	Launcher           *launcher.Launcher
+	Publisher          *publisher.Service
+	ReleaseConfig      *releaseconfig.Service
+	Diagnostics        *diagnostics.Service
+	Registry           *adapter.Registry
+	httpSrv            *http.Server
+	cloudCancel        context.CancelFunc
+	cloudDone          chan struct{}
+	runtimeMonitor     *runtimeMonitor
+	runtimeDone        chan struct{}
+	portPlans          map[string]portPlan          // Guarded by startupMu; short-lived, single-use.
+	temporaryPortPlans map[string]temporaryPortPlan // Independent, non-destructive start tokens.
+	restartPlans       map[string]portPlan          // Same confirmation boundary as port resolution, separate tokens.
+	portBackendPort    int                          // Actual bound HTTP port; Host headers never grant origin authority.
 }
 
 // New 组装 server。Launcher 由外部创建后注入（依赖 store/hub/registry）。

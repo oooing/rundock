@@ -123,6 +123,9 @@ func appView(a *store.App, s *Server) map[string]any {
 		status = rt.GetStatus()
 		runID = rt.RunID
 		pid = rt.PID
+		if s.Manager.Registry.IsRunning(a.ID) && rt.TemporaryPort != nil {
+			row["temporaryPort"] = rt.TemporaryPort
+		}
 	}
 	if status == app.StatusStopped || status == app.StatusFailed {
 		runID, pid = "", 0
@@ -425,7 +428,7 @@ func (s *Server) handleServiceReidentify(w http.ResponseWriter, r *http.Request,
 	// 同步重新探测：端口 + 响应头 + Title/CT。
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	hr := probe.CheckRoot(ctx, svc.URL)
+	hr := probe.CheckRole(ctx, svc.URL)
 	headers := map[string]string{}
 	var title string
 	var body string

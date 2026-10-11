@@ -105,6 +105,9 @@ func matchHeaders(h map[string]string) (Role, bool) {
 }
 
 func matchTitleOrCT(title, ct, body string) (Role, bool) {
+	if isViteClient(ct, body) {
+		return RoleFrontend, true
+	}
 	lt := strings.ToLower(title)
 	if containsAny(lt, frontendTitleKW) {
 		return RoleFrontend, true

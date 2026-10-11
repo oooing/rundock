@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/launcher-sidecar/internal/importer"
+	"github.com/launcher-sidecar/internal/portoverride"
 	"github.com/launcher-sidecar/internal/probe"
 	"github.com/launcher-sidecar/internal/store"
 )
@@ -193,7 +194,13 @@ func InspectRuntime(a *store.App, known []*store.AppService, snapshot RuntimeSna
 // RequiredPorts contains only current authoritative listen declarations. Saved
 // URLs/services and generic hints may be dependencies or historical discoveries.
 func RequiredPorts(a *store.App) []int {
+	if a.TemporaryPort != nil {
+		return []int{a.TemporaryPort.Port}
+	}
 	ports := map[int]bool{}
+	if d, err := portoverride.Inspect(a); err == nil {
+		ports[d.Port] = true
+	}
 	for _, port := range importer.DeclaredListenPorts(a.EntryScript) {
 		if port > 0 && port <= 65535 {
 			ports[port] = true

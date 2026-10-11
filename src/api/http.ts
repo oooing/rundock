@@ -121,6 +121,7 @@ export const api = {
   startupIssue: (id: string) => req<StartupIssue | null>(`/api/apps/${id}/startup-issue`),
   portResolution: (id: string, signal?: AbortSignal) => req<PortResolution>(`/api/apps/${id}/port-resolution`, { method: 'POST', signal }),
   resolvePorts: (id: string, confirmationToken: string) => req<StartResponse>(`/api/apps/${id}/resolve-ports`, { method: 'POST', body: JSON.stringify({ confirmationToken }) }),
+  startTemporaryPort: (id: string, confirmationToken: string) => req<StartResponse>(`/api/apps/${id}/temporary-port-start`, { method: 'POST', body: JSON.stringify({ confirmationToken }) }),
   recoverPorts: (id: string, fingerprint: string) => req<StartResponse>(`/api/apps/${id}/recover-ports`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
   createApp: (body: CreateAppBody) =>
     req<AppView>('/api/apps', { method: 'POST', body: JSON.stringify(body) }),

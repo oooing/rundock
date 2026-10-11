@@ -214,24 +214,3 @@ func quoteIfSpace(s string) string {
 	}
 	return s
 }
-
-// stripANSI 去除 ANSI 转义序列。
-func stripANSI(s string) string {
-	out := make([]byte, 0, len(s))
-	inEsc := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == 0x1b {
-			inEsc = true
-			continue
-		}
-		if inEsc {
-			if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
-				inEsc = false
-			}
-			continue
-		}
-		out = append(out, c)
-	}
-	return string(out)
-}

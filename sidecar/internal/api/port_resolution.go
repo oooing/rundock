@@ -24,13 +24,14 @@ type portConflict struct {
 }
 
 type portResolution struct {
-	State             string         `json:"state"`
-	Message           string         `json:"message"`
-	Conflicts         []portConflict `json:"conflicts"`
-	ReservedPorts     []int          `json:"reservedPorts"`
-	CanResolve        bool           `json:"canResolve"`
-	ConfirmationToken string         `json:"confirmationToken,omitempty"`
-	ExpiresAt         string         `json:"expiresAt,omitempty"`
+	State             string              `json:"state"`
+	Message           string              `json:"message"`
+	Conflicts         []portConflict      `json:"conflicts"`
+	ReservedPorts     []int               `json:"reservedPorts"`
+	CanResolve        bool                `json:"canResolve"`
+	ConfirmationToken string              `json:"confirmationToken,omitempty"`
+	ExpiresAt         string              `json:"expiresAt,omitempty"`
+	TemporaryPort     *temporaryPortOffer `json:"temporaryPort,omitempty"`
 }
 
 type portTarget struct {

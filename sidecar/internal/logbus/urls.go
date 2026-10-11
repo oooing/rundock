@@ -8,6 +8,8 @@
 package logbus
 
 import (
+	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -51,6 +53,10 @@ var (
 	rePort      = regexp.MustCompile(`(?i)\b(?:port|on)\s+(\d{2,5})\b`)
 	reBuildDone = regexp.MustCompile(`(?i)\b(✓ built in|build complete|webpack compiled)\b`)
 	reDepWait   = regexp.MustCompile(`(?i)\b(ECONNREFUSED|connection refused|waiting for|cannot connect|database|redis).{0,40}(?:refused|timeout|retry)\b`)
+	// Old ConPTY logs can have a right-aligned clock glued to the port.
+	// Restrict legacy repair to 4-5 digit dev ports in a loopback authority,
+	// never a path/query or an ambiguous short authority like :3000:01:58.
+	rePortClock = regexp.MustCompile(`(?i)^(https?://(?:localhost|127\.0\.0\.1|\[::1\]):)(\d{4,5})(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?$`)
 )
 
 // ParseLine 解析一行日志，返回从中抽取的事件（可能为空）。
@@ -118,9 +124,15 @@ func normalizeURL(raw string) string {
 	if idx := strings.Index(strings.ToLower(s), "http"); idx >= 0 {
 		s = s[idx:]
 	}
-	s = strings.TrimRight(s, ".,;)]}>'\"")
+	s = strings.TrimRight(s, ".,;)}>'\"")
+	if strings.HasSuffix(s, "]") && !strings.HasSuffix(s, "[::1]") {
+		s = strings.TrimRight(s, "]")
+	}
+	if m := rePortClock.FindStringSubmatch(s); len(m) > 0 {
+		s = m[1] + m[2]
+	}
 	// 形如 0.0.0.0:3000 / 127.0.0.1:3000 -> http://localhost:3000
-	if !strings.Contains(strings.ToLower(s), "://") && looksLikeHostPort(s) {
+	if !strings.Contains(strings.ToLower(s), "://") {
 		port := portFromHostPort(s)
 		if port > 0 {
 			return "http://localhost:" + strconv.Itoa(port)
@@ -130,55 +142,51 @@ func normalizeURL(raw string) string {
 	if strings.HasPrefix(s, "localhost") || strings.HasPrefix(s, "127.0.0.1") {
 		s = "http://" + s
 	}
+	if _, ok := parseHTTPURL(s); !ok {
+		return ""
+	}
 	return s
-}
-
-// looksLikeHostPort 判断 "host:port" 形态（用于 started server on 0.0.0.0:3000）。
-func looksLikeHostPort(s string) bool {
-	ci := strings.LastIndex(s, ":")
-	if ci <= 0 {
-		return false
-	}
-	for i := ci + 1; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return ci > 0
 }
 
 // portFromHostPort 从 "0.0.0.0:3000" 抽端口。
 func portFromHostPort(s string) int {
-	ci := strings.LastIndex(s, ":")
-	if ci < 0 {
-		return 0
-	}
-	p, err := strconv.Atoi(s[ci+1:])
+	_, port, err := net.SplitHostPort(s)
 	if err != nil {
 		return 0
 	}
-	return p
+	return validPort(port)
 }
 
 // portFromURL 从 URL 中抽端口，无端口返回 0。
 func portFromURL(u string) int {
-	// 取 host:port 部分
-	idx := strings.Index(u, "://")
-	if idx < 0 {
+	parsed, ok := parseHTTPURL(u)
+	if !ok {
 		return 0
 	}
-	rest := u[idx+3:]
-	// 去掉 path
-	if slash := strings.Index(rest, "/"); slash >= 0 {
-		rest = rest[:slash]
+	return validPort(parsed.Port())
+}
+
+func parseHTTPURL(s string) (*url.URL, bool) {
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return nil, false
 	}
-	if colon := strings.LastIndex(rest, ":"); colon >= 0 {
-		p, err := strconv.Atoi(rest[colon+1:])
-		if err == nil {
-			return p
-		}
+	// url.Parse permits multi-colon hostnames; these are not IPv6 literals.
+	if strings.Contains(u.Hostname(), ":") && net.ParseIP(u.Hostname()) == nil {
+		return nil, false
 	}
-	return 0
+	if u.Port() != "" && validPort(u.Port()) == 0 {
+		return nil, false
+	}
+	return u, true
+}
+
+func validPort(s string) int {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
+		return 0
+	}
+	return p
 }
 
 // InferLevel 根据文本粗略推断日志级别（stdout 默认 info，stderr 默认 error，含 error/warn 关键字调整）。

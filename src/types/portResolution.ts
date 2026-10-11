@@ -19,4 +19,12 @@ export interface PortResolution {
   canResolve: boolean
   confirmationToken?: string
   expiresAt?: string
+  temporaryPort?: {
+    supported: boolean
+    reason?: string
+    originalPort?: number
+    port?: number
+    confirmationToken?: string
+    expiresAt?: string
+  }
 }

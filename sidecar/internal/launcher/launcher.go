@@ -14,6 +14,7 @@ import (
 	"github.com/launcher-sidecar/internal/app"
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/logbus"
+	"github.com/launcher-sidecar/internal/portoverride"
 	"github.com/launcher-sidecar/internal/probe"
 	"github.com/launcher-sidecar/internal/proc"
 	"github.com/launcher-sidecar/internal/store"
@@ -87,6 +88,17 @@ func reconcileDeclaredRoles(s *store.Store) error {
 // collector 接管日志 -> 状态 starting -> goroutine 等 ready/URL/健康 ->
 // running/degraded；进程退出 -> stopped/failed。
 func (l *Launcher) Start(ctx context.Context, appID string) error {
+	return l.start(ctx, appID, 0)
+}
+
+func (l *Launcher) StartTemporary(ctx context.Context, appID string, port int) error {
+	if port < 1024 || port > 65535 {
+		return fmt.Errorf("无效的临时端口")
+	}
+	return l.start(ctx, appID, port)
+}
+
+func (l *Launcher) start(ctx context.Context, appID string, temporaryPort int) error {
 	a, err := l.Store.GetApp(appID)
 	if err != nil {
 		return fmt.Errorf("get app: %w", err)
@@ -97,11 +109,24 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	if l.Manager.Registry.IsRunning(appID) {
 		return fmt.Errorf("app already running: %s", appID)
 	}
+	if temporaryPort != 0 {
+		d, err := portoverride.Inspect(a)
+		if err != nil {
+			return err
+		}
+		a, err = portoverride.Apply(a, d, temporaryPort)
+		if err != nil {
+			return err
+		}
+	}
 
 	gracePeriod := durationFromSetting(l.Store, "grace_period_seconds", 8)
 	readiness, err := readStartupReadiness(a.EntryScript)
 	if err != nil {
 		return fmt.Errorf("启动就绪配置: %w", err)
+	}
+	if a.TemporaryPort != nil && a.HealthURL != "" {
+		readiness.urls[a.TemporaryPort.Port] = a.HealthURL
 	}
 
 	// prepare：优先用 App 自存的 cmd/args（已确认的配置），否则走适配器重新 prepare
@@ -181,6 +206,9 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 	collector.Info(fmt.Sprintf("[启动] cwd=%s", cwd))
 	collector.Info(fmt.Sprintf("[启动] cmd=%s args=%v preparedByAdapter=%v", cmd, args, preparedByAdapter))
 	collector.Debug(fmt.Sprintf("[启动] portHints=%v healthUrl=%q envKeys=%v", a.PortHints, a.HealthURL, envKeys))
+	if a.TemporaryPort != nil {
+		collector.Info(fmt.Sprintf("[临时端口] :%d → :%d，仅本次运行；原配置未修改，未关闭任何占用程序", a.TemporaryPort.OriginalPort, a.TemporaryPort.Port))
+	}
 	collector.Debug(fmt.Sprintf("[启动] 启动前系统监听端口数=%d grace=%ds",
 		len(beforePorts), int(gracePeriod/time.Second)))
 
@@ -251,6 +279,7 @@ func (l *Launcher) Start(ctx context.Context, appID string) error {
 		AppID: appID, RunID: runID, PID: pid, RootPID: pid,
 		RootCreated: handle.IdentityCreated(),
 		Status:      app.StatusStarting, StartedAt: nowTime,
+		TemporaryPort: a.TemporaryPort,
 	}
 	l.Manager.Registry.Set(appID, rt)
 	_ = l.Store.TouchAppRuntime(appID, nowStr, "", app.StatusStarting)

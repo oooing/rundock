@@ -1,5 +1,6 @@
 import { readonly, ref } from 'vue'
 import english from './en.json'
+import { productCopy } from './productCopy'
 
 export type Locale = 'zh-CN' | 'en'
 export const LOCALE_STORAGE_KEY = 'rundock.ui.locale'
@@ -50,7 +51,9 @@ export function setLocale(value: unknown): void {
 }
 
 export function translate(language: Locale, key: string, values: readonly unknown[] = []): string {
-  const message = language === 'en' && Object.prototype.hasOwnProperty.call(messages, key) ? messages[key] : key
+  const edited = Object.prototype.hasOwnProperty.call(productCopy, key) ? productCopy[key] : undefined
+  const message = edited ? edited[language === 'en' ? 1 : 0]
+    : language === 'en' && Object.prototype.hasOwnProperty.call(messages, key) ? messages[key] : key
   // One pass: user-provided values are neither translated nor interpreted as placeholders.
   return message.replace(/\{(\d+)\}/g, (placeholder, index: string) => {
     const i = Number(index)

@@ -11,7 +11,24 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/launcher-sidecar/internal/logbus"
 )
+
+func TestLineBufferParsesWXTOutputAcrossChunks(t *testing.T) {
+	var lines []string
+	lb := newLineBuffer(func(line string) { lines = append(lines, line) })
+	lb.feed([]byte("\x1b]0;npm\x07\x1b[32m√\x1b[0m Started dev server @ http://localhost:3000\x1b[9"))
+	lb.feed([]byte("5G13:01:58\r\n"))
+	if len(lines) != 1 || lines[0] != "√ Started dev server @ http://localhost:3000 13:01:58" {
+		t.Fatalf("normalized output = %q", lines)
+	}
+	for _, event := range logbus.ParseLine(lines[0]) {
+		if event.Kind == logbus.EventPortListen && event.Port != 3000 {
+			t.Fatalf("wrong port from terminal output: %+v", event)
+		}
+	}
+}
 
 func TestConPTYStopClosesOnce(t *testing.T) {
 	dir := t.TempDir()

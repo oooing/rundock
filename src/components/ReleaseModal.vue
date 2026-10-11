@@ -155,7 +155,7 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             <CopyErrorButton v-if="activeRun.status === 'failed'" :text="localFailureText(app.name, activeRun, runTargets, logs)" />
             <details v-if="runFailureDetails" class="execution-details"><summary>{{ tr('查看技术详情') }}</summary><pre class="log-box">{{ runFailureDetails }}</pre></details>
             <div v-if="retryable && !customRetryConfirmation" class="alert info" role="note">{{ retryGuidance }}</div>
-            <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
+            <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("代码提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
             <div v-if="activeRun.status !== 'queued' && activeRun.status !== 'running' && (retryable || uploadPaused || activeRun.status === 'failed')" class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
             <p v-if="uploadPaused" class="muted">{{ tr('关闭后会保留本次记录，可在“最近发布”中打开记录继续上传。') }}</p>
           </section>

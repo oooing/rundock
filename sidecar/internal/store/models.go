@@ -11,6 +11,8 @@ import (
 
 // App 是一个被托管的启动单元。
 type App struct {
+	// Run-only launch metadata; never part of persistent configuration or exports.
+	TemporaryPort *TemporaryPort    `json:"-"`
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
 	EntryScript   string            `json:"entryScript"`
@@ -32,6 +34,12 @@ type App struct {
 	LastStatus    string            `json:"lastStatus"`
 	SortOrder     int               `json:"sortOrder"`
 	CardColor     string            `json:"cardColor"`
+}
+
+type TemporaryPort struct {
+	OriginalPort int    `json:"originalPort"`
+	Port         int    `json:"port"`
+	Host         string `json:"host"`
 }
 
 // Group 分组。

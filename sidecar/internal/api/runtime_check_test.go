@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -25,14 +27,24 @@ func TestRuntimeChecksRecoverWithoutMutatingHistoryOrGrantingControl(t *testing.
 	s := New(st, logbus.NewHub(), adapter.NewRegistry())
 	defer s.Diagnostics.Close()
 	root := t.TempDir()
-	a := &store.App{ID: "app", Name: "Fixture", Cwd: root, EntryScript: filepath.Join(root, "start.cmd"), LastStatus: "stopped", HealthURL: "http://localhost:3000", LastURL: "http://localhost:3001", PortHints: []int{3000}}
+	// The departed-process check really tests whether this port is free. Do
+	// not collide with a user's running WXT/Vite server on the default 3000.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a := &store.App{ID: "app", Name: "Fixture", Cwd: root, EntryScript: filepath.Join(root, "start.cmd"), LastStatus: "stopped", HealthURL: fmt.Sprintf("http://localhost:%d", port), LastURL: "http://localhost:1", PortHints: []int{port}}
 	if err := st.CreateApp(a); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.CreateRun(&store.AppRun{ID: "history", AppID: a.ID, Status: "stopped", StartedAt: "2026-09-01T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := recovery.RuntimeSnapshot{Processes: []recovery.Process{{PID: 100, Created: "1000", Executable: filepath.Join(root, "server.exe")}}, Listeners: []probe.PortListener{{PID: 100, Port: 3000}}}
+	snapshot := recovery.RuntimeSnapshot{Processes: []recovery.Process{{PID: 100, Created: "1000", Executable: filepath.Join(root, "server.exe")}}, Listeners: []probe.PortListener{{PID: 100, Port: port}}}
 	var readErr error
 	s.runtimeMonitor = &runtimeMonitor{gate: make(chan struct{}, 1), read: func() (recovery.RuntimeSnapshot, error) { return snapshot, readErr }}
 	s.Launcher.BeforeStart = s.checkBeforeStart
@@ -81,7 +93,7 @@ func TestRuntimeChecksRecoverWithoutMutatingHistoryOrGrantingControl(t *testing.
 		t.Fatal(got)
 	}
 	// A new owner appears after the card's clear snapshot; fresh start check blocks it.
-	snapshot.Listeners = []probe.PortListener{{PID: 999, Port: 3000}}
+	snapshot.Listeners = []probe.PortListener{{PID: 999, Port: port}}
 	if err := s.checkBeforeStart(context.Background(), a); err == nil {
 		t.Fatal("stale clear snapshot allowed conflicting start")
 	}

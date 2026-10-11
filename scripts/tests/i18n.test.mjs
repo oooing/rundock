@@ -101,7 +101,11 @@ test('interpolation preserves user text without recursive replacement', () => {
   assert.equal(translate('en', 'unknown'), 'unknown')
   assert.equal(translate('en', '「{0}」已导入', [name]), `“${name}” imported`)
   assert.equal(translate('zh-CN', '「{0}」已导入', [name]), `「${name}」已导入`)
-  assert.equal(translate('en', '最新 Tag：{0}'), 'Latest tag: {0}')
+  assert.equal(translate('en', '最新 Tag：{0}'), 'Latest version: {0}')
+  assert.equal(translate('zh-CN', '全部应用'), '全部项目')
+  assert.equal(translate('en', '全部应用'), 'All projects')
+  assert.equal(translate('zh-CN', '本次临时端口：{0} → {1}（原配置未修改）', [3000, name]), `这次使用 ${name} 端口，原端口 3000 的设置保留`)
+  assert.equal(translate('zh-CN', '自定义错误：构建失败，Tag {0}', [name]), `自定义错误：构建失败，Tag ${name}`)
 })
 
 test('translations are nonempty and preserve the same placeholders', () => {

@@ -54,6 +54,7 @@ func (s *Server) handlePortResolution(w http.ResponseWriter, r *http.Request, id
 		s.portPlans[token] = portPlan{AppID: id, Origin: r.Header.Get("Origin"), Fingerprint: fingerprint, Expires: expires}
 		result.ConfirmationToken, result.ExpiresAt = token, expires.UTC().Format(time.RFC3339)
 	}
+	result.TemporaryPort = s.offerTemporaryPort(r, id, result.State)
 	writeJSON(w, 200, result)
 }
 

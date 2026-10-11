@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/launcher-sidecar/internal/portoverride"
 	"github.com/launcher-sidecar/internal/probe"
 	"github.com/launcher-sidecar/internal/store"
 )
@@ -47,6 +48,9 @@ func BindingExcluded(b PortBinding, ranges []PortRange) bool {
 var endpointDeclaration = regexp.MustCompile(`(?im)^\s*(?:rem\s+|::\s*|#\s*)rundock:(?:ready|open)\s+(https?://[^\s]+)`)
 
 func RequiredBindings(a *store.App) []PortBinding {
+	if a.TemporaryPort != nil {
+		return []PortBinding{{Port: a.TemporaryPort.Port, Network: "tcp4", Host: a.TemporaryPort.Host}}
+	}
 	byPort := map[int][]PortBinding{}
 	add := func(link string) {
 		u, err := url.Parse(link)
@@ -83,6 +87,9 @@ func RequiredBindings(a *store.App) []PortBinding {
 		}
 	}
 	add(a.HealthURL)
+	if d, err := portoverride.Inspect(a); err == nil {
+		add(fmt.Sprintf("http://%s:%d", d.Host, d.Port))
+	}
 	result := []PortBinding{}
 	for _, port := range RequiredPorts(a) {
 		bindings := byPort[port]

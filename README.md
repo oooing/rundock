@@ -6,10 +6,9 @@
 
 <h2 align="center">90 秒认识 RunDock</h2>
 
-<p align="center">
-  <a href="https://github.com/oooing/rundock/blob/master/docs/media/rundock-intro-90s.mp4"><img src="./docs/media/rundock-intro-poster.jpg" alt="观看 RunDock 产品介绍：把 AI 工具和第三方应用集中管理，一键启动、查看运行记录和发布版本" width="800" /></a>
-</p>
-<p align="center"><strong><a href="https://github.com/oooing/rundock/blob/master/docs/media/rundock-intro-90s.mp4">▶ 打开介绍视频</a></strong> · <a href="https://github.com/oooing/rundock/raw/refs/heads/master/docs/media/rundock-intro-90s.mp4">下载原片</a><br /><sub>90 秒 · 1080p · 中文配音与字幕</sub></p>
+https://github.com/user-attachments/assets/ceb2c598-1ffc-4aa7-9c14-3333052a82fe
+
+<p align="center"><sub>90 秒 · 720p 在线播放 · 中文配音与字幕</sub><br /><a href="https://github.com/oooing/rundock/raw/refs/heads/master/docs/media/rundock-intro-90s.mp4">下载 1080p 原片</a></p>
 
 <p align="center">
   <a href="https://github.com/oooing/rundock/releases"><img src="./docs/media/download.zh-CN.svg" alt="下载 Windows 版" width="208" height="46" /></a>

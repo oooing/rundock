@@ -2,6 +2,16 @@
 
 These assets support the Chinese-first and English README pages.
 
+## Product introduction video
+
+The README's first visual is the latest 90-second product introduction, replacing the static hero placement. The original hero files are retained.
+
+- `rundock-intro-90s.mp4`: exact copy of the approved `Product/rundock-intro-90s.mp4`, delivered on 2026-10-11. H.264/AAC, 1920 × 1080, 90 seconds, 17,250,684 bytes, Chinese narration and burned-in subtitles.
+- SHA-256: `fde5b89910bf4ed20e23be7567f33cdfc194a283d8d21f1fcab6e4353638fc02`.
+- `rundock-intro-poster.jpg`: the matching v2 film poster from `demos/rundock-intro/full-film/output/v2/poster.jpg`.
+- Both READMEs link the cover to GitHub's video file page and offer an explicit original-file download. This is a cover link, not a claim of an inline README player.
+- The film uses the same isolated demo projects described in its production notes, not live personal project data. No new recording, narration, or visual edit was made for this homepage update.
+
 | Asset | Origin |
 | --- | --- |
 | `hero.zh-CN.png` | AI-generated brand illustration, built-in image generation |

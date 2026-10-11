@@ -6,10 +6,9 @@
 
 <h2 align="center">Meet RunDock in 90 seconds</h2>
 
-<p align="center">
-  <a href="https://github.com/oooing/rundock/blob/master/docs/media/rundock-intro-90s.mp4"><img src="./docs/media/rundock-intro-poster.jpg" alt="RunDock product tour: organize AI-built tools and third-party apps, launch projects, read logs, and publish releases" width="800" /></a>
-</p>
-<p align="center"><strong><a href="https://github.com/oooing/rundock/blob/master/docs/media/rundock-intro-90s.mp4">▶ Open the product video</a></strong> · <a href="https://github.com/oooing/rundock/raw/refs/heads/master/docs/media/rundock-intro-90s.mp4">Download original</a><br /><sub>90 seconds · 1080p · Chinese narration and subtitles</sub></p>
+https://github.com/user-attachments/assets/ceb2c598-1ffc-4aa7-9c14-3333052a82fe
+
+<p align="center"><sub>90 seconds · 720p inline playback · Chinese narration and subtitles</sub><br /><a href="https://github.com/oooing/rundock/raw/refs/heads/master/docs/media/rundock-intro-90s.mp4">Download the 1080p original</a></p>
 
 <p align="center">
   <a href="https://github.com/oooing/rundock/releases"><img src="./docs/media/download.en.svg" alt="Download for Windows" width="236" height="46" /></a>

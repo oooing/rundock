@@ -2,11 +2,14 @@
 
 <h1 align="center">RunDock</h1>
 
-<p align="center">
-  <a href="./docs/media/hero-rundock.en.png"><img src="./docs/media/hero-rundock.en.webp" alt="RunDock — Every project. Under control. Launch · Logs · Git releases" width="720" /></a>
-</p>
-
 <p align="center"><strong>A Windows launcher that makes AI-built tools and dev projects easier to manage.</strong></p>
+
+<h2 align="center">Meet RunDock in 90 seconds</h2>
+
+<p align="center">
+  <a href="https://github.com/oooing/rundock/blob/master/docs/media/rundock-intro-90s.mp4"><img src="./docs/media/rundock-intro-poster.jpg" alt="RunDock product tour: organize AI-built tools and third-party apps, launch projects, read logs, and publish releases" width="800" /></a>
+</p>
+<p align="center"><strong><a href="https://github.com/oooing/rundock/blob/master/docs/media/rundock-intro-90s.mp4">▶ Open the product video</a></strong> · <a href="https://github.com/oooing/rundock/raw/refs/heads/master/docs/media/rundock-intro-90s.mp4">Download original</a><br /><sub>90 seconds · 1080p · Chinese narration and subtitles</sub></p>
 
 <p align="center">
   <a href="https://github.com/oooing/rundock/releases"><img src="./docs/media/download.en.svg" alt="Download for Windows" width="236" height="46" /></a>

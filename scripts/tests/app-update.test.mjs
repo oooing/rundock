@@ -27,6 +27,7 @@ test('startup checks and downloads once, but never installs automatically', asyn
   assert.equal(s.appUpdate.downloaded, 100)
   assert.equal(s.appUpdate.dialogOpen, true)
   await s.installAppUpdate()
+  assert.equal(s.appUpdate.phase, 'installed')
   assert.equal(calls.at(-1), 'install_app_update')
 })
 test('no update and network failure do not download or install', async () => {
@@ -63,9 +64,24 @@ test('dismissed update finishes quietly and can reopen without losing the verifi
   assert.equal(s.appUpdate.dialogOpen, true)
   assert.equal(s.appUpdate.phase, 'ready')
   assert.deepEqual(calls, ['check_app_update', 'download_app_update'])
+  let complete
+  // Installation stays locked only until the native installer reports its result.
+  const nativeInstall = store(async cmd => {
+    if (cmd === 'check_app_update') return info
+    if (cmd === 'install_app_update') await new Promise(resolve => { complete = resolve })
+  })
+  await nativeInstall.prepareStartupUpdate()
+  const installing = nativeInstall.installAppUpdate()
+  nativeInstall.dismissAppUpdate()
+  assert.equal(nativeInstall.appUpdate.dialogOpen, true)
+  complete(); await installing
+  nativeInstall.dismissAppUpdate()
+  assert.equal(nativeInstall.appUpdate.dialogOpen, false)
   await s.installAppUpdate()
   s.dismissAppUpdate()
-  assert.equal(s.appUpdate.dialogOpen, true, 'installation cannot be cancelled after handing off')
+  assert.equal(s.appUpdate.dialogOpen, false, 'completed installation can be dismissed without exiting')
+  await s.checkAppUpdate()
+  assert.equal(s.appUpdate.phase, 'installed')
 })
 
 test('installation error keeps the update ready for a manual retry', async () => {
@@ -77,6 +93,23 @@ test('installation error keeps the update ready for a manual retry', async () =>
   s.dismissAppUpdate()
   s.openAppUpdate()
   assert.equal(s.appUpdate.dialogOpen, true)
+})
+
+test('Windows reboot requirement is shown after installation without retrying or exiting', async () => {
+  const calls = []
+  const s = store(async cmd => {
+    calls.push(cmd)
+    if (cmd === 'check_app_update') return info
+    if (cmd === 'install_app_update') return {requiresRestart: true}
+  })
+  await s.prepareStartupUpdate()
+  await s.installAppUpdate()
+  assert.equal(s.appUpdate.phase, 'installed')
+  assert.equal(s.appUpdate.requiresRestart, true)
+  s.dismissAppUpdate()
+  await s.checkAppUpdate()
+  assert.equal(s.appUpdate.dialogOpen, true)
+  assert.equal(calls.filter(cmd => cmd === 'install_app_update').length, 1)
 })
 test('download failure leaves a manual retry, not an automatic retry loop', async () => {
   let downloads = 0

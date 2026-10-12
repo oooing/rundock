@@ -14,8 +14,13 @@ function Resolve-InstallRoot([string]$Directory) {
 }
 function Get-InstalledProcesses([string]$Root) {
     $expected = @((Join-Path $Root 'launcher-platform.exe'), (Join-Path $Root 'launcher-sidecar.exe'))
-    @(Get-CimInstance Win32_Process -Filter "Name = 'launcher-platform.exe' OR Name = 'launcher-sidecar.exe'" | Where-Object {
-        $_.ExecutablePath -and $expected -contains [IO.Path]::GetFullPath($_.ExecutablePath)
+    @(Get-CimInstance Win32_Process -Filter "Name = 'launcher-platform.exe' OR Name = 'launcher-sidecar.exe' OR Name LIKE 'launcher-%.rundock-running-%.exe'" | Where-Object {
+        $_.ExecutablePath -and (
+            $expected -contains [IO.Path]::GetFullPath($_.ExecutablePath) -or (
+                [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($_.ExecutablePath)) -eq $Root -and
+                [IO.Path]::GetFileName($_.ExecutablePath) -match '^launcher-(platform|sidecar)\.rundock-running-[0-9a-f]{32}\.exe$'
+            )
+        )
     })
 }
 function Wait-ProcessExit([int]$ProcessID, [int]$Milliseconds) {
@@ -64,13 +69,18 @@ function Assert-InstallFilesReleased([string]$Root) {
 try {
     $installRoot = Resolve-InstallRoot $InstallDirectory
     # Prevent the old window from recreating a background process during setup.
-    foreach ($process in @(Get-InstalledProcesses $installRoot | Where-Object { $_.Name -eq 'launcher-platform.exe' })) { Stop-ExactProcess $process $installRoot }
-    foreach ($process in @(Get-InstalledProcesses $installRoot | Where-Object { $_.Name -eq 'launcher-sidecar.exe' })) {
+    foreach ($process in @(Get-InstalledProcesses $installRoot | Where-Object { $_.Name -match '^launcher-platform(\.exe|\.rundock-running-)' })) { Stop-ExactProcess $process $installRoot }
+    foreach ($process in @(Get-InstalledProcesses $installRoot | Where-Object { $_.Name -match '^launcher-sidecar(\.exe|\.rundock-running-)' })) {
         Request-BackendShutdown $process
         if (-not (Wait-ProcessExit ([int]$process.ProcessId) 6000)) { Stop-ExactProcess $process $installRoot }
     }
     if (@(Get-InstalledProcesses $installRoot).Count) { throw 'RunDock restarted during setup. Close it and retry.' }
     Assert-InstallFilesReleased $installRoot
+    # Used only by uninstall now. Remove the old executable copies after their
+    # exact owner processes have exited; leave every other file and user data.
+    foreach ($file in @(Get-ChildItem -LiteralPath $installRoot -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^launcher-(platform|sidecar)\.rundock-running-[0-9a-f]{32}\.exe$' })) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
     Write-Output 'RunDock processes have exited and installation files are ready.'
     exit 0
 } catch {

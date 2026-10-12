@@ -44,6 +44,8 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [build] 完成: %OUT%
+go build -trimpath -ldflags "-H=windowsgui" -o "%BIN_DIR%\rundock-install-helper-%TRIPLE%.exe" ./cmd/rundock-install-helper
+if errorlevel 1 exit /b 1
 echo.
 echo 下一步：cd .. ^&^& cargo tauri dev  （启动桌面应用）
 timeout /t 3 /nobreak >nul

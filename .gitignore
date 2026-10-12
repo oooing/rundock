@@ -13,6 +13,7 @@ src-tauri/gen/
 # Go
 sidecar/launcher-sidecar
 sidecar/launcher-sidecar.exe
+src-tauri/binaries/rundock-install-helper-*.exe
 *.exe~
 vendor/
 

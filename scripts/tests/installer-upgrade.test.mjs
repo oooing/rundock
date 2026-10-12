@@ -17,7 +17,8 @@ const block = (name) => {
 test('custom installer is the pinned official template plus scoped upgrade policy', () => {
   const config = JSON.parse(readFileSync(path.join(root, 'src-tauri/tauri.conf.json'), 'utf8'))
   assert.equal(config.bundle.windows.nsis.template, 'windows/installer.nsi')
-  const upstream = template.replace(/; RUNDOCK BEGIN ([\w-]+)\n[\s\S]*?; RUNDOCK END \1\n/g, '')
+  const upstream = template.replace(/; RUNDOCK BEGIN preserve-running-install\n[\s\S]*?; RUNDOCK END preserve-running-install\n/, '  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"\n')
+    .replace(/; RUNDOCK BEGIN ([\w-]+)\n[\s\S]*?; RUNDOCK END \1\n/g, '')
   const blob = Buffer.from(upstream)
   const hash = createHash('sha1').update('blob ' + blob.length + '\0').update(blob).digest('hex')
   // Upgrade this pin and review/rebase our blocks together when updating Tauri CLI.

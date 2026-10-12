@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- The empty group links this entire lifecycle fragment into the product. -->
+    <ComponentGroup Id="RunDockLiveInstall" />
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+    <Binary Id="RunDockInstallHelper" SourceFile="$(sys.SOURCEFILEDIR)..\binaries\rundock-install-helper-x86_64-pc-windows-msvc.exe" />
+    <CustomAction Id="RunDockPrepareInstall" BinaryKey="RunDockInstallHelper" ExeCommand='prepare "[INSTALLDIR]." "[ProductCode]"' Return="check" />
+    <CustomAction Id="RunDockCommitInstall" BinaryKey="RunDockInstallHelper" ExeCommand='commit "[INSTALLDIR]." "[ProductCode]"' Return="check" />
+    <CustomAction Id="RunDockRollbackInstall" BinaryKey="RunDockInstallHelper" ExeCommand='rollback "[INSTALLDIR]." "[ProductCode]"' Return="ignore" />
+    <CustomAction Id="RunDockCancelInstall" BinaryKey="RunDockInstallHelper" ExeCommand='rollback "[INSTALLDIR]." "[ProductCode]"' Return="ignore" />
+    <InstallExecuteSequence>
+      <!-- Move loaded files before MSI looks for files in use or removes an old product. -->
+      <Custom Action="RunDockPrepareInstall" Before="InstallValidate">NOT REMOVE</Custom>
+      <Custom Action="RunDockCommitInstall" After="InstallFinalize">NOT REMOVE</Custom>
+      <Custom Action="RunDockRollbackInstall" OnExit="error">NOT REMOVE</Custom>
+      <Custom Action="RunDockCancelInstall" OnExit="cancel">NOT REMOVE</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

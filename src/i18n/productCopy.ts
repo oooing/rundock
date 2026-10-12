@@ -5,6 +5,7 @@ export type CopyPair = readonly [string, string]
 
 /** Navigation, actions, field names and states: 2–6 Chinese characters. */
 export const labelCopy: Record<string, CopyPair> = {
+  '立即安装': ['立即安装', 'Install now'],
   '全部应用': ['全部项目', 'All projects'],
   '应用名称': ['项目名称', 'Project name'],
   '确认导入此应用': ['确认添加', 'Add project'],
@@ -397,6 +398,10 @@ export const labelCopy: Record<string, CopyPair> = {
 
 /** Descriptions and feedback. Keep templates within 40 characters; never truncate user data. */
 export const detailCopy: Record<string, CopyPair> = {
+  '正在安装，项目继续运行…': ['正在安装，项目继续运行…', 'Installing. Your projects keep running…'],
+  '安装完成，项目继续运行。': ['安装完成，项目继续运行。', 'Installed. Your projects keep running.'],
+  '安装时软件和项目继续运行；停止项目并退出后，下次启动使用新版。': ['安装时软件和项目继续运行；停止项目并退出后，下次启动使用新版。', 'RunDock and your projects stay open. To use the new version, stop the projects, quit and start again.'],
+  '安装完成，需重启电脑才能启用新版。项目继续运行。': ['安装完成，需重启电脑才能启用新版。项目继续运行。', 'Installed. Windows requires a reboot to use the new version. Your projects keep running.'],
   '启动脚本或整个项目文件夹，拖到这里即可识别。': ['把启动文件或项目文件夹拖到这里，自动找到启动方式。', 'Drop a startup file or project folder here to find how to start it.'],
   'Web 版无法获取完整路径时，请使用下方输入框。': ['网页版读不到完整地址时，请在下方粘贴。', 'If the browser cannot read the full path, paste it below.'],
   '或直接输入路径': ['或直接粘贴文件地址', 'Or paste the file path'],

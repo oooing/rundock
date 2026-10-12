@@ -53,7 +53,6 @@ struct Ready {
 struct Session {
     candidate: Option<Candidate>,
     ready: Option<Ready>,
-    stopped_port: Option<String>,
 }
 #[derive(Default)]
 pub struct UpdateState(Mutex<Session>);
@@ -360,54 +359,38 @@ pub async fn download_app_update(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn install_app_update(app: tauri::AppHandle) -> Result<InstallResult, String> {
     if cfg!(debug_assertions) || !cfg!(target_os = "windows") {
         return Err("请在已安装的 Windows 正式版中升级".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<UpdateState>();
-        let mut session = state.0.try_lock().map_err(|_| "正在处理更新，请稍后重试")?;
+        let session = state.0.try_lock().map_err(|_| "正在处理更新，请稍后重试")?;
         verify_ready(session.ready.as_ref().ok_or("请先下载安装包")?)?;
-        // Validate the handoff before stopping anything. A click on "install"
-        // is the confirmation; the installer should only show upgrade progress.
+        // Install without exiting the shell or stopping the project owner.
+        // The installer stages loaded files; new code starts on the next exit/start.
         let mut command = installer_command(
             &session.ready.as_ref().ok_or("请先下载安装包")?.path,
             std::env::var_os("SystemRoot").as_deref(),
         )?;
-        let port = super::sidecar_data_dir()
-            .and_then(|dir| super::read_port_file(&dir))
-            .or_else(|| session.stopped_port.clone())
-            .ok_or("无法连接后台，请稍后重试")?;
-        if session.stopped_port.is_none() || super::sidecar_health_ok(&port) {
-            super::desktop_exit::prepare_exit(&port, false)?;
-            session.stopped_port = Some(port.clone());
-        }
-        // Wait for the sidecar to release files before Windows replaces them.
-        for _ in 0..50 {
-            if !super::sidecar_health_ok(&port)
-                && super::sidecar_data_dir()
-                    .and_then(|dir| super::read_port_file(&dir))
-                    .is_none()
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if super::sidecar_health_ok(&port)
-            || super::sidecar_data_dir()
-                .and_then(|dir| super::read_port_file(&dir))
-                .is_some()
-        {
-            return Err("后台尚未退出，请稍后重试安装".into());
-        }
-        command
+        let status = command
             .spawn()
-            .map_err(|e| format!("无法打开安装程序，可重新启动 RunDock 后重试：{e}"))?;
-        app.exit(0);
-        Ok(())
+            .map_err(|e| format!("无法打开安装程序：{e}"))?
+            .wait()
+            .map_err(|e| format!("无法确认安装结果：{e}"))?;
+        if !status.success() && status.code() != Some(3010) {
+            return Err(format!("安装未完成（退出码 {:?}），RunDock 和项目继续运行", status.code()));
+        }
+        Ok(InstallResult { requires_restart: status.code() == Some(3010) })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallResult {
+    requires_restart: bool,
 }
 
 // Keep argument construction separate so tests never execute an installer.
@@ -419,8 +402,8 @@ fn installer_command(
         Some("exe") => {
             let mut command = std::process::Command::new(path);
             // Tauri NSIS: preserve the installation and user data, show progress,
-            // then reopen the app. No maintenance/uninstall selection wizard.
-            command.args(["/UPDATE", "/P", "/R"]);
+            // leave the existing app and all project owners running.
+            command.args(["/UPDATE", "/P"]);
             Ok(command)
         }
         Some("msi") => {
@@ -430,7 +413,7 @@ fn installer_command(
             command
                 .arg("/i")
                 .arg(path)
-                .args(["/passive", "/norestart", "AUTOLAUNCHAPP=True"]);
+                .args(["/passive", "/norestart", "MSIRESTARTMANAGERCONTROL=Disable"]);
             Ok(command)
         }
         _ => Err("安装包格式不受支持，请重新检查更新".into()),
@@ -447,7 +430,7 @@ mod tests {
         assert_eq!(command.get_program(), path.as_os_str());
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
-            ["/UPDATE", "/P", "/R"]
+            ["/UPDATE", "/P"]
         );
     }
 
@@ -466,7 +449,7 @@ mod tests {
                 path.as_os_str(),
                 std::ffi::OsStr::new("/passive"),
                 std::ffi::OsStr::new("/norestart"),
-                std::ffi::OsStr::new("AUTOLAUNCHAPP=True"),
+                std::ffi::OsStr::new("MSIRESTARTMANAGERCONTROL=Disable"),
             ]
         );
         assert!(installer_command(path, None).is_err());

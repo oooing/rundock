@@ -8,6 +8,8 @@ import type { ReleaseCandidate, ReleaseFileCategory, ReleaseFileClassification, 
 const props = withDefaults(defineProps<{ignoreFile?:(file:ReleaseFileClassification)=>Promise<string>;appId:string;intent:'formal'|'save-progress';checksEnabled?:boolean;locked?:boolean;cloudBuild?:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean;files: ReleaseFileClassification[]; selected: Record<string,boolean>; decisions: ReleaseManualDecision[]; candidate: ReleaseCandidate|null; busy: boolean; stale: boolean}>(),{checksEnabled:true,locked:false})
 const emit = defineEmits<{'update:checksEnabled':[enabled:boolean]; choose:[file:ReleaseFileClassification,included:boolean]; recommend:[]; cancel:[]; refresh:[]; check:[]; exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
 const category=ref<ReleaseFileCategory|null>(null)
+const fileTabsId=useId()
+const fileTabs=ref<HTMLElement|null>(null)
 const previewPath=ref<string|null>(null)
 const pendingIgnores=ref<ReleaseFileClassification[]>([])
 const bulkIgnore=ref(false)
@@ -60,9 +62,20 @@ const categories = computed<Array<{id:ReleaseFileCategory;label:string}>>(()=>[
 ])
 const groups = computed(() => categories.value.map(category=> ({...category, files:props.files.filter(file=>file.category===category.id),
   selectedCount:props.files.filter(file=>file.category===category.id && props.selected[file.path]).length})))
+const visibleGroups=computed(()=>groups.value.filter(group=>group.id==='review' || group.id==='recommend' || group.files.length || group.id===activeCategory.value))
 const unresolved = computed(()=>props.files.filter(file=>file.category==='review' && !props.decisions.some(decision=>decision.path===file.path && decision.contentFingerprint===file.contentFingerprint)))
 const activeCategory = computed(()=>category.value ?? (unresolved.value.length ? 'review' : 'recommend'))
-watch(activeCategory,closeBulkHelp)
+watch(activeCategory,()=>{closeBulkHelp();previewPath.value=null;if(fileList.value)fileList.value.scrollTop=0})
+async function onFileTabKeydown(event:KeyboardEvent){
+  const keys=['ArrowLeft','ArrowRight','Home','End']
+  if(!keys.includes(event.key))return
+  event.preventDefault()
+  const tabs=visibleGroups.value,index=tabs.findIndex(group=>group.id===activeCategory.value)
+  const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length
+  category.value=tabs[next].id
+  await nextTick()
+  fileTabs.value?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus({preventScroll:true})
+}
 const visibleFiles = computed(()=>groups.value.find(group=>group.id===activeCategory.value)?.files ?? [])
 const reviewFiles=computed(()=>props.files.filter(file=>file.category==='review'))
 const canBulkIgnore=computed(()=>!!props.ignoreFile && reviewFiles.value.length>0 && reviewFiles.value.every(file=>!file.tracked))
@@ -105,11 +118,12 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
 </script>
 <template>
   <div class="release-safety">
-    <p id="release-file-selection-help" class="file-selection-help"><strong>{{tr('待保存的改动')}}</strong><span>{{tr('未存入代码记录的改动含新增和修改；建议保存默认选中，待确认默认跳过。')}}</span></p>
     <div class="file-categories">
-    <div class="category-counts" :aria-label="tr('文件分类')"><button v-for="group in groups.filter(group=>group.files.length || group.id===activeCategory)" :key="group.id" :class="group.id" :aria-pressed="activeCategory===group.id" @click="category=group.id">{{group.label}} <strong>{{group.id==='recommend'?tr('已选 {0}/{1}',[group.selectedCount,group.files.length]):group.id==='review'?unresolved.length:group.files.length}}</strong></button></div>
-    <div class="scope-actions">
-      <div v-if="activeCategory==='review' && reviewFiles.length" class="bulk-control"><select class="bulk-select" :value="bulkDecision" :disabled="busy || locked || ignoring" :aria-label="tr('批量操作')" :title="canBulkIgnore?tr('批量操作'):tr('含已保存的文件，不能批量忽略，可逐个选择。')" @change="chooseBulk">
+    <div ref="fileTabs" class="category-counts" role="tablist" :aria-label="tr('文件分类')" @keydown="onFileTabKeydown">
+      <button v-for="group in visibleGroups" :id="`${fileTabsId}-tab-${group.id}`" :key="group.id" type="button" role="tab" :class="group.id" :aria-selected="activeCategory===group.id" :aria-controls="`${fileTabsId}-panel`" :tabindex="activeCategory===group.id?0:-1" @click="category=group.id">{{group.label}} <span class="tab-count">{{group.id==='recommend'?group.selectedCount+'/'+group.files.length:group.files.length}}</span></button>
+    </div>
+    <div v-if="activeCategory==='review' && reviewFiles.length" class="scope-actions">
+      <div class="bulk-control"><select class="bulk-select" :value="bulkDecision" :disabled="busy || locked || ignoring" :aria-label="tr('批量操作')" :title="canBulkIgnore?tr('批量操作'):tr('含已保存的文件，不能批量忽略，可逐个选择。')" @change="chooseBulk">
         <option value="" disabled>{{tr('混合选择')}}</option>
         <option value="include">{{tr('批量保存')}}</option><option value="exclude">{{tr('批量跳过')}}</option>
         <option value="ignore" :disabled="!canBulkIgnore">{{tr('批量忽略')}}</option>
@@ -120,10 +134,9 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
         <dl><div><dt>{{tr('提交')}}</dt><dd>{{tr('将这些改动存入本机代码记录。')}}</dd></div><div><dt>{{tr('本次不提交')}}</dt><dd>{{tr('仅排除本次改动，下次发布仍可能提示。')}}</dd></div><div><dt>{{tr('以后忽略（加入 .gitignore）')}}</dt><dd>{{tr('以后不再列出这些文件，不删除文件。')}}</dd></div></dl>
         <p v-if="!canBulkIgnore" class="bulk-help-limit">{{tr('含已保存的文件，不能批量忽略，可逐个选择。')}}</p>
       </div></div>
-      <button v-else :disabled="busy || locked || ignoring" @click="emit('recommend')">{{tr('采用推荐范围')}}</button>
     </div>
     </div>
-    <div ref="fileList" class="file-groups" aria-describedby="release-file-selection-help">
+    <div :id="`${fileTabsId}-panel`" ref="fileList" class="file-groups" role="tabpanel" :aria-labelledby="`${fileTabsId}-tab-${activeCategory}`" tabindex="0">
         <div v-for="file in visibleFiles" :key="file.path" class="scope-file">
           <div class="file-row" :class="{'review-row':file.category==='review'}">
             <input v-if="file.category!=='review'" type="checkbox" :aria-label="tr('选择文件：{0}',[file.path])" :checked="!!selected[file.path]" :disabled="busy || locked || ignoring || (file.category==='sensitive' && !selected[file.path])" @change="emit('choose',file,($event.target as HTMLInputElement).checked)" />
@@ -138,7 +151,7 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
           <p v-if="file.category==='sensitive'" class="blocked">{{file.reasons.join('；')}}</p>
           <p v-if="file.baselineKept && !selected[file.path]" class="baseline-note">{{tr('基线中的旧内容仍保留；取消勾选只排除本次改动。')}}</p>
         </div>
-        <p v-if="!visibleFiles.length" class="empty-files">{{tr('没有匹配的文件')}}</p>
+        <p v-if="!visibleFiles.length" class="empty-files">{{tr(activeCategory==='review'?'暂无待确认的文件。':activeCategory==='recommend'?'暂无建议保存的改动。':'没有匹配的文件')}}</p>
     </div>
     <div v-if="pendingIgnores.length" class="ignore-confirm">
       <code v-for="file in pendingIgnores" :key="file.path">{{file.path}}</code>
@@ -162,7 +175,6 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
 <style scoped>
 .ignore-confirm{margin:0;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:12px;overflow-wrap:anywhere}.ignore-confirm p{margin:8px 0;color:var(--text-faint);line-height:1.6}.ignore-confirm button{margin:4px 8px 0 0;min-height:34px;font-size:12px}.ignore-confirm [role=alert]{color:var(--red)}.ignore-notice{font-size:12px;color:var(--green);line-height:1.6}
 .candidate-result .review{color:var(--amber)}
-.file-selection-help{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin:0;color:var(--text-faint);font-size:11px;line-height:1.6}.file-selection-help strong{color:var(--text-dim);font-size:12px;font-weight:600}
 .ignore-confirm>code{display:block}.bulk-control{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-faint)}.bulk-select{width:140px;max-width:100%;padding:6px 9px;font-size:12px;color:var(--text)}.bulk-select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .bulk-control .bulk-help-button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--text-faint)}.bulk-help-button svg{width:17px;height:17px}.bulk-control .bulk-help-button:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--accent)}.bulk-help-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .bulk-help-popover{position:fixed;inset:auto;margin:0;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);overflow:auto;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elev-2);color:var(--text);box-shadow:0 8px 24px #0005;font-size:12px;line-height:1.6;overscroll-behavior:contain}.bulk-help-popover p{margin:0;color:var(--text-dim)}.bulk-help-popover dl{display:grid;gap:10px;margin:12px 0 0}.bulk-help-popover dl>div{display:grid;grid-template-columns:60px minmax(0,1fr);gap:10px}.bulk-help-popover dt{font-weight:600}.bulk-help-popover dd{margin:0;color:var(--text-dim)}.bulk-help-popover .bulk-help-limit{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);color:var(--amber)}
@@ -170,9 +182,10 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
 .check-toggle{display:flex;align-items:center;gap:9px;cursor:pointer}.check-toggle input{appearance:none;width:32px;height:18px;border-radius:12px;background:var(--border);position:relative;margin:0;flex-shrink:0;cursor:pointer}.check-toggle input:checked{background:var(--accent)}.check-toggle input:before{content:'';position:absolute;width:12px;height:12px;top:3px;left:3px;border-radius:50%;background:#fff}.check-toggle input:checked:before{left:17px}.check-toggle input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.check-toggle input:disabled{opacity:.5;cursor:not-allowed}
 .release-safety,.release-safety>*{min-width:0}.file-groups{overflow-x:hidden}.scope-file label,.scope-file code{min-width:0}
 .file-row{display:flex;align-items:center;gap:8px}.scope-file .file-name{flex:1;min-width:0;text-align:left;background:none;border:0;padding:3px 0;margin:0;color:var(--text);font-size:12px}.scope-file .file-name:hover{color:var(--accent)}.scope-file .file-name code{display:block;overflow-wrap:anywhere;white-space:normal}.file-row>input{flex-shrink:0}
-.category-counts>button{padding:6px 9px;border-radius:6px;font-size:12px}.category-counts>button[aria-pressed=true]{border-color:var(--accent);background:var(--bg)}
+.category-counts{display:flex;align-items:center;gap:18px;flex-wrap:wrap}.category-counts>button{position:relative;display:flex;align-items:center;gap:6px;min-height:34px;padding:7px 0;border:0;border-radius:0;background:transparent;color:var(--text-dim);font-size:12px;font-weight:500}.category-counts>button::after{content:'';position:absolute;inset:auto 0 0;height:2px;border-radius:2px;background:transparent}.category-counts>button[aria-selected=true]{color:var(--accent);font-weight:600}.category-counts>button[aria-selected=true]::after{background:var(--accent)}.tab-count{color:var(--text-faint);font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}
+@media(hover:hover) and (pointer:fine){.category-counts>button:hover{color:var(--accent);background:transparent}}
 .file-categories{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.scope-actions{margin-inline-start:auto}.review-row{display:flex;align-items:center;gap:12px;font-size:12px}.review-row select{flex:none;width:112px;padding:7px;font:inherit}.scope-file .review-row code{white-space:normal;overflow-wrap:anywhere}.empty-files{font-size:12px;color:var(--text-faint);text-align:center;padding:12px}
-.release-safety{border:1px solid var(--border);border-radius:11px;padding:14px;display:grid;gap:12px}.safety-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.safety-head h3{margin:0;font-size:15px}.safety-head span,small{font-size:11px;color:var(--text-faint)}.category-counts{display:flex;flex-wrap:wrap;gap:8px}.category-counts>span{padding:6px 9px;border-radius:6px;background:var(--bg);font-size:12px}.category-counts strong{margin-left:5px}.scope-actions{display:flex;gap:8px}.scope-actions button,.review-notice button{font-size:12px;padding:6px 9px}.review-notice{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px;border-radius:7px;background:rgba(251,191,36,.08);color:var(--amber);font-size:12px}.advanced-files summary,.file-groups summary{cursor:pointer;padding:7px 0;font-size:12px}.advanced-files>input{width:100%;margin:8px 0}.file-groups{max-height:320px;overflow:auto}.scope-file{padding:9px 5px;border-top:1px solid var(--border)}.scope-file label{display:flex;align-items:center;gap:8px;font-size:12px}.scope-file code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.scope-file p,.candidate-result p{margin:5px 0;font-size:11px;color:var(--text-faint);line-height:1.6}.scope-file p{margin-left:24px}.scope-file button{margin-left:24px;font-size:11px}.candidate-result{border-top:1px solid var(--border);padding-top:12px;display:grid;gap:8px}.candidate-result .passed,.candidate-result .ready{color:var(--green)}.candidate-result .failed,.blocked,.sensitive{color:var(--red)}.candidate-result .stale,.review,.baseline-note{color:var(--amber)}.finding{padding:8px;border:1px solid var(--border);border-radius:6px;font-size:11px;overflow-wrap:anywhere}.check-result summary{display:flex;justify-content:space-between;gap:10px;font-size:12px;cursor:pointer;padding:7px;background:var(--bg);border-radius:6px}.check-result pre{max-height:200px;overflow:auto;font-size:11px;background:var(--bg);padding:9px;white-space:pre-wrap;overflow-wrap:anywhere}
+.release-safety{border:1px solid var(--border);border-radius:11px;padding:14px;display:grid;gap:12px}.safety-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.safety-head h3{margin:0;font-size:15px}.safety-head span,small{font-size:11px;color:var(--text-faint)}.scope-actions{display:flex;gap:8px}.scope-actions button,.review-notice button{font-size:12px;padding:6px 9px}.review-notice{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px;border-radius:7px;background:rgba(251,191,36,.08);color:var(--amber);font-size:12px}.advanced-files summary,.file-groups summary{cursor:pointer;padding:7px 0;font-size:12px}.advanced-files>input{width:100%;margin:8px 0}.file-groups{max-height:320px;overflow:auto}.scope-file{padding:9px 5px;border-top:1px solid var(--border)}.scope-file label{display:flex;align-items:center;gap:8px;font-size:12px}.scope-file code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.scope-file p,.candidate-result p{margin:5px 0;font-size:11px;color:var(--text-faint);line-height:1.6}.scope-file p{margin-left:24px}.scope-file button{margin-left:24px;font-size:11px}.candidate-result{border-top:1px solid var(--border);padding-top:12px;display:grid;gap:8px}.candidate-result .passed,.candidate-result .ready{color:var(--green)}.candidate-result .failed,.blocked,.sensitive{color:var(--red)}.candidate-result .stale,.review,.baseline-note{color:var(--amber)}.finding{padding:8px;border:1px solid var(--border);border-radius:6px;font-size:11px;overflow-wrap:anywhere}.check-result summary{display:flex;justify-content:space-between;gap:10px;font-size:12px;cursor:pointer;padding:7px;background:var(--bg);border-radius:6px}.check-result pre{max-height:200px;overflow:auto;font-size:11px;background:var(--bg);padding:9px;white-space:pre-wrap;overflow-wrap:anywhere}
 .release-safety { border: 0; border-radius: 0; padding: 0; gap: 16px; }
 .file-groups { max-height: 224px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); scrollbar-gutter: stable; overscroll-behavior: contain; }
 .scope-file { padding: 6px 9px; }
@@ -180,7 +193,7 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
 .scope-file .file-name { min-height: 24px; }
 .candidate-result { border: 0; padding: 12px 0 0; margin: 0; gap: 4px; }
 .candidate-result > p { margin: 2px 0; }
-.file-name:focus-visible,.scope-actions button:focus-visible,.category-counts button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.file-name:focus-visible,.scope-actions button:focus-visible,.category-counts button:focus-visible,.file-groups:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (pointer: coarse) { .scope-file .file-name,.scope-actions button,.category-counts button { min-height: 44px; } }
 .review-row select { width: 210px; max-width: 100%; }
 .ignore-confirm button:focus-visible,.review-row select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

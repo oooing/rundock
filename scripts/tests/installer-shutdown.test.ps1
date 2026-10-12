@@ -23,12 +23,7 @@ function Start-Backend([string]$Directory, [switch]$Legacy) {
     return $p
 }
 try {
-    @'
-package main
-import("flag";"net";"net/http";"os";"time")
-func main(){ready:=flag.String("ready","","ready file");legacy:=flag.Bool("legacy",false,"");flag.Parse();done:=make(chan bool,1);mux:=http.NewServeMux();mux.HandleFunc("/api/health",func(w http.ResponseWriter,r *http.Request){w.Header().Set("Content-Type","application/json");w.Write([]byte(`{"status":"ok"}`))});mux.HandleFunc("/api/desktop/shutdown",func(w http.ResponseWriter,r *http.Request){if *legacy {http.NotFound(w,r);return};w.Header().Set("Content-Type","application/json");w.Write([]byte(`{"shuttingDown":true}`));os.WriteFile(*ready+".graceful",[]byte("ok"),0600);done<-true});ln,_:=net.Listen("tcp","127.0.0.1:0");os.WriteFile(*ready,[]byte(ln.Addr().String()),0600);go http.Serve(ln,mux);<-done;time.Sleep(200*time.Millisecond)}
-'@ | Set-Content -LiteralPath (Join-Path $runRoot 'backend.go') -Encoding utf8
-    & $Go build -o (Join-Path $installed 'launcher-sidecar.exe') (Join-Path $runRoot 'backend.go')
+    & $Go -C (Join-Path $repo 'sidecar') build -o (Join-Path $installed 'launcher-sidecar.exe') (Join-Path $PSScriptRoot 'fixtures/installer-owner.go')
     Check ($LASTEXITCODE -eq 0) 'Could not build test backend'
     Copy-Item -LiteralPath (Join-Path $installed 'launcher-sidecar.exe') -Destination $other
     Copy-Item -LiteralPath (Join-Path $installed 'launcher-sidecar.exe') -Destination (Join-Path $installed 'launcher-platform.exe')
@@ -42,6 +37,9 @@ func main(){ready:=flag.String("ready","","ready file");legacy:=flag.Bool("legac
     $main = Start-Process -FilePath (Join-Path $installed 'launcher-platform.exe') -ArgumentList ('-ready "' + (Join-Path $installed 'main-ready') + '"') -WindowStyle Hidden -PassThru
     $processes += $main
     $hook = Join-Path $repo 'src-tauri/windows/installer-hooks.nsh'
+    $helper = Join-Path $repo 'src-tauri/binaries/rundock-install-helper-x86_64-pc-windows-msvc.exe'
+    & $Go -C (Join-Path $repo 'sidecar') build -trimpath -ldflags '-H=windowsgui' -o $helper ./cmd/rundock-install-helper
+    Check ($LASTEXITCODE -eq 0) 'Could not build installer helper'
     $setup = Join-Path $runRoot 'setup.exe'
     @"
 Unicode true
@@ -57,7 +55,9 @@ Section
 !insertmacro NSIS_HOOK_PREINSTALL
 SetOutPath `$INSTDIR
 File /oname=launcher-sidecar.exe "$other\launcher-sidecar.exe"
+File /oname=launcher-platform.exe "$other\launcher-sidecar.exe"
 WriteUninstaller "`$INSTDIR\test-uninstall.exe"
+!insertmacro NSIS_HOOK_POSTINSTALL
 SectionEnd
 Section "Uninstall"
 !insertmacro NSIS_HOOK_PREUNINSTALL
@@ -67,18 +67,32 @@ SectionEnd
     & $MakeNSIS /V2 /INPUTCHARSET UTF8 (Join-Path $runRoot 'test.nsi')
     Check ($LASTEXITCODE -eq 0) 'NSIS hook compilation failed'
     Run-Hidden $setup '/S'
-    Check ($target.WaitForExit(10000)) 'Install did not stop its backend'
-    Check ($main.WaitForExit(10000)) 'Install did not stop its main window process'
-    Check (Test-Path -LiteralPath (Join-Path $installed 'ready.graceful')) 'Modern backend did not receive graceful shutdown'
+    Check (-not $target.HasExited) 'Install stopped its backend'
+    Check (-not $main.HasExited) 'Install stopped its main window process'
+    Check (-not (Test-Path -LiteralPath (Join-Path $installed 'ready.graceful'))) 'Install requested project shutdown'
+    $projectReady = Join-Path $installed 'ready.project'
+    $projectPort = (Get-Content -LiteralPath $projectReady -Raw).Trim()
+    $projectPID = [int](Get-Content -LiteralPath (Join-Path $installed 'ready.project.pid') -Raw)
+    Check ((Invoke-RestMethod -Uri "http://$projectPort/api/health" -Proxy $null -TimeoutSec 3).status -eq 'ok') 'Managed project stopped during install'
+    Check ($null -ne (Get-Process -Id $projectPID -ErrorAction SilentlyContinue)) 'Managed project PID changed'
+    Check (Test-Path -LiteralPath (Join-Path $installed 'launcher-sidecar.exe')) 'New backend was not installed'
+    Check (Test-Path -LiteralPath (Join-Path $installed 'launcher-platform.exe')) 'New main program was not installed'
     Check (-not $unrelated.HasExited) 'Another installation was stopped'
     Check ((Get-FileHash -LiteralPath $config).Hash -eq $before) 'Project data changed'
-    Write-Output 'PASS: NSIS installation replaces a running backend; other installation and data remain intact.'
+    Write-Output 'PASS: NSIS installs new files while keeping the shell, backend, Job-owned project PID, other installation and data intact.'
 
-    Remove-Item -LiteralPath (Join-Path $installed 'ready.graceful')
+    # Reinstall the same version while earlier loaded backups are still alive.
+    Run-Hidden $setup '/S'
+    Check (-not $target.HasExited -and -not $main.HasExited) 'Reinstall stopped existing processes'
+    Check ((Invoke-RestMethod -Uri "http://$projectPort/api/health" -Proxy $null -TimeoutSec 3).status -eq 'ok') 'Reinstall stopped its managed project'
+    Write-Output 'PASS: repeated in-place installation also preserves live projects.'
+
+    # Uninstallation still explicitly removes the app and its owned processes.
     $legacy = Start-Backend $installed -Legacy
     $processes += $legacy
     Run-Hidden (Join-Path $installed 'test-uninstall.exe') ('/S _?=' + $installed)
     Check ($legacy.WaitForExit(10000)) 'Uninstall did not stop legacy backend'
+    Check ($target.WaitForExit(10000) -and $main.WaitForExit(10000)) 'Uninstall did not stop staged old programs'
     Check (-not (Test-Path -LiteralPath (Join-Path $installed 'launcher-sidecar.exe'))) 'Uninstall did not release/remove the executable'
     Check (-not $unrelated.HasExited) 'Uninstall stopped another installation'
     Check ((Get-FileHash -LiteralPath $config).Hash -eq $before) 'Uninstall changed project data'

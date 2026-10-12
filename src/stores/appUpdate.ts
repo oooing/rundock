@@ -4,9 +4,10 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 export type AppUpdateInfo = { version: string; notes: string; url: string; size: number }
 // Kept outside the settings dialog so closing it does not lose a download.
 export const appUpdate = reactive({
-  phase: 'idle' as 'idle' | 'checking' | 'available' | 'current' | 'downloading' | 'ready' | 'installing',
+  phase: 'idle' as 'idle' | 'checking' | 'available' | 'current' | 'downloading' | 'ready' | 'installing' | 'installed',
   info: null as AppUpdateInfo | null,
   downloaded: 0, total: 0, error: '',
+  requiresRestart: false,
   dialogOpen: false,
 })
 export function openAppUpdate() {
@@ -28,7 +29,7 @@ export async function prepareStartupUpdate() {
 export async function checkAppUpdate() {
   if (['checking', 'downloading', 'installing'].includes(appUpdate.phase)) return
   // A native check clears the verified installer. Keep it ready for installation.
-  if (appUpdate.phase === 'ready') { openAppUpdate(); return }
+  if (appUpdate.phase === 'ready' || appUpdate.phase === 'installed') { openAppUpdate(); return }
   const previous = appUpdate.phase
   appUpdate.phase = 'checking'; appUpdate.error = ''
   try {
@@ -48,6 +49,10 @@ export async function downloadAppUpdate() {
 export async function installAppUpdate() {
   if (appUpdate.phase !== 'ready') return
   appUpdate.phase = 'installing'; appUpdate.error = ''
-  try { await invoke('install_app_update') }
+  try {
+    const result = await invoke<{requiresRestart:boolean}>('install_app_update')
+    appUpdate.requiresRestart = result?.requiresRestart ?? false
+    appUpdate.phase = 'installed'
+  }
   catch (error) { appUpdate.error = String(error); appUpdate.phase = 'ready' }
 }

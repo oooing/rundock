@@ -15,7 +15,7 @@ test('current Tauri bundler compiles bilingual hooks and supports the updater ha
   mkdirSync(path.join(root, '.tmp'), { recursive: true })
   const stage = mkdtempSync(path.join(root, '.tmp/installer-bundle-'))
   const native = path.join(stage, 'src-tauri')
-  for (const folder of ['src', 'windows', 'target/release']) mkdirSync(path.join(native, folder), { recursive: true })
+  for (const folder of ['src', 'windows', 'binaries', 'target/release']) mkdirSync(path.join(native, folder), { recursive: true })
   mkdirSync(path.join(stage, 'dist'))
   writeFileSync(path.join(stage, 'dist/index.html'), '<!doctype html><title>Installer compile-only test</title>')
   writeFileSync(path.join(stage, 'package.json'), '{"name":"rundock-installer-test","version":"0.0.0"}')
@@ -28,15 +28,16 @@ test('current Tauri bundler compiles bilingual hooks and supports the updater ha
   const fixtureConfig = {
     productName: 'RunDock Installer Test', version: '0.0.0', identifier: 'com.rundock.installer-test',
     build: { frontendDist: '../dist' }, app: { windows: [] },
-    bundle: { active: true, targets: ['nsis'], icon: [path.join(root, 'src-tauri/icons/icon.ico')],
-      windows: { nsis: config.bundle.windows.nsis, webviewInstallMode: { type: 'skip' } } },
+    bundle: { active: true, targets: ['nsis','msi'], icon: [path.join(root, 'src-tauri/icons/icon.ico')],
+      windows: { nsis: config.bundle.windows.nsis, wix: {...config.bundle.windows.wix,upgradeCode:'d1ba12c9-bdaa-44e4-ae12-9f923e33b5dd'}, webviewInstallMode: { type: 'skip' } } },
   }
   writeFileSync(path.join(native, 'tauri.conf.json'), JSON.stringify(fixtureConfig))
-  for (const file of ['installer.nsi', 'installer-hooks.nsh', 'stop-installed-app.ps1']) {
+  for (const file of ['installer.nsi', 'installer-hooks.nsh', 'stop-installed-app.ps1','live-install.wxs']) {
     copyFileSync(path.join(root, 'src-tauri/windows', file), path.join(native, 'windows', file))
   }
+  copyFileSync(path.join(root,'src-tauri/binaries/rundock-install-helper-x86_64-pc-windows-msvc.exe'),path.join(native,'binaries/rundock-install-helper-x86_64-pc-windows-msvc.exe'))
   execFileSync('rustc', [main, '-o', path.join(native, 'target/release/rundock-installer-test.exe')], { windowsHide: true })
-  execFileSync(process.execPath, [path.join(root, 'node_modules/@tauri-apps/cli/tauri.js'), 'bundle', '--bundles', 'nsis', '--ci'], {
+  execFileSync(process.execPath, [path.join(root, 'node_modules/@tauri-apps/cli/tauri.js'), 'bundle', '--bundles', 'nsis,msi', '--ci'], {
     cwd: stage, windowsHide: true, timeout: 110000, stdio: 'pipe',
   })
   const template = readFileSync(path.join(native, 'target/release/nsis/x64/installer.nsi'), 'utf8')

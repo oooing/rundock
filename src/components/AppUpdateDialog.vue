@@ -51,8 +51,9 @@ onUnmounted(() => {
           <progress :value="update.downloaded" :max="update.total || 1" :aria-label="tr('下载进度')"></progress>
         </div>
         <p v-else-if="update.phase === 'ready'" class="ready" role="status">{{ tr('下载完成，安装包已校验') }}</p>
-        <p v-else-if="installing" role="status">{{ tr('正在停止项目并打开安装程序…') }}</p>
-        <p class="install-note">{{ tr('安装时将停止托管项目并退出 RunDock；仅监测的项目继续运行，项目和分组配置会保留。') }}</p>
+        <p v-else-if="installing" role="status">{{ tr('正在安装，项目继续运行…') }}</p>
+        <p v-else-if="update.phase === 'installed'" class="ready" role="status">{{ update.requiresRestart ? tr('安装完成，需重启电脑才能启用新版。项目继续运行。') : tr('安装完成，项目继续运行。') }}</p>
+        <p class="install-note">{{ tr('安装时软件和项目继续运行；停止项目并退出后，下次启动使用新版。') }}</p>
         <div v-if="update.error" class="error" role="alert">
           {{ update.error }}
           <button class="link" @click="openReleases">{{ tr('查看版本下载页') }} ↗</button>
@@ -60,10 +61,10 @@ onUnmounted(() => {
         </div>
       </div>
       <footer>
-        <button :disabled="installing" @click="dismissAppUpdate">{{ tr('稍后') }}</button>
-        <button v-if="update.phase === 'ready'" class="primary" @click="installAppUpdate">{{ tr('退出并安装') }}</button>
+        <button :disabled="installing" @click="dismissAppUpdate">{{ update.phase === 'installed' ? tr('完成') : tr('稍后') }}</button>
+        <button v-if="update.phase === 'ready'" class="primary" @click="installAppUpdate">{{ tr('立即安装') }}</button>
         <button v-else-if="update.phase === 'available'" class="primary" @click="downloadAppUpdate">{{ update.error ? tr('重试下载') : tr('下载更新') }}</button>
-        <button v-else class="primary" disabled>{{ installing ? tr('正在安装…') : tr('正在下载…') }}</button>
+        <button v-else-if="update.phase !== 'installed'" class="primary" disabled>{{ installing ? tr('正在安装…') : tr('正在下载…') }}</button>
       </footer>
     </section>
   </div>

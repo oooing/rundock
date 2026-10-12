@@ -676,7 +676,10 @@ Section Install
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+; RUNDOCK BEGIN preserve-running-install
+  ; The preinstall helper stages loaded files without closing any process.
+  ; Do not invoke the stock taskkill/check macro during installation.
+; RUNDOCK END preserve-running-install
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"

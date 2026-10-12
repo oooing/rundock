@@ -9,6 +9,7 @@ param(
     [string]$SourceCommit
 )
 
+# Keep this script UTF-8 with BOM: Windows PowerShell 5.1 parses -File as ANSI otherwise.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -171,6 +172,9 @@ if (-not $SkipTests) {
 
 $temporarySidecar = Join-Path $temporaryRoot ("launcher-sidecar-{0}.exe" -f [Guid]::NewGuid().ToString('N'))
 $tauriBinary = Join-Path $codeDirectory 'src-tauri/binaries/launcher-sidecar-x86_64-pc-windows-msvc.exe'
+$installHelper = Join-Path $codeDirectory 'src-tauri/binaries/rundock-install-helper-x86_64-pc-windows-msvc.exe'
+$helperExisted = Test-Path -LiteralPath $installHelper -PathType Leaf
+$helperBytes = if ($helperExisted) { [IO.File]::ReadAllBytes($installHelper) } else { $null }
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $tauriBinary) | Out-Null
 $cargoPath = Join-Path $codeDirectory 'src-tauri/Cargo.toml'
 $cargoBytes = [IO.File]::ReadAllBytes($cargoPath)
@@ -230,6 +234,8 @@ try {
     }
 
     Copy-Item -LiteralPath $temporarySidecar -Destination $tauriBinary -Force
+    Write-Host '[release] 编译保留项目运行的安装辅助程序'
+    Invoke-Checked $go @('build', '-trimpath', '-ldflags', '-H=windowsgui', '-o', $installHelper, './cmd/rundock-install-helper') (Join-Path $codeDirectory 'sidecar')
 
     # 只清理本次 Tauri bundle 输出目录，避免误把旧版本安装包上传到新 Release。
     foreach ($bundleName in @('nsis', 'msi')) {
@@ -304,6 +310,11 @@ try {
     try {
         Restore-BuildInputs $cargoPath $cargoBytes $tauriBinary $binaryBytes $binaryExisted
     } finally {
+        if ($helperExisted) {
+            [IO.File]::WriteAllBytes($installHelper, $helperBytes)
+        } elseif (Test-Path -LiteralPath $installHelper -PathType Leaf) {
+            Remove-Item -LiteralPath $installHelper -Force
+        }
         if (Test-Path -LiteralPath $temporarySidecar) {
             Remove-Item -LiteralPath $temporarySidecar -Force
         }

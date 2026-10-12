@@ -113,6 +113,27 @@ test('local build validation reads BOM-less UTF-8 JSON and emits readable Chines
   assert.equal(checked('git', ['tag', '--list'], dir), '')
 })
 
+test('Windows PowerShell 5.1 parses the actual build script and validates Chinese UTF-8 inputs', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const windowsPowerShell = path.join(process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+  for (const mismatch of [false, true]) {
+    const dir = versionFixture(`build-windows-ps51-${mismatch}`, '2.0.27', mismatch ? { 'package.json': '2.0.26' } : {})
+    const result = exec(windowsPowerShell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(dir, 'scripts/release-build.ps1'), '-TagName', 'v2.0.27', '-ValidateOnly'], dir)
+    if (mismatch) {
+      assert.notEqual(result.status, 0, result.output)
+      assert.match(result.output, /版本不一致/)
+    } else {
+      assert.equal(result.status, 0, result.output)
+      assert.match(result.output, /版本校验通过：v2\.0\.27/)
+    }
+    assert.doesNotMatch(result.output, /ParserError|TerminatorExpectedAtEndOfString|\uFFFD/)
+    assert.equal(existsSync(path.join(dir, '.tmp')), false)
+    assert.equal(checked('git', ['tag', '--list'], dir), '')
+  }
+})
+
 test('local build validation still rejects invalid JSON and version mismatches', () => {
   for (const invalidJson of [false, true]) {
     const dir = versionFixture(`build-invalid-${invalidJson}`, '2.0.27', { 'package.json': '2.0.26' })

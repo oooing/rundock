@@ -4,10 +4,11 @@ import { tr } from '@/i18n'
 import { cloudFailureText, localFailureText } from '@/utils/buildFailure'
 import { releaseTargetLabel } from '@/utils/releasePresentation'
 import { artifactSizeSummary, formatArtifactSize, targetProgress, progressLabels } from '@/utils/releaseProgress'
-import type { AppView } from '@/types'
+import type { AppView, ReleaseRun } from '@/types'
 import { useReleaseModel } from './release/useReleaseModel'
 import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
 import ReleaseSafetyPanel from './ReleaseSafetyPanel.vue'
+import ReleaseFormSection from './ReleaseFormSection.vue'
 import ReleaseSafetySettings from './ReleaseSafetySettings.vue'
 import CopyErrorButton from './CopyErrorButton.vue'
 import ReleaseSyncChoice from './ReleaseSyncChoice.vue'
@@ -76,7 +77,7 @@ const {
   saveReleaseConfig, switchReleaseTab, chooseReleaseTarget, onReleaseTabKeydown, onConfigFileSaved,
   newId, addVersionGroup, removeVersionGroup, addVersionFile, addTarget,
   setRunnerOS, setArtifacts, submitRelease, publish, prepareLocalCommit,
-  releaseErrorMessage, showRun, historyStatus, schedulePoll, poll,
+  releaseErrorMessage, showRun, leaveRunView, historyStatus, schedulePoll, poll,
   retry, confirmSensitiveAction, startNew,
 } = useReleaseModel(props, emit)
 const advancedSettings = ref<HTMLDetailsElement | null>(null)
@@ -87,7 +88,7 @@ async function openAdvancedSettings() {
   advancedSettings.value?.scrollIntoView({ block: 'nearest' })
 }
 const localBuildMounted = ref(false)
-const localBuildVisible = computed(() => !activeRun.value && localBuildOnly.value)
+const localBuildVisible = computed(() => profileReady.value && !loading.value && !activeRun.value && localBuildOnly.value)
 // Keep the task controller alive when hiding the module or visiting Settings.
 // Task creation/cancellation remains an explicit action, never a mode-change effect.
 watch(localBuildVisible, visible => { if (visible) localBuildMounted.value = true }, { immediate: true })
@@ -106,19 +107,60 @@ const publishActionLabel = computed(() => {
     ? tr('云端构建并发布 {0} 个版本', [plannedVersions.value.length]) : tr('云端构建并发布 {0}', [plannedTagNames.value[0] || ''])
 })
 function closePanel() { if (localBuildVisible.value && !preflight.value) emit('close'); else void closeModal() }
+const historyOpen = ref(false)
+const historyTitle = ref<HTMLHeadingElement | null>(null)
+const historyButton = ref<HTMLButtonElement | null>(null)
+let draftScroll = 0, historyScroll = 0, draftError = ''
+async function openHistory() {
+  if (publishing.value || autoSubmitting.value || checkingCandidate.value || ignoringFile.value || activeRun.value) return
+  draftScroll = bodyRef.value?.scrollTop || 0
+  draftError = error.value
+  historyScroll = 0
+  historyOpen.value = true
+  await nextTick()
+  bodyRef.value?.scrollTo({top: 0})
+  historyTitle.value?.focus({preventScroll: true})
+}
+async function openHistoryRun(run: ReleaseRun) {
+  historyScroll = bodyRef.value?.scrollTop || 0
+  showRun(run)
+  await nextTick()
+  bodyRef.value?.querySelector<HTMLElement>('.progress-block')?.focus({preventScroll: true})
+}
+async function returnToHistory() {
+  if (retrying.value || publishing.value || autoSubmitting.value) return
+  leaveRunView()
+  error.value = draftError
+  await nextTick()
+  // The existing run watcher resets scrolling after the DOM update; restore after it.
+  await nextTick()
+  bodyRef.value?.scrollTo({top: historyScroll})
+  historyTitle.value?.focus({preventScroll: true})
+}
+async function returnToRelease() {
+  if (retrying.value || publishing.value || autoSubmitting.value) return
+  if (activeRun.value) leaveRunView()
+  error.value = draftError
+  historyOpen.value = false
+  await nextTick()
+  await nextTick()
+  bodyRef.value?.scrollTo({top: draftScroll})
+  historyButton.value?.focus({preventScroll: true})
+}
 </script>
 
 <template>
   <div class="overlay" @click.self="closePanel">
     <div class="modal">
-      <header class="m-head">
-        <h2>{{ tr("发布") }} {{ app.name }}</h2>
+      <header class="m-head" :class="{'history-navigation':historyOpen}">
+        <button v-if="historyOpen" type="button" class="ghost history-back" :disabled="retrying || publishing || autoSubmitting" @click="activeRun ? returnToHistory() : returnToRelease()"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="m15 5-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg><span>{{activeRun?tr('返回历史'):tr('返回发布')}}</span></button>
+        <h2 ref="historyTitle" :id="historyOpen ? 'release-history-title' : undefined" :tabindex="historyOpen ? -1 : undefined"><template v-if="historyOpen">{{activeRun?tr('发布记录'):tr('发布历史')}}</template><template v-else>{{ tr('发布') }} {{app.name}}</template></h2>
         <button class="ghost icon" :disabled="!localBuildVisible && (publishing || preferenceStatus === 'saving')" :aria-label="tr('关闭')" @click="closePanel">✕</button>
       </header>
 
-      <nav class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="onReleaseTabKeydown">
-        <button id="release-tab-publish" type="button" role="tab" aria-controls="release-panel-publish" :aria-selected="panelTab === 'publish'" :tabindex="panelTab === 'publish' ? 0 : -1" :disabled="publishing || autoSubmitting" @click="switchReleaseTab('publish')">{{ tr('发布') }}</button>
-        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="panelTab === 'settings'" :tabindex="panelTab === 'settings' ? 0 : -1" :disabled="publishing || autoSubmitting || !!activeRun" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
+      <nav v-show="!historyOpen" class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="!historyOpen && onReleaseTabKeydown($event)">
+        <button id="release-tab-publish" type="button" role="tab" :aria-controls="historyOpen && !activeRun ? 'release-panel-history' : 'release-panel-publish'" :aria-selected="panelTab === 'publish'" :tabindex="panelTab === 'publish' ? 0 : -1" :disabled="loading || !profileReady || publishing || autoSubmitting || retrying" @click="historyOpen ? returnToRelease() : switchReleaseTab('publish')">{{ tr('发布') }}</button>
+        <button id="release-tab-settings" type="button" role="tab" :aria-label="tr('设置')" aria-controls="release-panel-settings" :aria-selected="panelTab === 'settings'" :tabindex="panelTab === 'settings' ? 0 : -1" :disabled="loading || !profileReady || publishing || autoSubmitting || !!activeRun || historyOpen" @click="switchReleaseTab('settings')">{{ tr('设置') }}<span v-if="configFileDirty || configEditorOpen" class="unsaved-dot" :aria-label="tr('有未保存的修改')"></span></button>
       </nav>
 
       <ReleaseProgressOverview v-if="activeRun" :run="activeRun" :targets="runTargets" :deliveries="runDeliveries" :definitions="configuredTargets" :artifacts="runArtifacts" :cloud-handoff="automationHandedOff" :cloud-build="cloudBuild" :can-retry-upload="retryable && retryUpload" :retrying="retrying" :retry-disabled="!retryMetadataLoaded" @retry="retry()">
@@ -126,15 +168,20 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
       </ReleaseProgressOverview>
 
       <div ref="bodyRef" class="m-body" :inert="publishing || autoSubmitting">
-        <div v-if="loading" class="state">{{ tr("正在读取发布配置…") }}</div>
+        <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
+        <div v-if="loading && !activeRun" class="release-loading" role="status" aria-live="polite" aria-busy="true">
+          <progress class="release-loading-spinner" :aria-label="tr('正在准备发布…')"></progress>
+          <strong>{{ tr('正在准备发布…') }}</strong>
+          <span>{{ tr('正在读取设置、版本和文件，完成后即可操作。') }}</span>
+        </div>
         <div v-if="error && !localBuildVisible" class="alert error" role="alert">{{ error }}</div>
+        <div v-if="!loading && !profileReady && !activeRun" class="release-load-error"><button type="button" @click="load">{{ tr('重新加载') }}</button></div>
         <div v-if="preferenceStatus === 'error'" class="alert error" role="alert">{{ tr('设置保存失败，请重试。') }} {{ preferenceError }} <button type="button" @click="saveRememberedPreferences">{{ tr('重试保存') }}</button></div>
         <div v-if="versionPlanNotice && releaseIntent === 'formal' && !localBuildVisible" class="alert warn" role="status">{{ versionPlanNotice }}</div>
         <div v-if="preflightStale" class="alert warn">{{ tr("配置或 Git 已变化，请重新检查。") }}<button :disabled="savingProfile" @click="saveAndRecheck">{{ tr("重新检查") }}</button></div>
-        <div v-if="isActive" class="alert warn">{{ tr("项目正在运行；发布不会自动停止或重启。") }}</div>
 
         <template v-if="activeRun">
-          <section id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="progress-block" tabindex="0">
+          <section id="release-panel-publish" :role="historyOpen ? 'region' : 'tabpanel'" :aria-labelledby="historyOpen ? 'release-history-title' : 'release-tab-publish'" class="progress-block" tabindex="0">
             <section v-if="activeRun.status === 'succeeded'" class="completion-banner" :class="{ pending: automationHandedOff && !cloudBuildSettled, failed: cloudBuild?.state === 'failed' }" role="status" aria-live="polite">
               <p>{{ completionDescription }}</p>
               <CopyErrorButton v-if="cloudBuild?.state === 'failed'" :text="cloudFailureText(cloudBuild)" />
@@ -156,14 +203,16 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             <details v-if="runFailureDetails" class="execution-details"><summary>{{ tr('查看技术详情') }}</summary><pre class="log-box">{{ runFailureDetails }}</pre></details>
             <div v-if="retryable && !customRetryConfirmation" class="alert info" role="note">{{ retryGuidance }}</div>
             <div v-if="activeRun.commitSha" class="kv"><span>{{ tr("代码提交") }}</span><code>{{ activeRun.commitSha }}</code></div>
-            <div v-if="activeRun.status !== 'queued' && activeRun.status !== 'running' && (retryable || uploadPaused || activeRun.status === 'failed')" class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'failed'" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
+            <div v-if="activeRun.status !== 'queued' && activeRun.status !== 'running' && (retryable || uploadPaused || activeRun.status === 'failed')" class="button-row"><button v-if="retryable" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button><button v-if="uploadPaused" :disabled="retrying" @click="emit('close')">{{ tr('稍后再上传') }}</button><button v-if="activeRun.status === 'failed' && !historyOpen" :disabled="retrying" @click="startNew">{{ tr("返回发布检查") }}</button></div>
             <p v-if="uploadPaused" class="muted">{{ tr('关闭后会保留本次记录，可在“最近发布”中打开记录继续上传。') }}</p>
           </section>
         </template>
 
-        <section v-else-if="!loading" v-show="releaseTab === 'publish'" id="release-panel-publish" role="tabpanel" aria-labelledby="release-tab-publish" class="release-panel" tabindex="0">
+        <section v-if="!loading && profileReady" v-show="releaseTab === 'publish' && !historyOpen && !activeRun" :id="activeRun ? undefined : 'release-panel-publish'" role="tabpanel" aria-labelledby="release-tab-publish" class="release-panel" tabindex="0">
+          <ReleaseFormSection section-id="method" :title="releaseIntent === 'formal' ? tr('操作与发布方式') : tr('操作与保存位置')">
+          <template #actions><ReleasePreferenceStatus :status="preferenceStatus" /></template>
           <fieldset class="publish-purpose" :disabled="checkingCandidate || publishing || autoSubmitting">
-            <legend>{{ tr('本次目的') }}<ReleasePreferenceStatus :status="preferenceStatus" /></legend>
+            <legend>{{ tr('本次目的') }}</legend>
             <div class="intent-choice purpose-options">
               <label :class="{ chosen: releaseIntent === 'formal' }"><input type="radio" name="release-intent" value="formal" :checked="releaseIntent === 'formal'" @change="changeReleaseIntent('formal')" /><span>{{ tr('发布版本') }}</span></label>
               <label :class="{ chosen: releaseIntent === 'save-progress' }"><input type="radio" name="release-intent" value="save-progress" :checked="releaseIntent === 'save-progress'" @change="changeReleaseIntent('save-progress')" /><span>{{ tr('仅提交代码') }}</span></label>
@@ -173,10 +222,10 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
           <ReleaseBuildChoice v-if="releaseIntent === 'formal'" :plan="buildPlan" :disabled="checkingCandidate || publishing || autoSubmitting" @select="changeBuildPlan" />
           <ReleaseSyncChoice v-else code-only :policy="syncPolicy" :notice="syncNotice" :missing="syncNeedsSetup" :disabled="checkingCandidate || publishing || autoSubmitting" @change="changeSyncPolicy" @settings="switchReleaseTab('settings', true)" />
           <div v-if="releaseIntent === 'formal' && syncNeedsSetup" class="alert warn" role="alert">{{ syncNotice }} <button type="button" @click="switchReleaseTab('settings', true)">{{ tr('前往设置') }}</button></div>
+          <p v-if="releaseIntent==='save-progress' && pushRemote" class="section-help">{{tr('上传可能触发仓库已有 CI。')}}</p>
+          </ReleaseFormSection>
           <LocalBuildPanel v-if="localBuildMounted" v-show="localBuildVisible" embedded :app-id="app.id" :app-name="app.name" @preferences="rememberPreferences" @settings="switchReleaseTab('settings', true)" />
           <template v-if="!localBuildVisible && (preflight || releaseConfig)">
-          <p v-if="releaseIntent==='save-progress' && pushRemote" class="section-help">{{tr('上传可能触发仓库已有 CI。')}}</p>
-          <label v-if="releaseIntent==='save-progress'" class="full-label">{{tr('提交说明')}}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
           <div v-if="configFileDirty || configEditorOpen" class="alert warn settings-edit-hint">{{ tr('高级配置尚未保存，请在对应区域保存或取消修改。') }}<button type="button" @click="switchReleaseTab('settings', true)">{{ tr('前往设置') }}</button></div>
           <section v-if="blockingIssues.length" class="issues">
             <div v-for="issue in blockingIssues" :key="issue.code" class="alert" :class="issue.code === 'staged_changes' ? 'warn staged-issue' : 'error'">
@@ -191,8 +240,8 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
           <div v-if="unstageNotice" class="alert info" role="status">{{ unstageNotice }}</div>
           <div v-if="remoteMissing" class="alert warn">{{ tr('未检测到 GitHub 远端，请在设置中配置，或选择本机操作。') }}</div>
 
-          <section v-if="releaseIntent==='formal'" ref="platformSectionRef" class="platform-section" tabindex="-1" :aria-label="tr('选择构建端')">
-            <div class="section-head basic-section-head"><h3>{{ tr("选择构建端") }}</h3></div>
+          <ReleaseFormSection v-if="releaseIntent==='formal'" section-id="version" :title="tr('平台与版本')">
+          <section ref="platformSectionRef" class="platform-section" tabindex="-1" :aria-label="tr('选择构建端')">
             <div class="platform-grid">
               <article v-for="platform in visibleProductPlatforms" :key="platform.id" class="platform-card version-platform-card" :aria-label="releaseTargetLabel(platform.name)"
                 :class="{ selected: !gitOnly && platformSelected(platform), partial: !gitOnly && platformPartiallySelected(platform), unavailable: !!platformUnavailableReason(platform) }">
@@ -213,15 +262,15 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             </div>
           </section>
 
-          <template v-if="preflight">
-          <section v-if="releaseIntent==='formal' && !targetSelectionMissing" class="block release-versions" :aria-label="tr('发布版本')">
-            <div class="tag-switch-row"><h3>{{ tr('发布版本') }}</h3>
-              <div v-if="createTag" class="choice-picker version-mode-picker" role="radiogroup" :aria-label="tr('版本规则')">
+          <section v-if="preflight" class="block release-versions" :aria-label="tr('发布版本')">
+            <div class="tag-switch-row"><h4>{{ tr('发布版本') }}</h4>
+              <div v-if="createTag && !targetSelectionMissing" class="choice-picker version-mode-picker" role="radiogroup" :aria-label="tr('版本规则')">
                 <label class="choice-option" :class="{ selected: versionMode === 'auto' }"><input v-model="versionMode" type="radio" name="release-version-mode" value="auto" @change="onVersionModeChange" /><span><strong>{{ tr('自动递增') }}</strong></span></label>
                 <label class="choice-option" :class="{ selected: versionMode === 'manual' }"><input v-model="versionMode" type="radio" name="release-version-mode" value="manual" @change="onVersionModeChange" /><span><strong>{{ tr('手动设置') }}</strong></span></label>
               </div>
             </div>
-            <template v-if="createTag">
+            <p v-if="targetSelectionMissing" class="section-help">{{ tr('先选择平台，再确认对应的版本。') }}</p>
+            <template v-else-if="createTag">
               <div class="release-version-list">
                 <ReleaseVersionChange v-for="version in plannedVersions" :key="version.versionGroupId" compact :current="version.currentVersion" :target="version.targetVersion" :label="version.versionGroupName" :upgrading="true" :editable="versionMode === 'manual'" @change="onVersionInput(version.versionGroupId, $event)" />
               </div>
@@ -229,12 +278,16 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             </template>
             <p v-else class="section-help">{{ tr('不创建版本 Tag') }}</p>
           </section>
+          <div v-else class="state">{{ tr('正在读取版本…') }}</div>
+          </ReleaseFormSection>
 
-          <ReleaseSafetyPanel v-model:checks-enabled="checksEnabled" :locked="autoSubmitting || publishing || ignoringFile" :ignore-file="ignoreSafetyFile" :app-id="app.id" :intent="releaseIntent" :cloud-build="releaseIntent==='formal' && buildMode==='github'" :files="safetyFiles" :selected="selected" :decisions="manualDecisions" :candidate="candidate" :busy="checkingCandidate" :stale="reviewStale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @choose="chooseSafetyFile" @recommend="adoptRecommended" @cancel="cancelCandidate" @refresh="refreshSafety" @check="inspectCandidate" @exception="recordSensitiveException" />
+          <template v-if="preflight">
+          <ReleaseFormSection section-id="confirmation" :title="releaseIntent === 'formal' ? tr('文件与发布确认') : tr('文件与提交确认')">
+          <ReleaseSafetyPanel v-model:checks-enabled="checksEnabled" :locked="autoSubmitting || publishing || ignoringFile" :ignore-file="ignoreSafetyFile" :app-id="app.id" :intent="releaseIntent" :cloud-build="releaseIntent==='formal' && buildMode==='github'" :files="safetyFiles" :selected="selected" :decisions="manualDecisions" :candidate="candidate" :busy="checkingCandidate" :stale="reviewStale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @choose="chooseSafetyFile" @recommend="adoptRecommended" @cancel="cancelCandidate" @refresh="refreshSafety" @check="inspectCandidate" @exception="recordSensitiveException">
+          <template #after-files>
           <section v-if="preflight.aheadCount" class="file-picker">
             <details v-if="preflight.aheadCount" class="unpushed-files">
               <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>
-              <div class="unpushed-note">{{ tr("这些文件已经提交，所以不会出现在上面的待提交列表中。") }}</div>
               <div class="file-list committed-list">
                 <div v-for="file in preflight.unpushedChanges" :key="file.path" class="file-row committed-row">
                   <span class="committed-mark">✓</span>
@@ -243,7 +296,12 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
                 </div>
               </div>
             </details>
+            <p class="unpushed-note">{{ tr("这些文件已经提交，所以不会出现在上面的待提交列表中。") }}</p>
           </section>
+          </template>
+          </ReleaseSafetyPanel>
+
+          <label v-if="releaseIntent==='save-progress'" class="full-label">{{tr('提交说明')}}<input v-model="commitMessage" @input="onCommitMessageInput" /></label>
 
           <section v-if="createTag && !targetSelectionMissing" class="release-notes">
             <div class="release-notes-head">
@@ -264,23 +322,22 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
             <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">{{ tr("创建 Tag 前请填写更新说明。") }}</div>
           </section>
 
-          <details class="summary-card">
-            <summary>{{ tr("本次操作") }}</summary>
-            <p class="file-count">{{ tr('已选文件：{0} 个', [selectedPaths.length]) }}</p>
-            <ul><li v-for="line in summaryLines" :key="line">{{ line }}</li></ul>
-            <div v-if="hasOnlineAction" class="alert warn">{{ tr("包含上传或上线，请确认目标环境。") }}</div>
             <div v-if="automationBranchMismatch" class="alert warn">{{ tr('自动发布只接受 {0} 分支，当前为 {1}。', [configuredAutomation?.releaseBranch, preflight.branch]) }}</div>
             <div v-else-if="!createTag && automationTargetRequiresTag" class="alert warn">{{ tr("所选云端构建由 Tag 触发，请开启“创建版本 Tag”。") }}</div>
             <div v-else-if="!pushRemote && selectedNeedsRemotePush" class="alert warn">{{ tr("云端构建必须上传到 GitHub。") }}</div>
             <div v-else-if="invalidChosenTargetIds.length" class="alert warn">{{ tr("请为高级目标选择操作，或改为“仅提交代码”。") }}</div>
             <div v-else-if="targetSelectionMissing" class="alert warn target-selection-hint"><span>{{ tr("请选择构建端；只需保存代码时，选择顶部的“仅提交代码”。") }}</span><button type="button" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button></div>
-          </details>
-          <details v-if="history.length" class="history-panel"><summary>{{ tr('最近发布（{0}）', [history.length]) }}</summary><button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="showRun(run)"><code>{{ run.createTag === false ? tr("无 Tag") : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{ run.branch }}</span><span :class="run.status">{{ historyStatus(run) }} {{ tr("· 查看日志") }}</span></button></details>
+          </ReleaseFormSection>
           </template>
           <div v-else class="state panel-detail-loading">{{ tr("正在读取版本和代码变更…") }}</div>
           </template>
         </section>
-        <section v-if="!activeRun && !loading" v-show="releaseTab === 'settings'" id="release-panel-settings" role="tabpanel" aria-labelledby="release-tab-settings" class="release-panel settings-panel" tabindex="0">
+        <section v-if="historyOpen && !activeRun" id="release-panel-history" class="release-history" role="region" aria-labelledby="release-history-title">
+          <p v-if="history.length" class="muted">{{tr('最近发布（{0}）',[history.length])}}</p>
+          <p v-if="!history.length" class="muted">{{tr('暂无发布记录。')}}</p>
+          <button v-for="run in history" :key="run.id" type="button" class="history-row" :aria-label="tr('查看 {0} 的发布记录', [run.tagName || tr('代码提交')])" @click="openHistoryRun(run)"><code>{{ run.createTag === false ? tr('代码更新') : (run.versions?.map(version => version.tagName).join('、') || run.tagName) }}</code><span>{{run.branch}}</span><span :class="run.status">{{historyStatus(run)}} <span aria-hidden="true">›</span></span></button>
+        </section>
+        <section v-if="!activeRun && !loading && profileReady" v-show="releaseTab === 'settings'" id="release-panel-settings" role="tabpanel" aria-labelledby="release-tab-settings" class="release-panel settings-panel" tabindex="0">
           <div class="settings-intro"><h3>{{ tr('项目发布设置') }}</h3><p>{{ tr('构建方式、发布端和版本在“发布”中选择。') }}</p></div>
           <template v-if="preflight">
           <ReleaseSetupOverview v-if="releaseIntent === 'formal'" :app-id="app.id" :config="releaseConfig" :available="configEndpointAvailable" :disabled="configScanning || configSaving || configEditorOpen || configFileOpen || safetySettingsDirty" @saved="onConfigFileSaved" @advanced="openAdvancedSettings" @busy="configScanning = $event" />
@@ -359,13 +416,14 @@ function closePanel() { if (localBuildVisible.value && !preflight.value) emit('c
         </section>
       </div>
 
-      <footer v-if="!localBuildVisible && !activeRun && !loading && preflight && releaseTab === 'publish'" class="m-foot" :inert="publishing">
+      <footer v-if="!historyOpen && !localBuildVisible && !activeRun && !loading && profileReady && preflight && releaseTab === 'publish'" class="m-foot" :inert="publishing">
+        <button ref="historyButton" type="button" class="history-button footer-action" :disabled="publishing || autoSubmitting || checkingCandidate || ignoringFile || preferenceStatus === 'saving'" @click="openHistory">{{tr('发布历史')}} <span class="history-count">{{history.length}}</span></button>
         <span v-if="releaseTab === 'publish' && releaseContentHint" id="release-content-hint" class="release-content-hint" role="status">{{ releaseContentHint }}</span>
-        <button :disabled="publishing || preferenceStatus === 'saving'" @click="checkingCandidate ? cancelCandidate() : closeModal()">{{checkingCandidate && checksEnabled?tr('取消检查'):tr('关闭')}}</button>
-        <button v-if="targetSelectionMissing" type="button" class="primary" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button>
-        <button v-else-if="candidateNeedsAttention && !checkingCandidate && !autoSubmitting" type="button" class="primary resolve-issues" :disabled="publishing" @click="reviewStale ? inspectCandidate() : showReleaseIssues()">{{reviewStale?tr('重新检查'):tr('处理问题')}}</button>
+        <button v-if="checkingCandidate && checksEnabled" :disabled="publishing" @click="cancelCandidate">{{tr('取消检查')}}</button>
+        <button v-if="targetSelectionMissing" type="button" class="primary footer-action" @click="chooseReleaseTarget">{{ tr('选择构建端') }}</button>
+        <button v-else-if="candidateNeedsAttention && !checkingCandidate && !autoSubmitting" type="button" class="primary resolve-issues footer-action" :disabled="publishing" @click="reviewStale ? inspectCandidate() : showReleaseIssues()">{{reviewStale?tr('重新检查'):tr('处理问题')}}</button>
         <div v-else class="publish-control">
-          <button class="primary publish-submit" :disabled="!canSubmit || autoSubmitting || checkingCandidate" :aria-busy="autoSubmitting || checkingCandidate" @click="submitRelease">{{checkingCandidate?(resolvingReview?tr('验证处理结果…'):checksEnabled?tr('检查中…'):tr('准备中…')):publishing ? tr("正在准备本地操作…") : createTag ? publishActionLabel : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
+          <button class="primary publish-submit footer-action" :disabled="!canSubmit || autoSubmitting || checkingCandidate" :aria-busy="autoSubmitting || checkingCandidate" @click="submitRelease">{{checkingCandidate?(resolvingReview?tr('验证处理结果…'):checksEnabled?tr('检查中…'):tr('准备中…')):publishing ? tr("正在准备本地操作…") : createTag ? publishActionLabel : gitOnly ? (pushRemote ? tr('提交并上传') : tr('提交到本机')) : tr("确认提交并执行") }}</button>
         </div>
       </footer>
       <datalist id="target-kinds"><option value="desktop" /><option value="web" /><option value="android" /><option value="server" /><option value="custom" /></datalist><datalist id="runner-types"><option value="local" /><option value="git-push" /></datalist><datalist id="version-formats"><option value="json" /><option value="npm-lock" /><option value="cargo" /><option value="cargo-lock" /><option value="toml" /><option value="gradle" /></datalist>

@@ -68,13 +68,13 @@ watch(() => props.disabled, disabled => { if (disabled) void close() })
     <legend>{{ tr('构建与发布') }}</legend>
     <div class="hybrid-cards" role="group" :aria-label="tr('构建与发布方式')">
     <button v-for="option in directOptions" :key="option.id" type="button" class="route-card" :class="{ selected: plan === option.id }" :aria-pressed="plan === option.id" @click="selectDirect(option.id)">
-      <span class="card-top"><UiIcon :name="option.icon" :size="21" /><span class="selection-dot"><UiIcon v-if="plan === option.id" name="check" :size="12" /></span></span>
+      <span class="card-top"><UiIcon :name="option.icon" :size="18" /><span class="selection-dot"><UiIcon v-if="plan === option.id" name="check" :size="11" /></span></span>
       <strong>{{ tr(option.title) }}</strong><small>{{ tr(option.detail) }}</small>
     </button>
 
     <div ref="picker" class="local-picker" @focusout="leave" @keydown.esc.stop.prevent="close(true)">
       <button ref="trigger" type="button" class="route-card local-card" :class="{ selected: onlyLocal, expanded: open }" :aria-pressed="onlyLocal" :aria-expanded="open" aria-controls="local-version-cascade" @click="toggle" @keydown.down.prevent="!open && toggle()">
-        <span class="card-top"><UiIcon name="folder" :size="21" /><span class="selection-dot"><UiIcon v-if="onlyLocal" name="check" :size="12" /></span></span>
+        <span class="card-top"><UiIcon name="folder" :size="18" /><span class="selection-dot"><UiIcon v-if="onlyLocal" name="check" :size="11" /></span></span>
         <strong>{{ tr('仅本地打包') }}</strong>
         <small class="version-result"><span>{{ tr(localLabel) }}</span><UiIcon name="chevron-down" :size="13" :class="{ rotated: open }" /></small>
       </button>
@@ -95,16 +95,17 @@ watch(() => props.disabled, disabled => { if (disabled) void close() })
 .build-choice { border: 0; padding: 0; margin: 0; min-width: 0; }
 .build-choice > legend { margin-bottom: .5rem; font-size: .9rem; font-weight: 600; }
 .build-choice:disabled .route-card { cursor: default; opacity: .65; }
-.hybrid-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; }
-.route-card { display: block; width: 100%; min-height: 124px; padding: 17px; text-align: left; border: 1px solid #363e4b; border-radius: 9px; background: #14181f; cursor: pointer; color: #edf0f5; }
-.route-card:hover { background: #1c2430; border-color: #5b6b83; }
+.hybrid-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: start; }
+.route-card { display: grid; grid-template-columns: 18px minmax(0, 1fr) 14px; align-content: center; align-items: center; gap: 4px 8px; width: 100%; min-height: 72px; padding: 10px 12px; text-align: left; border: 1px solid #363e4b; border-radius: 8px; background: #14181f; cursor: pointer; color: #edf0f5; }
+@media (hover: hover) { .route-card:not(:disabled):hover { background: #1c2430; border-color: #5b6b83; } }
 .route-card.selected { background: #202f46; border-color: #7b9fda; }
 .route-card.expanded { border-color: #88afea; background: #202a3a; }
-.card-top { display: flex; align-items: center; justify-content: space-between; color: #9eb4d4; margin-bottom: 16px; }
-.selection-dot { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid #576275; border-radius: 50%; }
+.card-top { display: contents; color: #9eb4d4; }
+.card-top > .ui-icon { grid-column: 1; grid-row: 1; }
+.selection-dot { grid-column: 3; grid-row: 1; display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid #576275; border-radius: 50%; }
 .selected .selection-dot { background: #88afea; border-color: #88afea; color: #15243c; }
-.route-card strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.6; }
-.route-card small { display: block; font-size: 11px; color: #a7b4c8; line-height: 1.6; margin-top: 4px; }
+.route-card strong { grid-column: 2; grid-row: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.route-card small { grid-column: 2 / 4; grid-row: 2; min-width: 0; font-size: 11px; color: #a7b4c8; line-height: 1.5; margin: 0; }
 .route-card .version-result { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #b6cbed; }
 .rotated { transform: rotate(180deg); }
 .local-picker { position: relative; min-width: 0; }
@@ -118,10 +119,8 @@ watch(() => props.disabled, disabled => { if (disabled) void close() })
 .version-option:hover { background: #303a4b; }.version-option[aria-pressed="true"] { background: #2b3c56; }
 button:focus-visible { outline: 2px solid #9bbfff; outline-offset: 2px; }
 .version-popover p { display: flex; align-items: center; gap: 5px; border-top: 1px solid #354152; padding: 11px 10px 5px; margin: 7px 0 0; font-size: 10px; color: #95a2b6; line-height: 1.6; }
-@media (max-width: 760px) { .hybrid-cards { gap: 8px; }.route-card { padding: 13px 11px; } }
 @media (max-width: 560px) {
-  .hybrid-cards { grid-template-columns: 1fr; }.route-card { display: grid; grid-template-columns: 29px 1fr; column-gap: 12px; min-height: 76px; padding: 15px; }
-  .card-top { display: contents; }.card-top > .ui-icon { grid-row: 1 / 3; align-self: center; }.selection-dot { display: none; }.route-card strong, .route-card small { grid-column: 2; }.route-card small { margin-top: 3px; }
+  .hybrid-cards { grid-template-columns: 1fr; gap: 6px; }.route-card { min-height: 62px; padding: 9px 12px; }
   .version-popover { position: relative; top: auto; min-width: 0; margin-top: 8px; }.dismiss { min-height: 44px; min-width: 44px; }
 }
 </style>

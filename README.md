@@ -2,11 +2,13 @@
 
 <h1 align="center">RunDock 启动坞</h1>
 
-<p align="center">
-  <a href="./docs/media/hero-rundock.zh-CN.png"><img src="./docs/media/hero-rundock.zh-CN.webp" alt="RunDock — 项目再多，也井然有序。启停 · 日志 · Git 发布" width="720" /></a>
-</p>
-
 <p align="center"><strong>Windows 项目启动器，让 AI 小工具和开发项目像应用一样好管理。</strong></p>
+
+<h2 align="center">90 秒认识 RunDock</h2>
+
+https://github.com/user-attachments/assets/ceb2c598-1ffc-4aa7-9c14-3333052a82fe
+
+<p align="center"><sub>90 秒 · 720p 在线播放 · 中文配音与字幕</sub><br /><a href="https://github.com/oooing/rundock/raw/refs/heads/master/docs/media/rundock-intro-90s.mp4">下载 1080p 原片</a></p>
 
 <p align="center">
   <a href="https://github.com/oooing/rundock/releases"><img src="./docs/media/download.zh-CN.svg" alt="下载 Windows 版" width="208" height="46" /></a>

@@ -1,0 +1,501 @@
+// Real Vue dialog with delayed, isolated APIs. Never contacts the user's backend.
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createServer } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const fixture = path.join(root, '.tmp', `release-loading-${Date.now()}`)
+const evidence = path.join(root, 'outputs/acceptance/release-loading')
+mkdirSync(fixture, { recursive: true }); mkdirSync(evidence, { recursive: true })
+const source = '/@fs/' + root.replaceAll('\\', '/') + '/src'
+writeFileSync(path.join(fixture, 'index.html'), '<html lang="zh"><meta charset="utf-8"><div id="app"></div><script type="module" src="/main.ts"></script></html>')
+writeFileSync(path.join(fixture, 'main.ts'), `
+import {createApp,h,ref,nextTick} from 'vue';import Modal from '${source}/components/ReleaseModal.vue';import Settings from '${source}/components/SettingsModal.vue';
+import Safety from '${source}/components/ReleaseSafetyPanel.vue';
+import {setLocale} from '${source}/i18n/index.ts';import '${source}/styles.css';
+window.__LAUNCHER_BASE__='http://loading.fixture.invalid';setLocale('zh-CN');window.setTestLocale=setLocale;
+createApp({setup(){const visible=ref(true),settings=ref(false),bulk=ref(false),files=ref([]),selected=ref({}),decisions=ref([]);
+window.openBulkFixture=async(values)=>{bulk.value=false;visible.value=false;settings.value=false;await nextTick();files.value=values;selected.value=Object.fromEntries(values.map(file=>[file.path,file.category==='recommend']));decisions.value=[];window.bulkIgnoreCalls=[];window.bulkFailure='';window.bulkHoldPath='';bulk.value=true};
+window.bulkState=()=>({selected:selected.value,decisions:decisions.value});
+const choose=(file,included)=>{selected.value={...selected.value,[file.path]:included};decisions.value=[...decisions.value.filter(item=>item.path!==file.path),{path:file.path,contentFingerprint:file.contentFingerprint,decision:included?'include':'exclude'}]};
+const ignoreFile=async(file)=>{window.bulkIgnoreCalls.push(file.path);if(window.bulkHoldPath===file.path)await new Promise(resolve=>window.resumeBulkIgnore=resolve);if(window.bulkFailure===file.path)throw Error('验收：忽略失败');files.value=files.value.filter(item=>item.path!==file.path);delete selected.value[file.path];decisions.value=decisions.value.filter(item=>item.path!==file.path);return '.gitignore'};
+window.openFixtureSettings=()=>{visible.value=false;settings.value=true};window.reopenFixture=async(preferences)=>{visible.value=false;settings.value=false;bulk.value=false;await nextTick();
+if(preferences)localStorage.setItem('launcher.release-preferences.loading-ui',JSON.stringify(preferences));visible.value=true};
+return()=>bulk.value?h('main',{class:'bulk-fixture',style:{width:'min(820px, 100%)',margin:'40px auto',padding:'24px',background:'var(--bg-elev)'}},[h('h2','文件批量操作'),h(Safety,{appId:'bulk-fixture',intent:'formal',files:files.value,selected:selected.value,decisions:decisions.value,candidate:null,busy:false,stale:false,ignoreFile,onChoose:choose})]):settings.value?h(Settings,{onClose:()=>settings.value=false}):visible.value?h(Modal,{app:{id:'loading-ui',name:'RunDock',status:'running'},onClose:()=>visible.value=false}):null}}).mount('#app');
+`)
+const config = { ...JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8')), source: 'file', confidence: 1, warnings: [] }
+let fixtureConfig = config
+const profile = { appId: 'loading-ui', buildMode: 'local', syncPolicy: 'auto', remoteName: 'origin', versionStrategy: 'tauri', preReleaseCommand: '', createTag: true, versionMode: 'auto' }
+const preflight = { repoRoot: 'C:/fixture', branch: 'master', headSha: 'a'.repeat(40), remoteName: 'origin', remoteUrl: 'https://github.com/fixture/project',
+  remotes: ['origin'], latestTag: 'v2.0.30', latestGroupTags: {}, commitsSinceTags: {}, suggestedVersion: '2.0.31', suggestedVersions: { product: '2.0.31' },
+  versionStrategy: 'tauri', versionFiles: ['package.json'], currentVersions: { 'package.json': '2.0.30' },
+  changes: [{ path: 'src/components/ReleaseModal.vue', status: ' M', tracked: true, staged: false }, { path: 'docs/release-notes.md', status: '??', tracked: false, staged: false }],
+  classifications: [
+    { path: 'src/components/ReleaseModal.vue', status: ' M', tracked: true, category: 'recommend', selectedDefault: true, reasons: [], sources: [], contentFingerprint: 'fixture-source', baselineKept: true },
+    { path: 'docs/release-notes.md', status: '??', tracked: false, category: 'review', selectedDefault: false, reasons: [], sources: [], contentFingerprint: 'fixture-notes' },
+  ],
+  aheadCount: 1, unpushedChanges: [
+    {path:'src/saved-added.ts',status:'A'}, {path:'src/saved-modified.ts',status:'M'},
+    {path:'src/saved-deleted.ts',status:'D'}, {path:'src/saved-renamed.ts',status:'R'},
+  ], blockingIssues: [], canRelease: true, remoteChecked: false, statusFingerprint: 'fixture', profile }
+const pending = { preflight: [], config: [], notes: [] }, blocked = [], errors = [], calls = []
+const historicalRuns = ['succeeded','failed'].map((status,index)=>({id:'history-'+index,appId:'loading-ui',repoRoot:'C:/fixture',branch:'master',remoteName:'origin',targetVersion:'2.0.'+(30-index),tagName:'v2.0.'+(30-index),createTag:true,pushRemote:true,selectedTargets:[],status,stage:status==='failed'?'pushing_branch':'completed',commitSha:'b'.repeat(40),statusFingerprint:'history',errorCode:status==='failed'?'push_failed':'',errorMessage:status==='failed'?'验收：上传中断':'',createdAt:'2026-10-12T01:00:00Z',finishedAt:'2026-10-12T01:01:00Z'}))
+let fixtureHistory = historicalRuns, holdHistoryRun = false
+const pendingHistory = []
+const historyView = (run,text='验收：历史日志') => ({run,targets:[],artifacts:[],deliveries:[],logs:[{id:1,releaseRunId:run.id,stream:'event',text,ts:run.createdAt}],retryConfirmationRequired:false})
+const headers = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' }
+const send = (route, json, status = 200) => route.fulfill({ status, json, headers })
+const until = async check => {
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25)) }
+  throw Error('Timed out waiting for fixture request')
+}
+let server, browser, page, holdConfig = false
+const report = { passed: false, boundary: 'Isolated real Vue modal; mock APIs only; no build, publish or live service changes.', checks: [] }
+try {
+  server = await createServer({ configFile: false, root: fixture, plugins: [vue()], resolve: { alias: { '@': path.join(root, 'src') } },
+    optimizeDeps: { entries: ['index.html'] }, server: { host: '127.0.0.1', port: 0, fs: { allow: [root] } } })
+  await server.listen()
+  const origin = `http://127.0.0.1:${server.httpServer.address().port}`
+  const { chromium } = createRequire(import.meta.url)(process.env.RUNDOCK_PLAYWRIGHT_MODULE || 'playwright')
+  browser = await chromium.launch({ channel: process.env.RUNDOCK_BROWSER_CHANNEL || 'msedge', headless: true })
+  page = await browser.newPage({ viewport: { width: 1440, height: 1050 }, locale: 'zh-CN' }); page.setDefaultTimeout(10000)
+  page.on('pageerror', error => errors.push(error.message))
+  await page.route('**/*', async route => {
+    const request = route.request(), url = new URL(request.url())
+    if (url.origin === origin) return route.continue()
+    if (url.origin !== 'http://loading.fixture.invalid') { blocked.push(url.href); return route.abort() }
+    if (request.method() === 'OPTIONS') return send(route, {})
+    calls.push(`${request.method()} ${url.pathname}`)
+    if (url.pathname === '/api/settings' && request.method() === 'GET') return send(route, {grace_period_seconds:'8',closeBehavior:''})
+    if (url.pathname.endsWith('/release/preflight')) { pending.preflight.push(route); return }
+    if (url.pathname.endsWith('/release-config')) { if (holdConfig) { pending.config.push(route); return }; return send(route, fixtureConfig) }
+    if (url.pathname.endsWith('/release-profile')) return send(route, profile)
+    if (url.pathname.endsWith('/release/notes-draft')) { pending.notes.push(route); return }
+    if (url.pathname === '/api/apps/loading-ui/releases' && request.method() === 'GET') return send(route, fixtureHistory)
+    if (url.pathname.startsWith('/api/releases/history-') && request.method() === 'GET') {
+      const run = historicalRuns.find(run=>url.pathname.endsWith('/'+run.id))
+      if (holdHistoryRun) {pendingHistory.push({route,run});return}
+      return send(route,historyView(run))
+    }
+    blocked.push(`${request.method()} ${url.pathname}`); return route.abort()
+  })
+  const loader = page.locator('.release-loading'), form = page.locator('.publish-purpose')
+  const assertDialogHeight = async () => {
+    const {width,height}=page.viewportSize()
+    const expected=width<=440?height:Math.min(height*(width<=720?.97:.94),height-(width<=720?16:40))
+    let box
+    // CDP viewport resizing completes before the browser's next layout on some runs.
+    await until(async()=>{box=await page.locator('.modal').boundingBox();return box && Math.abs(box.height-expected)<1.5})
+    assert.ok(box && Math.abs(box.height-expected)<1.5, `dialog height ${box?.height} should stay at ${expected} for ${width}x${height}`)
+    assert.ok(box.y>=-.5 && box.y+box.height<=height+.5,'the fixed dialog must fit inside the main window')
+    assert.equal(await page.locator('.m-body').evaluate(el=>getComputedStyle(el).overflowY),'auto')
+  }
+  const nextPreflight = async () => { await until(() => pending.preflight.length); return pending.preflight.shift() }
+  const assertLoading = async () => {
+    await loader.waitFor(); assert.equal(await form.count(), 0)
+    await assertDialogHeight()
+    const runningNotice = page.locator('.m-body > .alert.warn').first()
+    assert.equal(await runningNotice.count(), 1)
+    assert.match(await runningNotice.innerText(), /项目(?:正在|仍在|会继续)运行|project (?:is|stays|keeps) running/i)
+    const noticeBox = await runningNotice.boundingBox(), loaderBox = await loader.boundingBox()
+    assert.ok(noticeBox && loaderBox && noticeBox.y + noticeBox.height <= loaderBox.y,
+      'running-project notice must appear above the loading indicator')
+    assert.equal(await page.locator('.m-foot').count(), 0)
+    assert.equal(await page.locator('#release-tab-settings').isDisabled(), true)
+    assert.equal(await page.locator('.m-head button').isEnabled(), true)
+  }
+  await page.goto(origin)
+  let request = await nextPreflight(); await assertLoading()
+  await page.screenshot({ path: path.join(evidence, 'loading-desktop.png') })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  assert.equal(await page.locator('progress').evaluate(el => getComputedStyle(el).animationName), 'none')
+  await page.setViewportSize({ width: 390, height: 844 }); await assertLoading()
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  await page.screenshot({ path: path.join(evidence, 'loading-mobile.png') })
+  await send(request, preflight); await form.waitFor(); assert.equal(await loader.count(), 0)
+  await page.setViewportSize({ width: 1440, height: 1050 })
+  report.checks.push('running-project notice stays above loading on desktop and mobile; slow preflight keeps form and submit hidden; close and reduced motion remain available')
+  const assertSections = async expected => {
+    await assertDialogHeight()
+    const sections = page.locator('#release-panel-publish [data-release-section]')
+    assert.deepEqual(await sections.evaluateAll(elements => elements.map(el => el.dataset.releaseSection)), expected)
+    const headings = await sections.locator('.form-section-copy h3').allTextContents()
+    assert.equal(new Set(headings).size, expected.length)
+    assert.ok(await sections.evaluateAll(elements => elements.every((el, index) => {
+      const box = el.getBoundingClientRect(), previous = elements[index - 1]?.getBoundingClientRect()
+      const style = getComputedStyle(el)
+      return el.querySelector('h3')?.id === el.getAttribute('aria-labelledby')
+        && style.borderLeftWidth === '0px' && style.borderRightWidth === '0px' && style.borderBottomWidth === '0px'
+        && style.backgroundColor === 'rgba(0, 0, 0, 0)' && (!previous || box.top >= previous.bottom + 12)
+    })), 'groups must be open and separated by spacing rather than enclosing boxes')
+    assert.equal(await page.locator('.form-section-number, [data-release-step]').count(), 0)
+    assert.equal(await page.locator('.m-body').evaluate(el => getComputedStyle(el).overscrollBehaviorY), 'contain')
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  }
+  await assertSections(['method', 'version', 'confirmation'])
+  assert.deepEqual(await page.locator('.build-choice .route-card strong').allTextContents(), ['在线发布', '本机发布', '本机生成'])
+  assert.match(await page.locator('.build-choice .route-card small').nth(0).innerText(), /GitHub.*生成.*发布/)
+  assert.match(await page.locator('.build-choice .route-card small').nth(1).innerText(), /这台电脑.*生成.*上传/)
+  await page.locator('.build-choice .local-card').click()
+  assert.match(await page.locator('.version-popover').innerText(), /不会上传/)
+  await page.locator('.version-popover .dismiss').click()
+  assert.equal(await page.getByLabel('批量操作', {exact:true}).inputValue(), 'exclude')
+  assert.equal(await page.locator('.review-row select').inputValue(), 'exclude')
+  await page.getByLabel('批量操作', {exact:true}).selectOption('include')
+  assert.equal(await page.locator('.review-row select').inputValue(), 'include')
+  await page.getByLabel('批量操作', {exact:true}).selectOption('exclude')
+  assert.equal(await page.locator('.review-row select').inputValue(), 'exclude')
+  await page.locator('.review-row select').selectOption('include')
+  assert.equal(await page.locator('.release-safety').locator('.file-scope-head, .selected-file-count, .file-toolbar, input[type="search"]').count(), 0)
+  assert.equal(await page.locator('.candidate-result .safety-head > span').count(), 0)
+  const recommendations = page.locator('.category-counts .recommend')
+  assert.match(await recommendations.innerText(), /建议保存.*已选 1\/1/)
+  await recommendations.click()
+  const recommendedFile = page.getByLabel('选择文件：src/components/ReleaseModal.vue', {exact:true})
+  await recommendedFile.uncheck()
+  assert.match(await recommendations.innerText(), /已选 0\/1/)
+  await recommendedFile.check()
+  assert.match(await recommendations.innerText(), /已选 1\/1/)
+  const savedChanges = page.locator('.unpushed-files')
+  assert.equal(await page.locator('.file-selection-help strong').innerText(), '待保存的改动')
+  assert.match(await page.locator('.file-selection-help').innerText(), /勾选决定本次保存的改动/)
+  assert.match(await savedChanges.locator('summary').innerText(), /已保存，待上传 GitHub 的代码记录：1 条，4 个文件/)
+  assert.match(await page.locator('.unpushed-note').innerText(), /绿色对勾表示已保存，无需再勾选/)
+  assert.equal(await savedChanges.evaluate(el => el.open), false)
+  assert.equal(await page.locator('.unpushed-note').isVisible(), true, 'saved revisions must be explained even when their file list is collapsed')
+  await savedChanges.locator('summary').click()
+  assert.deepEqual(await savedChanges.locator('.file-status').allTextContents(), ['新增','修改','删除','改名'])
+  assert.equal(await savedChanges.locator('input, select').count(), 0, 'saved revisions upload as a whole, without new per-file selections')
+  assert.equal(await recommendedFile.isChecked(), true)
+  await savedChanges.locator('summary').click()
+  await page.locator('.release-safety').screenshot({path:path.join(evidence,'file-selection-help-desktop.png')})
+  await page.getByRole('switch', { name: '启用检查', exact: true }).uncheck()
+  assert.match(await page.locator('.candidate-result').innerText(), /未检查/)
+  await page.getByRole('switch', { name: '启用检查', exact: true }).check()
+  await page.locator('input[name="release-version-mode"][value="manual"]').check()
+  assert.equal(await page.locator('.release-version-list input').count(), 1)
+  await page.locator('input[name="release-version-mode"][value="auto"]').check()
+  await page.locator('.m-body').evaluate(el => el.scrollTop = 0)
+  await page.screenshot({ path: path.join(evidence, 'sections-desktop-top.png') })
+  await page.locator('.category-counts').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(evidence, 'sections-desktop-files.png') })
+  await page.locator('.release-notes').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(evidence, 'sections-desktop-notes.png') })
+  await page.setViewportSize({ width: 390, height: 844 }); await assertSections(['method', 'version', 'confirmation'])
+  assert.equal(await page.locator('.unpushed-note').isVisible(), true)
+  await page.locator('.release-safety').screenshot({path:path.join(evidence,'file-selection-help-mobile.png')})
+  await page.locator('.m-body').evaluate(el => el.scrollTop = 0)
+  await page.screenshot({ path: path.join(evidence, 'sections-mobile-top.png') })
+  await page.locator('.release-notes').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(evidence, 'sections-mobile-notes.png') })
+  await page.setViewportSize({ width: 1440, height: 1050 })
+  await page.locator('input[name="release-intent"][value="save-progress"]').check()
+  await assertSections(['method', 'confirmation'])
+  await page.locator('.full-label input').fill('保留本次提交说明')
+  await page.screenshot({ path: path.join(evidence, 'sections-code-only.png') })
+  await page.locator('input[name="release-intent"][value="formal"]').check()
+  await page.locator('#release-tab-settings').click()
+  await assertDialogHeight()
+  assert.equal(await page.locator('#release-panel-publish').isVisible(), false)
+  assert.equal(await page.locator('.settings-intro h3').innerText(), '发布设置')
+  assert.equal(await page.locator('.setup-overview h3').innerText(), '发布平台')
+  assert.equal(await page.locator('.setup-overview .advanced-link').innerText(), '修改设置')
+  await page.screenshot({ path: path.join(evidence, 'release-settings-copy.png') })
+  await page.locator('#release-tab-publish').click()
+  await page.locator('input[name="release-intent"][value="save-progress"]').check()
+  assert.equal(await page.locator('.full-label input').inputValue(), '保留本次提交说明')
+  await page.locator('input[name="release-intent"][value="formal"]').check()
+  await assertSections(['method', 'version', 'confirmation'])
+  report.checks.push('three open groups for release and two for code-only, no numbered steps or enclosing boxes; file decisions, check toggles, version editing and commit text remain usable on desktop and mobile')
+  const notes = page.locator('.release-notes textarea')
+  await notes.fill('用户自己填写的更新说明')
+  while (pending.notes.length) await send(pending.notes.shift(), { text: '迟到的自动说明', baseTag: 'v2.0.30', sourceFingerprint: 'fixture' })
+  await page.locator('input[name="release-intent"][value="save-progress"]').check()
+  await page.locator('input[name="release-intent"][value="formal"]').check()
+  assert.equal(await notes.inputValue(), '用户自己填写的更新说明')
+  assert.equal(await page.locator('.summary-card, details.history-panel').count(),0)
+  assert.equal(await page.locator('.m-foot').getByRole('button',{name:'关闭',exact:true}).count(),0)
+  assert.deepEqual(await page.locator('.m-foot').locator('button').allTextContents(), ['发布历史 2', await page.locator('.publish-submit').innerText()])
+  const assertFooterActions = async () => {
+    const geometry = await page.locator('.m-foot').evaluate(footer => {
+      const rect = el => { const { x, y, width, height } = el.getBoundingClientRect(); return { x, y, width, height } }
+      const styles = getComputedStyle(footer)
+      return { footer: rect(footer), history: rect(footer.querySelector('.history-button')), publish: rect(footer.querySelector('.publish-submit')), left: parseFloat(styles.paddingLeft), right: parseFloat(styles.paddingRight) }
+    })
+    const { footer, history, publish, left, right } = geometry
+    assert.ok(Math.abs(history.x - (footer.x + left)) < 1, 'history is at the left edge of the toolbar')
+    assert.ok(Math.abs(publish.x + publish.width - (footer.x + footer.width - right)) < 1, 'publish is at the right edge of the toolbar')
+    assert.ok(Math.abs(history.width - publish.width) < 1 && Math.abs(history.height - publish.height) < 1, 'history and publish have matching sizes')
+    assert.ok(Math.abs(history.y - publish.y) < 1, 'both actions stay on the same row')
+  }
+  await assertFooterActions()
+  await page.locator('.m-foot').screenshot({path:path.join(evidence,'footer-actions-desktop.png')})
+  await page.locator('.m-body').evaluate(el=>el.scrollTop=el.scrollHeight)
+  const draftPosition = await page.locator('.m-body').evaluate(el=>el.scrollTop)
+  const openHistory = async()=>{await page.locator('.history-button').click();await page.getByRole('heading',{name:'发布历史',exact:true}).waitFor();await assertDialogHeight()}
+  const backToDraft = async()=>{if(await page.locator('.progress-block').count())await page.getByRole('button',{name:'返回历史',exact:true}).click();await page.getByRole('button',{name:'返回发布',exact:true}).click()}
+  await page.locator('.modal').screenshot({path:path.join(evidence,'history-toolbar-desktop.png')})
+  await openHistory()
+  assert.equal(await page.locator('.publish-submit').count(),0)
+  assert.equal(await page.locator('.publish-purpose').isVisible(),false)
+  assert.equal(await page.locator('.m-head .history-back').isVisible(),true)
+  assert.equal(await page.locator('.m-foot').count(),0)
+  await page.locator('.modal').screenshot({path:path.join(evidence,'release-history-desktop.png')})
+  const historyBox=await page.locator('.modal').boundingBox()
+  await page.screenshot({path:path.join(evidence,'release-history-navigation.png'),clip:{...historyBox,height:Math.min(historyBox.height,320)}})
+  await page.locator('.release-history .history-row').first().click()
+  await page.locator('.execution-details > summary').first().click()
+  await page.getByText('验收：历史日志',{exact:true}).waitFor()
+  await assertDialogHeight()
+  await page.getByRole('button',{name:'返回历史',exact:true}).click()
+  await page.locator('.release-history').waitFor()
+  await page.locator('.release-history .history-row').last().click()
+  await page.getByText('验收：历史日志',{exact:true}).waitFor()
+  await assertDialogHeight()
+  assert.equal(await page.getByRole('button',{name:'返回发布检查',exact:true}).count(),0)
+  await backToDraft()
+  await until(async()=>await page.locator('.m-body').evaluate(el=>el.scrollTop)===draftPosition)
+  assert.equal(await notes.inputValue(),'用户自己填写的更新说明')
+  assert.equal(await recommendedFile.isChecked(),true)
+  await page.locator('.category-counts .review').click()
+  assert.equal(await page.locator('.review-row select').inputValue(),'include')
+  await recommendations.click()
+  // Re-enter the same record while its first response is delayed: old logs must not leak into the new visit.
+  holdHistoryRun=true; await openHistory(); await page.locator('.release-history .history-row').first().click()
+  await until(()=>pendingHistory.length);const delayedHistory=pendingHistory.shift()
+  await backToDraft()
+  holdHistoryRun=false;await openHistory();await page.locator('.release-history .history-row').first().click()
+  await page.locator('.execution-details > summary').first().click()
+  await page.getByText('验收：历史日志',{exact:true}).waitFor()
+  await send(delayedHistory.route,historyView(delayedHistory.run,'验收：过期日志'))
+  await page.waitForTimeout(100)
+  assert.equal(await page.getByText('验收：过期日志',{exact:true}).count(),0)
+  assert.equal(await page.getByText('验收：历史日志',{exact:true}).count(),1)
+  await backToDraft()
+  await page.setViewportSize({width:390,height:844})
+  await assertDialogHeight()
+  await assertFooterActions()
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth))
+  await page.locator('.modal').screenshot({path:path.join(evidence,'history-toolbar-mobile.png')})
+  await openHistory();await page.locator('.modal').screenshot({path:path.join(evidence,'release-history-mobile.png')})
+  await page.getByRole('button',{name:'返回发布',exact:true}).click()
+  assert.equal(await notes.inputValue(),'用户自己填写的更新说明')
+  await page.setViewportSize({width:1440,height:1050})
+  report.checks.push('history aligns left and publish aligns right with equal button width and height on desktop and mobile')
+  report.checks.push('history replaces footer Close; form summary is removed; list and succeeded/failed records return to the intact draft with notes, choices and scroll restored; delayed same-record responses cannot leak logs; desktop and mobile remain usable')
+  await page.screenshot({ path: path.join(evidence, 'ready-desktop.png') })
+  report.checks.push('ready form stays interactive and late generated notes cannot replace user text')
+
+  await page.evaluate(() => window.reopenFixture()); request = await nextPreflight()
+  await send(request, { error: '验收：读取文件失败' }, 500)
+  await page.locator('.release-load-error').waitFor(); assert.equal(await form.count(), 0)
+  await assertDialogHeight()
+  await page.getByRole('button', { name: '重新加载', exact: true }).click()
+  request = await nextPreflight(); await assertLoading(); await send(request, preflight); await form.waitFor()
+  report.checks.push('initial error never exposes incomplete form; retry performs real reload and recovers')
+
+  await page.evaluate(() => window.reopenFixture()); const oldRequest = await nextPreflight()
+  await page.locator('.m-head button').click(); assert.equal(await page.locator('.modal').count(), 0)
+  await page.evaluate(() => window.reopenFixture()); request = await nextPreflight(); await assertLoading()
+  await send(oldRequest, { ...preflight, suggestedVersion: '9.9.9', suggestedVersions: { product: '9.9.9' } })
+  await assertLoading(); await send(request, preflight); await form.waitFor()
+  assert.ok(!(await page.locator('.modal').innerText()).includes('9.9.9'))
+  report.checks.push('closing and reopening discards the old response, without unlocking the new form early')
+
+  holdConfig = true; await page.evaluate(() => window.reopenFixture()); request = await nextPreflight()
+  await send(request, preflight); await until(() => pending.config.length); await assertLoading()
+  await send(pending.config.shift(), config); await form.waitFor()
+  await page.evaluate(() => window.setTestLocale('en'))
+  await page.evaluate(() => window.reopenFixture()); request = await nextPreflight(); await assertLoading()
+  assert.match(await loader.innerText(), /Preparing release/)
+  await send(request, preflight); await until(() => pending.config.length); await send(pending.config.shift(), config); await form.waitFor()
+  await assertSections(['method', 'version', 'confirmation'])
+  assert.equal(await page.locator('#release-section-method').textContent(), 'Publishing choices')
+  await page.getByRole('button',{name:'Release history 2',exact:true}).click()
+  await page.getByRole('heading',{name:'Release history',exact:true}).waitFor()
+  await page.getByRole('button',{name:'Back to release',exact:true}).click()
+  await page.locator('.m-body').evaluate(el => el.scrollTop = 0)
+  await page.screenshot({ path: path.join(evidence, 'sections-english.png') })
+  report.checks.push('opposite response order also waits for all required data; English loading is translated')
+
+  holdConfig = false
+  await page.evaluate(() => window.setTestLocale('zh-CN'))
+  fixtureHistory=[];await page.evaluate(()=>window.reopenFixture());await send(await nextPreflight(),preflight);await form.waitFor()
+  await page.getByRole('button',{name:'发布历史 0',exact:true}).click()
+  await page.getByText('暂无发布记录。',{exact:true}).waitFor()
+  await assertDialogHeight()
+  await page.setViewportSize({width:1674,height:956});await assertDialogHeight()
+  await page.screenshot({path:path.join(evidence,'fixed-dialog-height.png')})
+  await page.setViewportSize({width:650,height:600});await assertDialogHeight()
+  await page.setViewportSize({width:1200,height:480});await assertDialogHeight()
+  await page.setViewportSize({width:1440,height:1050})
+  await page.getByRole('button',{name:'返回发布',exact:true}).click()
+  fixtureHistory=historicalRuns
+  report.checks.push('dialog height depends only on the main-window viewport through loading, errors, release, settings, history and succeeded/failed records; empty histories do not collapse; short and narrow windows fit, with content scrolling inside')
+  const emptyPreferences = { releaseIntent: 'formal', releaseTargets: { github: [], local: [] } }
+  const reopenPlatforms = async preferences => {
+    await page.locator('.m-head button').click()
+    await page.locator('.modal').waitFor({ state: 'detached' })
+    await page.evaluate(preferences => window.reopenFixture(preferences), preferences)
+    await send(await nextPreflight(), preflight)
+    await form.waitFor()
+  }
+  const platformButtons = page.locator('.platform-section .platform-select')
+  const assertSoleSelected = async () => {
+    assert.equal(await platformButtons.count(), 1)
+    assert.equal(await platformButtons.first().getAttribute('aria-pressed'), 'true')
+  }
+  await reopenPlatforms(emptyPreferences); await assertSoleSelected()
+  await platformButtons.first().click()
+  assert.equal(await platformButtons.first().getAttribute('aria-pressed'), 'false')
+  await page.locator('input[name="release-intent"][value="save-progress"]').check()
+  assert.equal(await platformButtons.count(), 0)
+  await page.locator('input[name="release-intent"][value="formal"]').check()
+  await assertSoleSelected()
+  await page.locator('.build-choice .route-card').nth(0).click(); await assertSoleSelected()
+  await page.locator('.build-choice .route-card').nth(1).click(); await assertSoleSelected()
+  await page.screenshot({ path: path.join(evidence, 'single-platform-default.png') })
+  report.checks.push('sole platform defaults with remembered empty IDs, returning to release and switching build mode; manual deselection is preserved')
+
+  await reopenPlatforms({ ...emptyPreferences, releaseIntent: 'save-progress' })
+  assert.equal(await platformButtons.count(), 0)
+  await page.locator('input[name="release-intent"][value="formal"]').check()
+  await assertSoleSelected()
+  report.checks.push('opening in save-code mode never selects a build; entering release defaults the sole platform')
+
+  fixtureConfig = structuredClone(config)
+  fixtureConfig.targets.push(...config.targets.map(target => ({ ...structuredClone(target),
+    id: 'android-' + target.id, kind: 'android', name: 'Android', runner: { ...target.runner, os: [] } })))
+  await reopenPlatforms(emptyPreferences)
+  assert.equal(await platformButtons.count(), 2)
+  assert.equal(await page.locator('.platform-section .platform-select[aria-pressed="true"]').count(), 0)
+  await page.screenshot({ path: path.join(evidence, 'multiple-platforms-unselected.png') })
+  report.checks.push('multiple available platforms remain unselected with empty preferences')
+
+  fixtureConfig = structuredClone(config)
+  for (const target of fixtureConfig.targets) target.enabled = false
+  await reopenPlatforms(emptyPreferences)
+  assert.equal(await platformButtons.count(), 1)
+  assert.equal(await platformButtons.first().isDisabled(), true)
+  assert.equal(await platformButtons.first().getAttribute('aria-pressed'), 'false')
+  report.checks.push('a sole unavailable platform is not auto-selected')
+
+  await page.evaluate(() => window.openFixtureSettings())
+  const settingsDialog = page.getByRole('dialog', {name:'设置',exact:true})
+  await settingsDialog.waitFor()
+  await until(() => page.getByLabel('停止等待', {exact:true}).isEnabled())
+  assert.equal(await settingsDialog.locator('.autosave-note').innerText(), '修改后自动保存。')
+  await settingsDialog.getByRole('heading', {name:'备份恢复',exact:true}).waitFor()
+  await settingsDialog.getByRole('link', {name:/下载软件/}).waitFor()
+  await settingsDialog.locator('.advanced > summary').click()
+  assert.match(await settingsDialog.locator('#grace_period_seconds-hint').innerText(), /按秒填写.*强制停止/)
+  assert.equal(await settingsDialog.getByLabel('停止等待', {exact:true}).inputValue(), '8')
+  await settingsDialog.locator('.m-body').evaluate(el => el.scrollTop = 0)
+  await page.screenshot({path:path.join(evidence,'settings-copy-desktop.png')})
+  await settingsDialog.getByRole('heading', {name:'备份恢复',exact:true}).scrollIntoViewIfNeeded()
+  await page.screenshot({path:path.join(evidence,'settings-copy-options.png')})
+  await page.setViewportSize({width:390,height:844})
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  await settingsDialog.locator('.m-body').evaluate(el => el.scrollTop = 0)
+  await page.screenshot({path:path.join(evidence,'settings-copy-mobile.png')})
+  await settingsDialog.locator('#ui-language').selectOption('en')
+  await page.getByRole('heading', {name:'Backup and restore',exact:true}).waitFor()
+  await page.getByLabel('Stop timeout', {exact:true}).waitFor()
+  assert.equal(await page.getByLabel('Stop timeout', {exact:true}).inputValue(), '8')
+  await page.setViewportSize({width:1440,height:1050})
+  await page.screenshot({path:path.join(evidence,'settings-copy-english.png')})
+  report.checks.push('release choices explain generation and upload separately; release settings and global settings use short names; seconds, saved values, user notes and English translations remain intact; desktop and mobile have no overflow')
+
+  await page.evaluate(() => window.setTestLocale('zh-CN'))
+  const reviewSamples=['docs/one.md','docs/two.md'].map((file,index)=>({...preflight.classifications[1],path:file,contentFingerprint:'sample-'+index}))
+  await page.evaluate(values=>window.openBulkFixture(values), [...reviewSamples,preflight.classifications[0]])
+  const bulkChoice=page.getByLabel('批量操作', {exact:true})
+  await bulkChoice.waitFor()
+  assert.equal(await bulkChoice.inputValue(), 'exclude')
+  assert.deepEqual(await page.locator('.review-row select').evaluateAll(elements=>elements.map(el=>el.value)), ['exclude','exclude'])
+  assert.equal((await page.evaluate(()=>window.bulkState())).selected['src/components/ReleaseModal.vue'],true)
+  assert.deepEqual(await bulkChoice.locator('option:not([value=""])').allTextContents(), ['批量保存','批量跳过','批量忽略'])
+  assert.equal(await page.locator('.bulk-control > span, .scope-file > p').count(),0)
+  const bulkHelpButton=page.getByRole('button',{name:'批量操作说明',exact:true})
+  const bulkHelpPanel=page.locator('.bulk-help-popover')
+  assert.equal(await bulkHelpPanel.isVisible(),false)
+  await bulkHelpButton.click();await bulkHelpPanel.waitFor({state:'visible'})
+  assert.deepEqual(await bulkHelpPanel.locator('dt').allTextContents(),['保存代码','本次跳过','以后忽略'])
+  await until(async()=>await bulkHelpButton.getAttribute('aria-expanded')==='true')
+  await page.locator('.bulk-fixture').screenshot({path:path.join(evidence,'bulk-action-help-desktop.png')})
+  await bulkHelpButton.click();await bulkHelpPanel.waitFor({state:'hidden'})
+  await bulkHelpButton.press('Enter');await bulkHelpPanel.waitFor({state:'visible'})
+  await bulkHelpButton.press('Escape');await bulkHelpPanel.waitFor({state:'hidden'})
+  assert.equal(await bulkHelpButton.evaluate(el=>el===document.activeElement),true)
+  await bulkHelpButton.click();await bulkHelpPanel.waitFor({state:'visible'})
+  await page.locator('.bulk-fixture h2').click();await bulkHelpPanel.waitFor({state:'hidden'})
+  await bulkChoice.selectOption('include')
+  assert.deepEqual(await page.locator('.review-row select').evaluateAll(elements=>elements.map(el=>el.value)), ['include','include'])
+  await page.locator('.review-row select').first().selectOption('exclude')
+  assert.equal(await bulkChoice.inputValue(),'')
+  assert.equal(await page.locator('.review-row select').last().inputValue(),'include')
+  await bulkChoice.selectOption('exclude')
+  assert.equal((await page.evaluate(()=>window.bulkState())).selected['docs/two.md'],false)
+  await page.screenshot({path:path.join(evidence,'bulk-file-actions.png')})
+  await page.locator('.bulk-fixture').screenshot({path:path.join(evidence,'bulk-file-actions-panel.png')})
+  await bulkChoice.selectOption('ignore')
+  assert.deepEqual(await page.locator('.ignore-confirm > code').allTextContents(), ['docs/one.md','docs/two.md'])
+  assert.deepEqual(await page.evaluate(()=>window.bulkIgnoreCalls),[])
+  await page.locator('.ignore-confirm').getByRole('button',{name:'取消',exact:true}).click()
+  assert.equal(await bulkChoice.inputValue(),'exclude')
+  assert.deepEqual(await page.evaluate(()=>window.bulkIgnoreCalls),[])
+  await bulkChoice.selectOption('ignore')
+  await page.evaluate(()=>{window.bulkFailure='docs/two.md';window.bulkHoldPath='docs/one.md'})
+  await page.getByRole('button',{name:'确认忽略',exact:true}).click()
+  await until(()=>page.evaluate(()=>window.bulkIgnoreCalls.length===1))
+  assert.equal(await bulkChoice.isDisabled(),true)
+  assert.equal(await page.locator('.review-row select').first().isDisabled(),true)
+  await page.evaluate(()=>window.resumeBulkIgnore())
+  await page.getByRole('alert').filter({hasText:'验收：忽略失败'}).waitFor()
+  assert.deepEqual(await page.locator('.ignore-confirm > code').allTextContents(), ['docs/two.md'])
+  assert.match(await page.locator('.ignore-notice').innerText(),/已忽略 1 个，剩余 1 个/)
+  await page.evaluate(()=>window.bulkFailure='')
+  await page.getByRole('button',{name:'确认忽略',exact:true}).click()
+  await page.locator('.ignore-confirm').waitFor({state:'detached'})
+  assert.deepEqual(await page.evaluate(()=>window.bulkIgnoreCalls),['docs/one.md','docs/two.md','docs/two.md'])
+  assert.match(await page.locator('.ignore-notice').innerText(),/已忽略 2 个，剩余 0 个/)
+
+  await page.evaluate(values=>window.openBulkFixture(values),[reviewSamples[0],{...reviewSamples[1],tracked:true}])
+  await bulkChoice.waitFor()
+  await until(()=>bulkChoice.locator('option[value="ignore"]').evaluate(el=>el.disabled))
+  assert.notEqual(await bulkChoice.locator('option[value="ignore"]').getAttribute('disabled'),null)
+  assert.equal(await page.locator('.review-row select').first().locator('option[value="ignore"]').count(),1)
+  assert.equal(await page.locator('.review-row select').last().locator('option[value="ignore"]').count(),0)
+  await page.setViewportSize({width:390,height:844})
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth))
+  await bulkHelpButton.click();await bulkHelpPanel.waitFor({state:'visible'})
+  const helpBounds=await bulkHelpPanel.boundingBox()
+  assert.ok(helpBounds.x>=0 && helpBounds.x+helpBounds.width<=390 && helpBounds.y>=0 && helpBounds.y+helpBounds.height<=844)
+  assert.equal(await bulkHelpPanel.locator('.bulk-help-limit').isVisible(),true)
+  await page.screenshot({path:path.join(evidence,'bulk-action-help-mobile.png')})
+  await bulkHelpButton.press('Escape');await bulkHelpPanel.waitFor({state:'hidden'})
+  await page.screenshot({path:path.join(evidence,'bulk-file-actions-mobile.png')})
+  await page.evaluate(()=>window.setTestLocale('en'))
+  assert.deepEqual(await page.getByLabel('Bulk action',{exact:true}).locator('option:not([value=""])').allTextContents(), ['Save all','Skip all','Ignore all'])
+  await page.getByRole('button',{name:'Bulk action help',exact:true}).click();await bulkHelpPanel.waitFor({state:'visible'})
+  assert.match(await bulkHelpPanel.innerText(), /Save these changes in a local code revision/)
+  assert.equal(await bulkHelpPanel.evaluate(el=>el.scrollWidth<=el.clientWidth),true)
+  report.checks.push('bulk options state their scope without an extra label; repeated skip hints are removed; information popover explains all three choices, supports repeat click, outside click and Escape, retains keyboard focus and fits desktop/mobile in Chinese and English')
+  report.checks.push('bulk file actions default undecided review files to skip, preserve recommended files, support save/skip/mixed single choices, confirm before ignoring, lock during work, retry only remaining failures, and respect tracked-file restrictions; mobile and English stay usable')
+  assert.deepEqual(errors, []); assert.deepEqual(blocked, [])
+  assert.ok(calls.filter(call => call.startsWith('POST')).every(call => /\/(preflight|notes-draft)$/.test(call)))
+  report.passed = true
+} catch (error) {
+  report.error = String(error); report.errors = errors; report.blocked = blocked; report.calls = calls
+  if (page) { report.dom = await page.locator('body').innerText(); await page.screenshot({ path: path.join(evidence, 'failure.png') }).catch(() => {}) }
+  throw error
+} finally {
+  await browser?.close(); await server?.close()
+  writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(report, null, 2) + '\n')
+  console.log(`${report.passed ? 'PASS' : 'FAIL'}: ${path.join(evidence, 'result.json')}`)
+}

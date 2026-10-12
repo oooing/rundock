@@ -1,5 +1,6 @@
 // Stable keys keep API messages and business comparisons independent of UI wording.
 // Each pair is [Simplified Chinese, English]. User content is never rewritten.
+import { releaseSettingsLabels, releaseSettingsDetails } from './releaseSettingsCopy'
 export type CopyPair = readonly [string, string]
 
 /** Navigation, actions, field names and states: 2–6 Chinese characters. */
@@ -560,7 +561,7 @@ export const detailCopy: Record<string, CopyPair> = {
   '上传或部署会影响外部环境，请明确确认后再继续': ['上传或上线会影响网上内容，请确认后继续。', 'Uploading or deploying changes online content. Confirm before continuing.'],
   '自动发布只接受 {0} 分支，当前为 {1}。': ['自动发布需使用 {0} 分支，当前为 {1}。', 'Automatic publishing requires branch {0}; the current branch is {1}.'],
   '还有 {0} 个新增文件未勾选，发布后远端不会包含这些文件。': ['还有 {0} 个新文件未选中，这次发布不会包含它们。', '{0} new files are not selected and will not be included.'],
-  '已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）': ['已保存本机，待上传 {0}：{1} 次代码记录，{2} 个文件', 'Saved locally; awaiting upload to {0}: {1} revisions, {2} files'],
+  '已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）': ['已保存，待上传 {0} 的代码记录：{1} 条，{2} 个文件', 'Saved code revisions awaiting upload to {0}: {1} revisions, {2} files'],
   '后台保持运行，记住选择（下次不再询问）': ['项目继续运行，下次关闭窗口时也这样处理。', 'Keep projects running and use this choice next time.'],
   '停止所有项目服务并完全退出': ['停止所有项目，然后退出软件。', 'Stop all projects and quit RunDock.'],
   '脚本已变更 — 确认{0}': ['启动文件已修改，确认{0}', 'Startup file changed. Confirm {0}.'],
@@ -813,4 +814,4 @@ export const detailCopy: Record<string, CopyPair> = {
   '暂时找不到可绑定的空闲端口；未关闭任何程序': ['暂时没有可用端口，其他程序仍在运行。', 'No available port found. Other programs are still running.'],
 }
 
-export const productCopy: Record<string, CopyPair> = { ...labelCopy, ...detailCopy }
+export const productCopy: Record<string, CopyPair> = { ...labelCopy, ...detailCopy, ...releaseSettingsDetails, ...releaseSettingsLabels }

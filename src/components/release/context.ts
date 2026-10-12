@@ -351,6 +351,7 @@ export interface ReleaseContext {
     prepareLocalCommit: () => void;
     releaseErrorMessage: (reason: unknown) => string;
     showRun: (run: ReleaseRun) => void;
+    leaveRunView: () => void;
     historyStatus: (run: ReleaseRun) => string;
     schedulePoll: (delay?: number) => void;
     poll: () => Promise<void>;

@@ -6,6 +6,7 @@ import type { ReleasePreferences } from '@/utils/releasePreferences';
 import type { ExecutionPhase, ReleaseContext } from './context';
 // All values belong to this dialog's view model; external data enters through api.
 export function installPreferences(ctx: ReleaseContext) {
+    let loadRevision = 0;
     ctx.preferenceKey = function () {
         return releasePreferenceKey(ctx.props.app.id);
     };
@@ -118,7 +119,11 @@ export function installPreferences(ctx: ReleaseContext) {
         }
     };
     ctx.load = async function () {
+        const revision = ++loadRevision;
+        const appId = ctx.props.app.id;
+        const isCurrent = () => !ctx.disposed && revision === loadRevision && ctx.props.app.id === appId;
         ctx.loading.value = true;
+        ctx.profileReady.value = false;
         ctx.error.value = '';
         ctx.errorCode.value = '';
         ctx.versionPlanNotice.value = '';
@@ -126,11 +131,11 @@ export function installPreferences(ctx: ReleaseContext) {
         try {
             // Handle rejection immediately while history/config load independently;
             // report the original preflight failure through the dialog below.
-            const localPreflight = Promise.allSettled([api.releasePreflight(ctx.props.app.id, false)] as const);
+            const localPreflight = Promise.allSettled([api.releasePreflight(appId, false)] as const);
             const [historyResult, configResult] = await Promise.allSettled([
-                api.listReleases(ctx.props.app.id), api.getReleaseConfig(ctx.props.app.id),
+                api.listReleases(appId), api.getReleaseConfig(appId),
             ] as const);
-            if (ctx.disposed)
+            if (!isCurrent())
                 return;
             ctx.history.value = historyResult.status === 'fulfilled' ? historyResult.value : [];
             if (configResult.status === 'fulfilled') {
@@ -142,14 +147,15 @@ export function installPreferences(ctx: ReleaseContext) {
                 ctx.gitOnly.value = true;
                 ctx.configNotice.value = tr("当前后端暂未启用自动发布配置，仍可继续使用基础 Git 提交与 Tag 功能。");
             }
-            ctx.loading.value = false;
+            // Keep the editable form closed until preflight restores the saved
+            // choices, versions and files. Partial data must never look ready.
             // "Publish" opens a new configuration, not the previous result.
             // Only active work resumes automatically; terminal runs remain in history.
             const resumable = ctx.history.value.find((run) => run.status === 'queued' || run.status === 'running');
             if (resumable)
                 ctx.showRun(resumable);
             const [preflightResult] = await localPreflight;
-            if (ctx.disposed)
+            if (!isCurrent())
                 return;
             if (preflightResult.status === 'rejected')
                 throw preflightResult.reason;
@@ -159,11 +165,12 @@ export function installPreferences(ctx: ReleaseContext) {
                 ctx.rememberPreferences();
         }
         catch (reason) {
-            ctx.error.value = ctx.messageOf(reason);
+            if (isCurrent())
+                ctx.error.value = ctx.messageOf(reason);
         }
         finally {
-            ctx.profileReady.value = true;
-            ctx.loading.value = false;
+            if (isCurrent())
+                ctx.loading.value = false;
         }
     };
     ctx.profileBody = function () {

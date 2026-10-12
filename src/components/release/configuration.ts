@@ -297,7 +297,7 @@ export function installConfiguration(ctx: ReleaseContext) {
         }
     };
     ctx.switchReleaseTab = async function (tab: ReleaseTab, focus = false) {
-        if (ctx.publishing.value || ctx.autoSubmitting.value || ctx.activeRun.value)
+        if (ctx.loading.value || !ctx.profileReady.value || ctx.publishing.value || ctx.autoSubmitting.value || ctx.activeRun.value)
             return;
         if (ctx.bodyRef.value)
             ctx.tabScroll[ctx.releaseTab.value] = ctx.bodyRef.value.scrollTop;

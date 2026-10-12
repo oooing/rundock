@@ -5,7 +5,9 @@ import { rememberReleaseSession } from '@/utils/releaseSession';
 import type { ReleaseContext } from './context';
 // All values belong to this dialog's view model; external data enters through api.
 export function installProgress(ctx: ReleaseContext) {
+    let viewEpoch = 0;
     ctx.showRun = function (run: ReleaseRun) {
+        viewEpoch += 1;
         if (ctx.pollTimer)
             clearTimeout(ctx.pollTimer);
         ctx.activeRun.value = run;
@@ -36,12 +38,13 @@ export function installProgress(ctx: ReleaseContext) {
     };
     ctx.poll = async function () {
         const run = ctx.activeRun.value;
+        const epoch = viewEpoch;
         if (!run || ctx.disposed)
             return;
         try {
             const lastId = ctx.logs.value.length ? ctx.logs.value[ctx.logs.value.length - 1].id : 0;
             const view = await api.getReleaseRun(run.id, lastId);
-            if (ctx.disposed || ctx.activeRun.value?.id !== run.id)
+            if (ctx.disposed || epoch !== viewEpoch || ctx.activeRun.value?.id !== run.id)
                 return;
             ctx.activeRun.value = view.run;
             ctx.runTargets.value = view.targets || [];
@@ -57,12 +60,14 @@ export function installProgress(ctx: ReleaseContext) {
                 ctx.schedulePoll();
             else {
                 ctx.history.value = await api.listReleases(ctx.props.app.id);
+                if (ctx.disposed || epoch !== viewEpoch || ctx.activeRun.value?.id !== run.id)
+                    return;
                 if (view.run.status === 'succeeded' && ctx.automationHandedOff.value && !ctx.cloudBuildSettled.value)
                     ctx.schedulePoll(15000);
             }
         }
         catch (reason) {
-            if (ctx.disposed)
+            if (ctx.disposed || epoch !== viewEpoch || ctx.activeRun.value?.id !== run.id)
                 return;
             ctx.error.value = ctx.messageOf(reason);
             ctx.schedulePoll(1500);
@@ -108,12 +113,14 @@ export function installProgress(ctx: ReleaseContext) {
         else if (action === 'regenerate-notes')
             await ctx.generateReleaseNotesDraft(true, true);
     };
-    ctx.startNew = function () {
-        ctx.candidate.value = null;
-        ctx.candidateSignature.value = '';
+    // Leaving a historical record only clears its viewer, never the release draft.
+    ctx.leaveRunView = function () {
+        viewEpoch += 1;
         if (ctx.pollTimer)
             clearTimeout(ctx.pollTimer);
-        rememberReleaseSession({ appId: ctx.props.app.id });
+        ctx.pollTimer = null;
+        if (!ctx.activeRun.value || !['queued', 'running'].includes(ctx.activeRun.value.status))
+            rememberReleaseSession({ appId: ctx.props.app.id });
         ctx.confirmAction.value = null;
         ctx.activeRun.value = null;
         ctx.logs.value = [];
@@ -125,6 +132,11 @@ export function installProgress(ctx: ReleaseContext) {
         ctx.retryMetadataLoaded.value = false;
         ctx.retryConfirmationRequired.value = undefined;
         ctx.retryConfirmationTargets.value = [];
+    };
+    ctx.startNew = function () {
+        ctx.candidate.value = null;
+        ctx.candidateSignature.value = '';
+        ctx.leaveRunView();
         ctx.releaseNotes.value = '';
         ctx.releaseNotesDirty.value = false;
         ctx.releaseNotesStale.value = false;

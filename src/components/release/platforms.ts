@@ -146,6 +146,7 @@ export function installPlatforms(ctx: ReleaseContext) {
                 if (platforms.has(platform.id))
                     ctx.togglePlatform(platform, true);
             }
+        ctx.selectSingleBuildPlatform(true);
         ctx.applySyncPolicy();
     };
     ctx.configuredActions = function (target: ReleaseTarget) {
@@ -236,7 +237,7 @@ export function installPlatforms(ctx: ReleaseContext) {
         ctx.applySyncPolicy();
     };
     ctx.selectSingleBuildPlatform = function (enteringRelease = false) {
-        if (ctx.gitOnly.value || (!enteringRelease && ctx.editedReleaseOptions.has('targets')))
+        if (ctx.releaseIntent.value !== 'formal' || ctx.gitOnly.value || (!enteringRelease && ctx.editedReleaseOptions.has('targets')))
             return;
         if (Object.values(ctx.targetChoices.value).some(choice => choice.selected))
             return;

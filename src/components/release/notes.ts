@@ -95,7 +95,8 @@ export function installNotes(ctx: ReleaseContext) {
                 ctx.buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github';
                 for (const target of ctx.configuredTargets.value)
                     ctx.targetChoices.value[target.id] = ctx.defaultTargetChoice(target);
-                if (!ctx.restoreTargetPreferences()) ctx.selectSingleBuildPlatform();
+                ctx.restoreTargetPreferences();
+                ctx.selectSingleBuildPlatform();
             }
             if (!ctx.editedReleaseOptions.has('tag'))
                 ctx.createTag.value = ctx.releaseIntent.value === 'formal';

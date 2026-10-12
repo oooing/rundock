@@ -162,6 +162,42 @@ test('multiple platforms require a choice; a sole platform can be selected autom
   }
 })
 
+test('a sole platform defaults after restoring an empty selection, while manual deselection remains explicit', () => {
+  const f = fixture({ single: true })
+  try {
+    f.profileReady.value = true
+    const platform = f.productPlatforms.value[0]
+    f.togglePlatform(platform, false)
+    f.captureTargetPreferences()
+    f.selectSingleBuildPlatform()
+    assert.equal(f.selectedTargets.value.length, 0, 'do not undo the current manual deselection')
+    f.changeReleaseIntent('save-progress')
+    assert.deepEqual(f.candidateRequest.value.selectedTargets, [])
+    f.selectSingleBuildPlatform(true)
+    assert.equal(f.targetChoices.value.desktop.selected, false, 'code-only must not auto-select builds')
+    f.changeReleaseIntent('formal')
+    assert.equal(f.selectedTargets.value.length, 1, 'returning to release defaults the sole platform even with saved empty IDs')
+  } finally { f.close() }
+})
+
+test('changing build mode defaults the sole available platform even with remembered empty IDs', () => {
+  const f = fixture({ single: true })
+  try {
+    const config = f.cloneConfig(f.releaseConfig.value)
+    config.targets.push({ ...structuredClone(config.targets[0]), id: 'desktop-local',
+      runner: { type: 'local', os: ['windows'] }, steps: { build: 'build', package: 'package' } })
+    f.applyReleaseConfig(config)
+    f.profileReady.value = true
+    f.togglePlatform(f.productPlatforms.value[0], false)
+    f.captureTargetPreferences()
+    f.changeBuildMode('local')
+    assert.deepEqual(f.selectedTargets.value.map(t => t.targetId), ['desktop-local'])
+    f.changeBuildMode('github')
+    assert.deepEqual(f.selectedTargets.value.map(t => t.targetId), ['desktop'])
+    assert.deepEqual(f.requests, [], 'default selection must not start a release')
+  } finally { f.close() }
+})
+
 test('code-only ignores build/version configuration failures but retains Git safety checks', () => {
   const f = fixture()
   try {
@@ -202,7 +238,8 @@ test('purpose is first and remains accessible during current-version local build
   assert.ok(source.indexOf('<fieldset class="publish-purpose"') < source.indexOf('<ReleaseBuildChoice'))
   assert.ok(source.indexOf('name="release-intent" value="formal"') < source.indexOf('name="release-intent" value="save-progress"'))
   assert.ok(source.indexOf('<fieldset class="publish-purpose"') < source.indexOf('<template v-if="!localBuildVisible'))
-  assert.match(source, /releaseIntent==='formal' && !targetSelectionMissing" class="block release-versions"/)
+  assert.match(source, /<ReleaseFormSection v-if="releaseIntent==='formal'" section-id="version"/)
+  assert.match(source, /v-if="targetSelectionMissing" class="section-help"/)
   assert.match(source, /:cloud-build="releaseIntent==='formal' && buildMode==='github'"/)
   assert.ok(source.indexOf('<ReleaseBuildChoice') < source.indexOf('<ReleaseSyncChoice'))
   assert.match(source, /:plan="buildPlan".*@select="changeBuildPlan"/)

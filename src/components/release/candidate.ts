@@ -101,8 +101,10 @@ export function installCandidate(ctx: ReleaseContext) {
         else {
             ctx.createTag.value = true;
         }
-        if (enteringRelease && !ctx.restoreTargetPreferences())
+        if (enteringRelease) {
+            ctx.restoreTargetPreferences();
             ctx.selectSingleBuildPlatform(true);
+        }
         ctx.applySyncPolicy();
         ctx.setDefaultCommitMessage();
     };

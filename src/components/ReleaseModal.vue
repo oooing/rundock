@@ -106,7 +106,13 @@ const publishActionLabel = computed(() => {
   return plannedVersions.value.length > 1
     ? tr('云端构建并发布 {0} 个版本', [plannedVersions.value.length]) : tr('云端构建并发布 {0}', [plannedTagNames.value[0] || ''])
 })
-function closePanel() { if (localBuildVisible.value && !preflight.value) emit('close'); else void closeModal() }
+const closeLocked = computed(() => publishing.value || autoSubmitting.value || checkingCandidate.value || retrying.value
+  || !!activeRun.value && ['queued', 'running'].includes(activeRun.value.status))
+function closePanel() {
+  if (closeLocked.value) return
+  if (localBuildVisible.value && !preflight.value) emit('close')
+  else void closeModal()
+}
 const historyOpen = ref(false)
 const historyTitle = ref<HTMLHeadingElement | null>(null)
 const historyButton = ref<HTMLButtonElement | null>(null)
@@ -155,7 +161,7 @@ async function returnToRelease() {
       <header class="m-head" :class="{'history-navigation':historyOpen}">
         <button v-if="historyOpen" type="button" class="ghost history-back" :disabled="retrying || publishing || autoSubmitting" @click="activeRun ? returnToHistory() : returnToRelease()"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="m15 5-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg><span>{{activeRun?tr('返回历史'):tr('返回发布')}}</span></button>
         <h2 ref="historyTitle" :id="historyOpen ? 'release-history-title' : undefined" :tabindex="historyOpen ? -1 : undefined"><template v-if="historyOpen">{{activeRun?tr('发布记录'):tr('发布历史')}}</template><template v-else>{{ tr('发布') }} {{app.name}}</template></h2>
-        <button class="ghost icon" :disabled="!localBuildVisible && (publishing || preferenceStatus === 'saving')" :aria-label="tr('关闭')" @click="closePanel">✕</button>
+        <button class="ghost icon" :disabled="closeLocked || !localBuildVisible && preferenceStatus === 'saving'" :aria-label="tr('关闭')" @click="closePanel">✕</button>
       </header>
 
       <nav v-show="!historyOpen" class="release-tabs" role="tablist" :aria-label="tr('发布页面')" @keydown="!historyOpen && onReleaseTabKeydown($event)">

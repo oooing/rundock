@@ -46,6 +46,9 @@ function Start-DevProcess($File, $Arguments, $Directory, $Label) {
     $script:logFiles += @($outFile, $errFile)
     $process = Start-Process -FilePath $File -ArgumentList $Arguments -WorkingDirectory $Directory `
         -WindowStyle Hidden -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    # Windows PowerShell's PassThru object otherwise loses the exit code after
+    # HasExited is observed. Keep its native handle while the worker is alive.
+    $null = $process.Handle
     $script:children += $process
     return $process
 }

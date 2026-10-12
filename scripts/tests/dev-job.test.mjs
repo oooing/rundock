@@ -8,6 +8,33 @@ import test from 'node:test';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
+test('development worker preserves restart exit code after HasExited', {skip:process.platform!=='win32',timeout:15000}, async()=>{
+ mkdirSync(path.join(root,'.tmp'),{recursive:true});
+ const dir=mkdtempSync(path.join(root,'.tmp','dev-exit-'));
+ const child=path.join(dir,'worker.ps1');writeFileSync(child,'Start-Sleep -Milliseconds 300\nexit 75\n');
+ const quote=s=>"'"+s.replaceAll("'","''")+"'";
+ const script=path.join(dir,'verify.ps1');
+ writeFileSync(script,`$ErrorActionPreference='Stop'
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile(${quote(path.join(root,'scripts/dev.ps1'))},[ref]$tokens,[ref]$errors)
+$fn=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-DevProcess'},$true)
+Invoke-Expression $fn.Extent.Text
+$script:logDir=${quote(dir)};$script:logFiles=@();$script:children=@()
+$worker=Start-DevProcess 'powershell.exe' @('-NoProfile','-File',('"'+${quote(child)}+'"')) ${quote(root)} 'worker'
+try {
+ if(-not $worker.WaitForExit(5000)){throw 'Worker timeout'}
+ if(-not $worker.HasExited -or $worker.ExitCode -ne 75){throw 'Restart exit code lost'}
+ if($script:children.Count -ne 1){throw 'Worker ownership lost'}
+ Write-Output 'restart-code-preserved'
+} finally {if(-not $worker.HasExited){$worker.Kill()}}
+`);
+ const result=await new Promise((resolve,reject)=>{
+  const process=spawn('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',script],{windowsHide:true,stdio:['ignore','pipe','pipe']});
+  let output='';process.stdout.on('data',b=>output+=b);process.stderr.on('data',b=>output+=b);
+  process.on('error',reject);process.on('close',code=>resolve({code,output}));
+ });
+ assert.equal(result.code,0,result.output);assert.match(result.output,/restart-code-preserved/);
+});
 test('forced development supervisor exit reclaims its hidden child', {skip:process.platform!=='win32',timeout:20000}, async()=>{
  mkdirSync(path.join(root,'.tmp'),{recursive:true});
  const dir=mkdtempSync(path.join(root,'.tmp','dev-job-'));

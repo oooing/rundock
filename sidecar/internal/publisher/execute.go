@@ -98,6 +98,10 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 				s.log(run.ID, "event", notice)
 			}
 		}
+		if issue := s.checkReleaseBranch(ctx, run, pf.HeadSHA); issue != nil {
+			fail("preparing", issue.Code, issue.Message)
+			return
+		}
 	}
 	if plan.hasDelivery() {
 		if err := s.preflightDeliveryBuild(ctx, run, plan); err != nil {

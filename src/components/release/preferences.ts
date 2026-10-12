@@ -66,14 +66,16 @@ export function installPreferences(ctx: ReleaseContext) {
         return ctx.preferenceSave;
     };
     ctx.closeModal = async function () {
-        if (ctx.publishing.value)
+        const locked = () => ctx.publishing.value || ctx.autoSubmitting.value || ctx.checkingCandidate.value || ctx.retrying.value
+            || !!ctx.activeRun.value && ['queued', 'running'].includes(ctx.activeRun.value.status);
+        if (locked())
             return;
         if (ctx.preferenceTimer)
             ctx.saveRememberedPreferences();
         await ctx.preferenceSave;
         // Closing dismisses the panel, not a save confirmation. A failed
         // autosave must not trap the user; it remains an error until dismissal.
-        if (ctx.disposed)
+        if (ctx.disposed || locked())
             return;
         ctx.emit('close');
     };

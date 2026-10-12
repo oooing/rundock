@@ -83,6 +83,22 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		fail("preparing", "execution_plan_invalid", "冻结的发布执行计划无法读取")
 		return
 	}
+	if run.PushRemote {
+		if checker, ok := s.runner.(networkReadyRunner); ok {
+			checkCtx, cancel := commandContext(ctx, remotePreflightTimeout)
+			notice, err := checker.CheckNetwork(checkCtx, run.RepoRoot, run.RemoteName)
+			if err != nil {
+				issue := remoteFailure(checkCtx, "连接代码仓库", err.Error(), err)
+				cancel()
+				fail("preparing", issue.Code, issue.Message)
+				return
+			}
+			cancel()
+			if notice != "" {
+				s.log(run.ID, "event", notice)
+			}
+		}
+	}
 	if plan.hasDelivery() {
 		if err := s.preflightDeliveryBuild(ctx, run, plan); err != nil {
 			s.failDelivery(run, "delivery_preflight", err)

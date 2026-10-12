@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/launcher-sidecar/internal/netproxy"
 )
 
 // One shared budget covers branch fetch and (only when creating tags) the tag
@@ -67,7 +69,10 @@ func remoteFailure(ctx context.Context, operation, output string, err error) Iss
 	}
 	lower := strings.ToLower(detail)
 	issue := Issue{Code: "remote_check_failed", Message: operation + "失败"}
+	var proxyErr *netproxy.UnavailableError
 	switch {
+	case errors.As(err, &proxyErr):
+		issue = Issue{Code: "remote_proxy_unavailable", Message: "本机网络代理不可用；请开启代理软件或检查连接设置后重试"}
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) ||
 		containsAny(lower, "timed out", "timeout was reached", "i/o timeout", "connection timeout"):
 		issue = Issue{Code: "remote_timeout", Message: operation + "超时；请检查网络或代理，或关闭“提交后上传”仅保存在本地"}
@@ -135,6 +140,8 @@ func uploadFailureMessage(output string, err error) string {
 		message = "远端有尚未同步的代码，没有覆盖它。本地提交已保留；请用 Git 工具拉取并合并远端更新，再重新发布。"
 	case issue.Code == "remote_auth_failed":
 		message = "上传账号没有通过验证。本地提交和版本记录已保留；请在 Git 工具中登录有仓库权限的账号，再重试上传。"
+	case issue.Code == "remote_proxy_unavailable":
+		message = "本机网络代理不可用，未找到已验证的替代连接。本地代码记录和安装包已保留；开启代理后重试上传即可。"
 	case issue.Code == "remote_network_failed" || issue.Code == "remote_timeout":
 		message = "连接上传服务器失败。本地提交和版本记录已保留；网络恢复后点击“重试上传”，或选择“稍后再上传”退出。"
 	}

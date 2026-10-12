@@ -7,15 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/launcher-sidecar/internal/delivery"
+	"github.com/launcher-sidecar/internal/netproxy"
 	"github.com/launcher-sidecar/internal/store"
 )
 
@@ -410,22 +409,8 @@ func githubRepository(remote string) string {
 
 func readGitHub(ctx context.Context, endpoint string, out any) error {
 	// Prefer existing GitHub CLI authentication; do not save or print tokens.
-	gh, err := exec.LookPath("gh")
-	if err != nil {
-		if home, e := os.UserHomeDir(); e == nil {
-			p := filepath.Join(home, ".local", "bin", "gh.exe")
-			if _, e = os.Stat(p); e == nil {
-				gh = p
-			}
-		}
-	}
-	if gh != "" {
-		cmd := exec.CommandContext(ctx, gh, "api", "--hostname", "github.com", endpoint)
-		cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
-		cmd.WaitDelay = time.Second
-		if data, e := cmd.Output(); e == nil {
-			return json.Unmarshal(data, out)
-		}
+	if err := (delivery.CLI{}).JSON(ctx, "GET", endpoint, nil, out); err == nil {
+		return nil
 	}
 	// Public repositories can be read without authentication. Network/auth/rate
 	// errors remain 'unavailable', never a build failure, and are backed off.
@@ -436,7 +421,11 @@ func readGitHub(ctx context.Context, endpoint string, out any) error {
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "RunDock")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client, err := netproxy.HTTPClient(ctx, request.URL.String(), 15*time.Second)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
 	response, err := client.Do(request)
 	if err != nil {
 		return err

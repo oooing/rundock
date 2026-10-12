@@ -35,7 +35,20 @@ func (execRunner) Run(ctx context.Context, dir, name string, args ...string) (st
 }
 
 func (execRunner) RunWithInput(ctx context.Context, dir, name string, input []byte, args ...string) (string, error) {
-	networkGit := name == "git" && len(args) > 2 && contains([]string{"fetch", "ls-remote", "push"}, args[2])
+	if name == "git" && len(args) > 2 && contains([]string{"fetch", "ls-remote", "push"}, args[2]) {
+		prepared, _, err := prepareGitNetwork(ctx, dir, args, false)
+		if err != nil {
+			return err.Error(), err
+		}
+		args = prepared
+	}
+	return runCommand(ctx, dir, name, input, args...)
+}
+
+// Raw execution is also used for read-only proxy probes, without recursively
+// invoking recovery. A write is executed at most once, after route selection.
+func runCommand(ctx context.Context, dir, name string, input []byte, args ...string) (string, error) {
+	networkGit := name == "git" && gitNetworkCommand(args)
 	if name == "git" {
 		args = append([]string{"-c", "credential.interactive=false", "-c", "core.askPass="}, args...)
 	}

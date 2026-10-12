@@ -72,12 +72,16 @@ try {
     Assert-PortFree $backendPort
     Assert-PortFree $frontendPort
     Add-Type -Path (Join-Path $PSScriptRoot 'dev-job.cs')
-    [RunDockDevJob]::Attach()
     $DataDir = [IO.Path]::GetFullPath($DataDir)
+    $defaultDevDir = [IO.Path]::GetFullPath((Join-Path $env:APPDATA 'launcher-sidecar-dev'))
+    if ($DataDir.TrimEnd('\') -ieq $defaultDevDir.TrimEnd('\') -and [RunDockDevJob]::HasVirtualizedData((Join-Path $DataDir 'launcher.db'))) {
+        throw 'AppData is virtualized in this packaged process. Start dev.bat from Windows Explorer to use the original development data, or pass an explicit non-AppData -DataDir. No database was opened.'
+    }
     $productionDir = [IO.Path]::GetFullPath((Join-Path $env:APPDATA 'launcher-sidecar'))
     if ($DataDir.TrimEnd('\') -ieq $productionDir.TrimEnd('\')) {
         throw 'Development must not use the installed application data directory.'
     }
+    [RunDockDevJob]::Attach()
     $env:LAUNCHER_DATA_DIR = $DataDir
     $env:LAUNCHER_PORT = "$backendPort"
     $env:LAUNCHER_DEV = '1'

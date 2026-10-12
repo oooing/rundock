@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/launcher-sidecar/internal/netproxy"
 )
 
 // CLI delegates credential access to gh's OS keyring. Tokens are never read,
@@ -45,7 +47,23 @@ func cliCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
 		cmd.Env = append(cmd.Env, v)
 	}
 	cmd.Env = append(cmd.Env, "GH_PROMPT_DISABLED=1", "GH_PAGER=cat", "NO_COLOR=1")
+	if len(args) > 0 && args[0] == "api" {
+		cmd.Env, err = netproxy.PrepareEnvironment(ctx, cmd.Env, apiDestination(args))
+		if err != nil {
+			return nil, err
+		}
+	}
 	return cmd, nil
+}
+
+func apiDestination(args []string) string {
+	for _, arg := range args {
+		u, err := url.Parse(arg)
+		if err == nil && u.Scheme == "https" && (u.Host == "api.github.com" || u.Host == "uploads.github.com") {
+			return "https://" + u.Host + "/"
+		}
+	}
+	return "https://api.github.com/"
 }
 
 func (c CLI) Identity(ctx context.Context) (string, error) {

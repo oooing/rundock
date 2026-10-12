@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/launcher-sidecar/internal/store"
 	"regexp"
+
+	"github.com/launcher-sidecar/internal/netproxy"
+	"github.com/launcher-sidecar/internal/store"
 )
 
 type File struct {
@@ -64,6 +66,10 @@ func ErrorInfo(err error) (string, string) {
 	var e *Error
 	if errors.As(err, &e) {
 		return e.Code, e.Message
+	}
+	var proxyError *netproxy.UnavailableError
+	if errors.As(err, &proxyError) {
+		return "github_proxy_unavailable", proxyError.Error()
 	}
 	if errors.Is(err, context.Canceled) {
 		return "delivery_cancelled", "交付已取消；可核对远端状态后继续"

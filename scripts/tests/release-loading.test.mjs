@@ -12,11 +12,12 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
-function fixture() {
+function fixture({ preparationsError = false } = {}) {
   const requests = [], applied = [], resumed = []
   const api = Object.fromEntries(['releasePreflight', 'listReleases', 'getReleaseConfig'].map(method => [method, appId => {
     const request = { method, appId, ...deferred() }; requests.push(request); return request.promise
   }]))
+  api.listReleasePreparations = async () => { if (preparationsError) throw Error('offline'); return [] }
   const exports = {}
   new Function('require', 'exports', code)(id => {
     if (id === '@/api/http') return { api, ApiError: Error }
@@ -27,9 +28,9 @@ function fixture() {
   const ctx = { props: { app: { id: 'fixture' } }, disposed: false, editedReleaseOptions: new Set(),
     applyReleaseConfig: config => applied.push(['config', config]), applyPreflight: pf => applied.push(['preflight', pf]),
     showRun: run => resumed.push(run), messageOf: error => error.message }
-  for (const key of ['loading', 'profileReady', 'error', 'errorCode', 'versionPlanNotice', 'configNotice', 'history', 'configEndpointAvailable', 'gitOnly']) ctx[key] = ref(null)
+  for (const key of ['loading', 'profileReady', 'error', 'errorCode', 'versionPlanNotice', 'configNotice', 'history', 'configEndpointAvailable', 'gitOnly', 'preparationHistory', 'preparation', 'submissionUncertain']) ctx[key] = ref(null)
   exports.installPreferences(ctx)
-  return { ctx, requests, applied, resumed, settle(batch, pf = { version: '2.0.34' }) {
+  return { ctx, api, requests, applied, resumed, settle(batch, pf = { version: '2.0.34' }) {
     requests[batch * 3].resolve(pf); requests[batch * 3 + 1].resolve([]); requests[batch * 3 + 2].resolve({ targets: [] })
   } }
 }
@@ -76,5 +77,28 @@ test('late failures from a disposed dialog or superseded request do not alter st
     assert.equal(f.ctx.error.value, ''); assert.equal(f.ctx.profileReady.value, false)
     assert.equal(f.ctx.loading.value, true)
     if (second) { f.settle(1); await second }
+  }
+})
+
+test('unreadable history or preparation journal cannot reopen an unchecked publish form', async () => {
+  for (const journal of [true, false]) {
+    const f = fixture({ preparationsError: journal }), pending = f.ctx.load()
+    f.requests[0].resolve({})
+    if (journal) f.requests[1].resolve([])
+    else f.requests[1].reject(Error('offline'))
+    f.requests[2].resolve({})
+    await pending
+    assert.equal(f.ctx.profileReady.value, false)
+    assert.equal(f.ctx.loading.value, false, 'Reload remains accessible')
+    assert.equal(f.ctx.submissionUncertain.value, true)
+    assert.match(f.ctx.error.value, /无法确认上次提交结果/)
+    assert.deepEqual(f.resumed, [])
+    f.api.listReleasePreparations = async () => []
+    const retry = f.ctx.load()
+    f.settle(1)
+    await retry
+    assert.equal(f.ctx.profileReady.value, true)
+    assert.equal(f.ctx.submissionUncertain.value, false)
+    assert.equal(f.ctx.error.value, '')
   }
 })

@@ -1,15 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
-import { parse } from '@vue/compiler-sfc'
 import { ref, computed } from 'vue'
-import ts from 'typescript'
+import { loadMembers } from './helpers/release-members.mjs'
 
 // Exercise the actual modal decision handlers without publishing or running tools.
-const source = parse(readFileSync('src/components/ReleaseModal.vue', 'utf8')).descriptor.scriptSetup.content
-const ast = ts.createSourceFile('release.ts', source, ts.ScriptTarget.Latest, true)
 const names = ['recordSensitiveException', 'chooseSafetyFile', 'continueResolvedReview']
-const code = ts.transpileModule(ast.statements.filter(s => names.includes(s.name?.text)).map(s => s.getText(ast)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 function fixture(sameFile = false) {
   const findings = ['one', 'two'].map((fingerprint, i) => ({ path: sameFile ? 'a' : ['a', 'b'][i], fingerprint, contentFingerprint: 'bytes' }))
   const selected = ref({ a: true, b: true }), manualDecisions = ref([]), sensitiveExceptions = ref([])
@@ -23,7 +18,7 @@ function fixture(sameFile = false) {
   let checks = 0
   const inspectCandidate = async () => { checks++; return true }
   const deps = { selected, manualDecisions, sensitiveExceptions, candidate, findingDecisions, reviewSignature, resolvingReview, checkingCandidate, currentCandidateSignature, reviewStale, pendingFindings, inspectCandidate }
-  const handlers = new Function(...Object.keys(deps), `${code};return {${names.join(',')}}`)(...Object.values(deps))
+  const handlers = loadMembers(names, deps)
   return { ...deps, ...handlers, findings, version, checks: () => checks }
 }
 test('two allowances are recorded independently and validated only after the last', () => {

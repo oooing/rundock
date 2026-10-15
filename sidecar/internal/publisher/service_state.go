@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func (s *Service) repositoryBusy(repo string) bool {
@@ -57,6 +58,7 @@ func (s *Service) release(repo string) {
 	}
 	delete(s.active, key)
 	s.mu.Unlock()
+	s.cleanIdleCandidates(time.Now())
 }
 
 func (s *Service) log(runID, stream, text string) {
@@ -181,6 +183,18 @@ func (s *Service) GetRun(runID string, since int64) (*RunView, error) {
 		return nil, err
 	}
 	plan, _ := parseExecutionPlan(run.ExecutionPlan)
+	// Display and delivery matching follow the saved plan, not edited settings.
+	if plan != nil {
+		for _, target := range targets {
+			for _, definition := range plan.Targets {
+				if definition.ID == target.TargetID {
+					target.Name = definition.Name
+					target.VersionGroup = definition.VersionGroup
+					break
+				}
+			}
+		}
+	}
 	confirmationTargets := retryCustomExternalTargets(run, plan, targets)
 	cloudBuild, _ := s.store.GetCloudBuild(runID)
 	deliveries, err := s.store.ReleaseDeliveries(runID)
@@ -242,6 +256,7 @@ func stageText(stage string) string {
 		"publishing_targets": "正在交付所选发布目标", "target_publish": "正在上传",
 		"local_saving":  "正在保存本地产物",
 		"target_deploy": "正在部署", "completed": "发布完成",
-		"delivery_preparing": "正在验证并保存产物", "delivery_preflight": "正在核对交付条件", "delivery_publish": "正在上传并核验 GitHub Release",
+		"delivery_connecting": "正在连接 GitHub，核对账号与自动发布配置",
+		"delivery_preparing":  "正在验证并保存产物", "delivery_preflight": "正在核对交付条件", "delivery_publish": "正在上传并核验 GitHub Release",
 	}[stage]
 }

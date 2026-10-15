@@ -31,7 +31,7 @@ function normalizeReleaseCandidate(view: ReleaseCandidate): ReleaseCandidate {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public code = '', public preflight?: ReleasePreflight) {
+  constructor(message: string, public code = '', public preflight?: ReleasePreflight, public status = 0) {
     super(message)
     this.name = 'ApiError'
   }
@@ -54,7 +54,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new ApiError(tr(msg), code, preflight)
+    throw new ApiError(tr(msg), code, preflight, r.status)
   }
   return r.json() as Promise<T>
 }
@@ -152,10 +152,15 @@ export const api = {
     req<import('@/types').ReleaseFilePreview>(`/api/apps/${encodeURIComponent(id)}/release/file-preview?path=${encodeURIComponent(path)}`, { signal }),
   ignoreReleaseFile: (id: string, path: string, contentFingerprint: string) =>
     req<{ignoreFile:string;preflight:ReleasePreflight}>('/api/apps/'+encodeURIComponent(id)+'/release/ignore-file', {method:'POST',body:JSON.stringify({path,contentFingerprint})}),
+  ignoreReleaseFiles: (id: string, files: Array<{path:string;contentFingerprint:string}>) =>
+    req<{ignoreFiles:string[];preflight:ReleasePreflight}>('/api/apps/'+encodeURIComponent(id)+'/release/ignore-file', {method:'POST',body:JSON.stringify({files})}),
   releaseFindingContext: (id:string,candidateId:string,fingerprint:string,expanded:boolean,signal?:AbortSignal) =>
     req<import('@/types').ReleaseFindingContext>(`/api/apps/${encodeURIComponent(id)}/release/finding-context?${new URLSearchParams({candidateId,fingerprint,expanded:String(expanded)})}`,{signal}),
+  listReleasePreparations: (id: string) => req<import('@/components/release/preparation').ReleasePreparation[]>(`/api/apps/${id}/release/preparations`),
+  saveReleasePreparation: (id: string, body: import('@/components/release/preparation').ReleasePreparation) => req<import('@/components/release/preparation').ReleasePreparation>(`/api/apps/${id}/release/preparations`, {method:'PUT',body:JSON.stringify(body)}),
   prepareReleaseCandidate: (id: string, body: ReleaseCandidateRequest, signal?:AbortSignal) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate`, {method:'POST', body:JSON.stringify(body),signal}).then(normalizeReleaseCandidate),
   checkReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/check`, {method:'POST', body:JSON.stringify({candidateId})}).then(normalizeReleaseCandidate),
+  reviewReleaseCandidate: (id: string, candidateId: string, sensitiveExceptions: ReleaseCandidateRequest['sensitiveExceptions'], signal?:AbortSignal) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/review`, {method:'POST', body:JSON.stringify({candidateId,sensitiveExceptions}),signal}).then(normalizeReleaseCandidate),
   cancelReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/cancel`, {method:'POST', body:JSON.stringify({candidateId})}).then(normalizeReleaseCandidate),
   getReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/${candidateId}`).then(normalizeReleaseCandidate),
   unstageReleaseFiles: (id: string, statusFingerprint: string) =>

@@ -377,15 +377,20 @@ func parseCommittedChanges(raw string) []CommittedFileChange {
 }
 
 func statusFingerprint(repo, head, raw string, changes []FileChange) string {
+	return statusFingerprintWithHashes(head, raw, changes, fileHashes(repo, changes, nil))
+}
+
+// Hashes belong to this request only: never reuse them across preflights.
+func statusFingerprintWithHashes(head, raw string, changes []FileChange, contentHashes map[string]string) string {
 	raw = filterUntrackedDiagnosticsStatus(raw)
-	filteredChanges := make([]FileChange, 0, len(changes))
+	hashes := make(map[string]string, len(changes))
 	for _, change := range changes {
 		if !isUntrackedDiagnosticsChange(change) {
-			filteredChanges = append(filteredChanges, change)
+			key := filepath.ToSlash(change.Path)
+			hashes[key] = contentHashes[key]
 		}
 	}
 	parts := []string{head, raw}
-	hashes := fileHashes(repo, filteredChanges, map[string]bool{})
 	keys := make([]string, 0, len(hashes))
 	for key := range hashes {
 		keys = append(keys, key)
@@ -728,20 +733,7 @@ func restoreFilesSafely(originals, expected map[string][]byte) []string {
 }
 
 func fileHashes(repo string, changes []FileChange, excluded map[string]bool) map[string]string {
-	out := map[string]string{}
-	for _, change := range changes {
-		rel := filepath.ToSlash(change.Path)
-		if excluded[rel] {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(rel)))
-		if err != nil {
-			out[rel] = "<missing>"
-			continue
-		}
-		h := sha256.Sum256(b)
-		out[rel] = hex.EncodeToString(h[:])
-	}
+	out, _ := fileHashesContext(context.Background(), repo, changes, excluded)
 	return out
 }
 

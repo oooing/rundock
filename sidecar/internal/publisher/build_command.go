@@ -11,10 +11,19 @@ import (
 
 // Build processes get a process-tree lifetime and never inherit GitHub upload
 // credentials. Project-specific signing remains in the explicitly trusted script.
-func runBuildCommand(ctx context.Context, dir, command string) (string, error) {
+func runBuildCommand(ctx context.Context, dir, command string) (logText string, commandErr error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	workspace, err := newScratch("command")
+	if err != nil {
+		return "", fmt.Errorf("无法创建构建临时目录: %w", err)
+	}
+	defer func() {
+		if err := workspace.cleanup(); err != nil {
+			logText += "\n部分临时文件仍被占用，RunDock 将自动重试清理。"
+		}
+	}()
 	name, args := checkShell(command)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
@@ -27,8 +36,9 @@ func runBuildCommand(ctx context.Context, dir, command string) (string, error) {
 		cmd.Env = append(cmd.Env, entry)
 	}
 	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GH_PROMPT_DISABLED=1")
+	cmd.Env = scratchEnvironment(cmd.Env, workspace.Dir)
 	prepareCheckProcess(cmd)
-	out := &limitedBuffer{max: maxCheckLogBytes}
+	out := &buildOutputBuffer{max: maxCheckLogBytes}
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Start(); err != nil {

@@ -84,7 +84,11 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 			break
 		}
 	}
-	pf.StatusFingerprint = statusFingerprint(root, pf.HeadSHA, statusRaw, pf.Changes)
+	contentHashes, hashErr := fileHashesContext(ctx, root, pf.Changes, nil)
+	if hashErr != nil {
+		return nil, hashErr
+	}
+	pf.StatusFingerprint = statusFingerprintWithHashes(pf.HeadSHA, statusRaw, pf.Changes, contentHashes)
 	if !checkRemote {
 		s.readCachedRemoteChanges(ctx15, pf)
 	}
@@ -93,7 +97,7 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 		if checkRemote && len(pf.BlockingIssues) == 0 {
 			s.checkRemote(ctx, pf, false)
 		}
-		pf.Classifications = classifyChanges(root, pf.Changes, nil, nil)
+		pf.Classifications = classifyChangesWithHashes(root, pf.Changes, nil, nil, contentHashes)
 		pf.CanRelease = len(pf.BlockingIssues) == 0
 		return pf, nil
 	}
@@ -108,7 +112,8 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 	var sourceOnlyVersionGroup *planVersionGroup
 	repositoryScopedSourceOnly := false
 	configuredVersionGroups := []releaseconfig.VersionGroup{}
-	if cfg, configErr := s.releaseConfig.Get(ctx, appID); configErr != nil {
+	cfg, configErr := s.releaseConfig.Get(ctx, appID)
+	if configErr != nil {
 		pf.BlockingIssues = append(pf.BlockingIssues, Issue{Code: "release_config_invalid", Message: "已保存的发布配置无效：" + configErr.Error()})
 	} else {
 		configuredVersionGroups = append(configuredVersionGroups, cfg.VersionGroups...)
@@ -232,10 +237,10 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 		s.compareReleaseContent(ctx, pf, pf.remoteTags)
 	}
 	rules := []releaseconfig.FileRule{}
-	if cfg, configErr := s.releaseConfig.Get(ctx, appID); configErr == nil && cfg != nil {
+	if configErr == nil && cfg != nil {
 		rules = cfg.FileRules
 	}
-	pf.Classifications = classifyChanges(root, pf.Changes, rules, nil)
+	pf.Classifications = classifyChangesWithHashes(root, pf.Changes, rules, nil, contentHashes)
 	if pf.Classifications == nil {
 		pf.Classifications = []FileClassification{}
 	}
@@ -244,7 +249,26 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 }
 
 func (s *Service) repositoryOperationActive(ctx context.Context, repo string) bool {
-	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply"} {
+	markers := []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply"}
+	args := []string{"rev-parse"}
+	for _, marker := range markers {
+		args = append(args, "--git-path", marker)
+	}
+	raw, err := s.git(ctx, repo, args...)
+	paths := nonEmptyLines(raw)
+	if err == nil && len(paths) == len(markers) {
+		for _, path := range paths {
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(repo, path)
+			}
+			if _, err := os.Stat(path); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	// Preserve compatibility with older Git versions and injected runners.
+	for _, marker := range markers {
 		path, err := s.git(ctx, repo, "rev-parse", "--git-path", marker)
 		if err != nil || path == "" {
 			continue

@@ -16,6 +16,8 @@ func TestSensitiveSourceExpressionsAreNotCredentialLiterals(t *testing.T) {
 		"client.ts":   "const token = useAuthStore.getState().accessToken;\nrefreshToken: parsed.refresh_token,\naccess_token: z.string().min(1),\ntoken_type: z.literal('bearer'),\n",
 		"test.py":     "self.assertFalse(policy_snapshot({'groq_api_key': 'secret'})['enabled'])\nreturn {'token': create_access_token(1)}\n",
 		"messages.py": "'API_KEY=your_configuration_value': 'missing',\n",
+		"sign.ps1":    "$info.EnvironmentVariables['TAURI_SIGNING_PRIVATE_KEY'] = $signing.privateKey\n$info.EnvironmentVariables['TAURI_SIGNING_PRIVATE_KEY_PASSWORD'] = $signing.password\n$oldToken = $env:GITHUB_TOKEN\n",
+		"module.psm1": "$private_key = Get-Content -LiteralPath $keyPath\n$token = Get-SavedToken\n",
 	}
 	for name, body := range cases {
 		if got := scanSensitiveFile(name, []byte(body)); len(got) != 0 {
@@ -32,6 +34,8 @@ func TestSensitiveQuotedLiteralsStillBlockedAndRedacted(t *testing.T) {
 		".env.example": "API_TOKEN=" + secret + " # example\n",
 		"config.yml":   "api_key: " + secret + "\n",
 		"notes.txt":    "API_TOKEN=" + secret + "\n",
+		"sign.ps1":     "$env:API_TOKEN = '" + secret + "'\n",
+		"module.psm1":  "$private_key = \"" + secret + "\"\n",
 	} {
 		got := scanSensitiveFile(name, []byte(body))
 		if len(got) == 0 || got[0].Kind != "secret-assignment" {

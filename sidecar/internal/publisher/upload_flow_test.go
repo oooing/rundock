@@ -3,12 +3,13 @@ package publisher
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestUploadFailureKeepsLocalReleaseWithoutRemotePrecheck(t *testing.T) {
+func TestUploadStopsBeforeMutationForOfflineOrBehindBranch(t *testing.T) {
 	for _, scenario := range []string{"offline", "tag-conflict", "branch-conflict", "new-branch"} {
 		t.Run(scenario, func(t *testing.T) {
 			svc, repo, cleanup := newReleaseFixture(t)
@@ -45,8 +46,24 @@ func TestUploadFailureKeepsLocalReleaseWithoutRemotePrecheck(t *testing.T) {
 				t.Fatalf("upload prevented creation of local release: %v", err)
 			}
 			done := waitRelease(t, svc, run.ID)
-			if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 {
-				t.Fatalf("unnecessary precheck: %v", runner.calls)
+			if scenario == "offline" || scenario == "branch-conflict" {
+				wantCode := "remote_check_failed"
+				if scenario == "branch-conflict" {
+					wantCode = "branch_behind"
+				}
+				if done.Status != "failed" || done.Stage != "preparing" || done.ErrorCode != wantCode || done.CommitSHA != "" {
+					t.Fatalf("remote problem not caught before mutation: %+v", done)
+				}
+				if uploadTestGit(t, repo, "rev-parse", "HEAD") != pf.HeadSHA || uploadTestGit(t, repo, "tag", "--list") != "" || uploadTestGit(t, repo, "diff", "--cached") != "" || uploadTestGit(t, remote, "rev-parse", "main") != originalRemote {
+					t.Fatal("failed preflight changed local or remote code")
+				}
+				if raw, err := os.ReadFile(filepath.Join(repo, "tracked.txt")); err != nil || strings.TrimSpace(string(raw)) != "saved local work" {
+					t.Fatal("unsaved work was lost")
+				}
+				return
+			}
+			if runner.count("fetch") != 0 || runner.count("ls-remote") != 1 {
+				t.Fatalf("expected exactly one branch check: %v", runner.calls)
 			}
 			if done.CommitSHA == "" || uploadTestGit(t, repo, "rev-parse", "v1.0.1^{commit}") != done.CommitSHA || uploadTestGit(t, repo, "show", "HEAD:tracked.txt") != "saved local work" {
 				t.Fatal("local release was lost")

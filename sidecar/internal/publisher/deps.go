@@ -4,7 +4,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -25,7 +24,7 @@ func findMissingLocalDependencies(candidateRoot, sourceRoot string, selected []s
 		raw, err := os.ReadFile(filepath.Join(candidateRoot, filepath.FromSlash(rel)))
 		if err != nil {
 			if !strings.Contains(classByPath[rel].Status, "D") {
-				findings = append(findings, DependencyFinding{Path: rel, Missing: rel, Blocked: true, Reason: "无法读取选中文件，不能验证依赖关系"})
+				findings = append(findings, DependencyFinding{Kind: "unreadable", Path: rel, Missing: rel, Blocked: true, Reason: "无法读取选中文件，不能验证依赖关系"})
 			}
 			continue
 		}
@@ -52,15 +51,22 @@ func findMissingLocalDependencies(candidateRoot, sourceRoot string, selected []s
 			}
 			class := classByPath[resolved]
 			finding := DependencyFinding{
+				Kind: "missing",
 				Path: rel, Reference: spec, Missing: resolved, Suggestion: resolved,
-				Reason: "选中文件引用了候选版本中不存在的本地模块", Blocked: true,
+				Reason: "未在保存副本中找到此引用；可能由构建生成或使用其他解析规则，由项目检查和构建确认", Blocked: false,
+			}
+			if sourceExists(sourceRoot, resolved) {
+				finding.Kind = "not_selected"
+			} else if path.Ext(resolved) == "" {
+				finding.Kind = "unresolved"
+				finding.Reason = "未识别此引用对应的文件；由项目检查和构建确认，不要求补齐推测的文件"
 			}
 			if class.Category == CategoryLocal || class.Category == CategorySensitive {
 				finding.Reason = "引用指向被排除的本地资料或敏感文件，不会自动加入发布"
 			} else if class.Category == CategoryReview {
 				finding.Reason = "引用指向需要确认的文件，不能自动加入"
 			} else if sourceExists(sourceRoot, resolved) && !selectedSet[resolved] {
-				finding.Reason = "确定的配套文件未被选入候选版本"
+				finding.Reason = "本机有同名文件未选入；是否需要它，由项目检查和构建确认"
 			}
 			findings = append(findings, finding)
 		}
@@ -90,28 +96,25 @@ func sourceExists(root, rel string) bool {
 
 func localImportSpecs(from, content string) []string {
 	ext := strings.ToLower(path.Ext(from))
-	specs := []string{}
 	switch ext {
 	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx":
 		return localJSImportSpecs(content)
 	case ".vue":
 		return localVueImportSpecs(content)
-	case ".py":
-		for _, match := range pyImport.FindAllStringSubmatch(content, -1) {
-			spec := match[1]
-			if spec == "" && len(match) > 2 {
-				spec = match[2]
-			}
-			if spec != "" {
-				specs = append(specs, spec)
-			}
-		}
 	}
-	return specs
+	// Python's module search and imports in strings/comments cannot be determined
+	// by a regular expression. Let the project's own tools validate that language.
+	return nil
 }
 
 func resolveOneLocalModule(candidateRoot, sourceRoot, dir, spec string) (string, bool, string) {
 	spec = strings.TrimSpace(spec)
+	// Bundler resource modifiers do not belong to the filename (e.g. ?raw, ?url).
+	if strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../") {
+		if index := strings.IndexAny(spec, "?#"); index >= 0 {
+			spec = spec[:index]
+		}
+	}
 	if spec == "" {
 		return "", false, ""
 	}
@@ -141,7 +144,8 @@ func resolveOneLocalModule(candidateRoot, sourceRoot, dir, spec string) (string,
 	if path.Ext(joined) != "" {
 		return joined, true, ""
 	}
-	return joined, false, "无法唯一确定本地模块路径（未找到文件）：" + spec
+	// This is advisory only. Keep the requested path, never invent a missing file.
+	return joined, true, ""
 }
 
 func pythonRelative(spec string) string {
@@ -188,6 +192,5 @@ func moduleCandidates(joined string) []string {
 }
 
 var (
-	pyImport     = regexp.MustCompile(`(?m)(?:from\s+(\.[\w.]*)\s+import|import\s+(\.[\w.]*))`)
 	jsExtensions = []string{".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".vue", ".json"}
 )

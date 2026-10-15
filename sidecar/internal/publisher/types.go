@@ -98,6 +98,7 @@ type SensitiveFinding struct {
 }
 
 type DependencyFinding struct {
+	Kind       string `json:"kind,omitempty"`
 	Path       string `json:"path"`
 	Reference  string `json:"reference"`
 	Missing    string `json:"missing"`

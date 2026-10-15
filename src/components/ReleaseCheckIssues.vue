@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import ReleaseFindingSource from './ReleaseFindingSource.vue'
 import { tr } from '@/i18n'
-import { groupSensitiveFindings, hasReleaseIssues, isFileReviewCheck, releaseCheckPresentation } from '@/utils/releaseIssues'
+import { groupSensitiveFindings, hasReleaseIssues, isFileReviewCheck, releaseCheckPresentation, dependencyPresentation } from '@/utils/releaseIssues'
 import type { ReleaseCandidate, ReleaseFileClassification } from '@/types'
 const props = defineProps<{appId:string;candidate:ReleaseCandidate;files:ReleaseFileClassification[];selected:Record<string,boolean>;busy:boolean;stale:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean}>()
 const emit = defineEmits<{choose:[file:ReleaseFileClassification,included:boolean];check:[];review:[];exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
@@ -17,6 +17,7 @@ function selectedFile(path:string){return props.files.find(file=>file.path===pat
 function addableFile(path:string){return props.files.find(file=>file.path===path && file.category==='recommend' && !props.selected[path])}
 function exclude(path:string){const file=selectedFile(path);if(file && !props.busy)emit('choose',file,false)}
 function include(path:string){const file=addableFile(path);if(file && !props.busy && !props.stale)emit('choose',file,true)}
+function dependencyMessage(finding:ReleaseCandidate['dependencyFindings'][number]){return dependencyPresentation(finding,props.files)}
 </script>
 <template>
   <div class="check-issues">
@@ -26,9 +27,12 @@ function include(path:string){const file=addableFile(path);if(file && !props.bus
       <ReleaseFindingSource v-for="finding in group.findings" :key="candidate.id+finding.fingerprint" :app-id="appId" :candidate-id="candidate.id" :finding="finding" :busy="busy" :stale="stale" :can-exclude="!!selectedFile(group.path)" :decision="stale ? undefined : findingDecisions?.[finding.fingerprint]" @confirm="emit('exception',finding,'用户确认：仅为测试数据，不是真实凭据')" @exclude="exclude(group.path)" @check="emit('check')" />
     </article>
     <article v-for="finding in missing" :key="`${finding.path}:${finding.reference}`" class="issue-card">
-      <strong>{{tr('缺少配套文件')}}</strong><code class="issue-path">{{finding.missing}}</code>
-      <p>{{addableFile(finding.missing)?tr('文件在本机，但未选入本次提交。'):tr('请补齐文件或修正引用后，重新检查。')}}</p>
+      <strong>{{tr(dependencyMessage(finding).title)}}</strong>
+      <p>{{tr('引用文件')}} <code>{{finding.path}}</code></p>
+      <p>{{tr('需要文件')}} <code>{{finding.missing}}</code></p>
+      <p>{{tr(dependencyMessage(finding).suggestion)}}</p>
       <button v-if="addableFile(finding.missing)" :disabled="busy || stale" @click="include(finding.missing)">{{tr('加入本次提交')}}</button>
+      <button v-if="dependencyMessage(finding).canExclude && selectedFile(finding.path)" :disabled="busy || stale" @click="exclude(finding.path)">{{tr('跳过此文件')}}</button>
       <details class="issue-details"><summary>{{tr('查看详情')}}</summary><p>{{finding.path}} → {{finding.reference}}</p><p>{{finding.reason}}</p></details>
     </article>
     <article v-for="check in failedChecks" :key="check.id" class="issue-card" :class="isFileReviewCheck(check)?'check-review':'check-failure'">
@@ -38,13 +42,14 @@ function include(path:string){const file=addableFile(path);if(file && !props.bus
       <button v-if="isFileReviewCheck(check) && !stale" type="button" :disabled="busy" @click="emit('review')">{{tr('确认文件用途')}}</button>
       <details v-if="check.log" class="issue-details"><summary>{{tr('执行日志')}}</summary><pre>{{check.log}}</pre></details>
     </article>
-    <p v-if="resolvingReview" class="review-progress" role="status">{{tr('已处理全部问题，正在统一验证。')}}</p>
+    <p v-if="resolvingReview" class="review-progress" role="status">{{tr('正在核对处理结果并继续检查。')}}</p>
     <div v-else-if="(!needsFileReview || stale) && (!pendingCount || stale) && (hasReleaseIssues(candidate) || stale)" class="issue-next">
       <span>{{tr('处理后点“重新检查”，通过后再确认发布。')}}</span>
       <button class="primary" :disabled="busy" @click="emit('check')">{{busy?tr('检查中…'):tr('重新检查')}}</button>
     </div>
     <details v-if="warnings.length" class="issue-details advisory">
-      <summary>{{tr('其他提醒（不阻止提交）')}}</summary>
+      <summary>{{tr('引用参考（不影响发布）')}}</summary>
+      <p>{{tr('引用推断可能不适用于此项目，请以项目检查和构建结果为准。')}}</p>
       <p v-for="finding in warnings" :key="`${finding.path}:${finding.reference}`">{{finding.path}} → {{finding.reference}}<br />{{finding.reason}}</p>
     </details>
     <details class="issue-details diagnostics"><summary>{{tr('检查详情')}}</summary>

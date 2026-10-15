@@ -164,7 +164,8 @@ export function installSelection(ctx: ReleaseContext) {
         && (ctx.preflight.value.canRelease || ctx.preflight.value.blockingIssues.length > 0));
     ctx.remoteMissing = computed(() => ctx.pushRemote.value && !!ctx.preflight.value && !ctx.preflight.value.remotes.includes(ctx.remoteName.value));
     ctx.canSubmit = computed(() => {
-        if (ctx.ignoringFile.value) return false;
+        if (ctx.submissionUncertain.value) return false;
+        if (ctx.ignoringFile.value || ctx.pendingIgnoreCount.value > 0) return false;
         // Current-version packaging uses the isolated local-build API, never release/commit.
         if (ctx.localBuildOnly.value || (ctx.syncPolicy.value === 'auto' && !ctx.syncRepository.value))
             return false;
@@ -276,6 +277,8 @@ export function installSelection(ctx: ReleaseContext) {
             return tr('安装包已保存；发布结果和服务器同步状态分别显示。');
         if (ctx.cloudBuild.value?.summary)
             return tr(ctx.cloudBuild.value.summary);
+        if (ctx.automationHandedOff.value && ctx.cloudBuild.value?.state === 'succeeded')
+            return tr('云端构建和发布已完成。');
         if (!ctx.activeRun.value?.pushRemote)
             return tr("提交已保存在本机，尚未上传到远程仓库。");
         return ctx.activeRun.value.createTag ? tr("代码和版本 Tag 已上传。") : tr("代码已上传。");

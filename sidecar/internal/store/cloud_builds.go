@@ -6,17 +6,25 @@ import (
 )
 
 type CloudBuild struct {
-	ReleaseRunID string `json:"releaseRunId"`
-	AppID        string `json:"appId"`
-	AppName      string `json:"appName"`
-	Version      string `json:"version"`
-	State        string `json:"state"`
-	Summary      string `json:"summary"`
-	URL          string `json:"url"`
-	AlertKey     string `json:"alertKey"`
-	CheckedAt    string `json:"checkedAt"`
-	NextCheck    string `json:"nextCheck"`
-	Errors       int    `json:"errors"`
+	Targets      []CloudTargetBuild `json:"targets,omitempty"`
+	ReleaseRunID string             `json:"releaseRunId"`
+	AppID        string             `json:"appId"`
+	AppName      string             `json:"appName"`
+	Version      string             `json:"version"`
+	State        string             `json:"state"`
+	Summary      string             `json:"summary"`
+	URL          string             `json:"url"`
+	AlertKey     string             `json:"alertKey"`
+	CheckedAt    string             `json:"checkedAt"`
+	NextCheck    string             `json:"nextCheck"`
+	Errors       int                `json:"errors"`
+}
+
+type CloudTargetBuild struct {
+	TargetID string `json:"targetId"`
+	State    string `json:"state"`
+	Summary  string `json:"summary"`
+	URL      string `json:"url"`
 }
 
 func (s *Store) SaveCloudBuild(build *CloudBuild) error {

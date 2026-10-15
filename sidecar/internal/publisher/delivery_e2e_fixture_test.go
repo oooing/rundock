@@ -141,6 +141,10 @@ func (f *deliveryFixture) settle(t *testing.T, id string) *store.ReleaseRun {
 	for deadline := time.Now().Add(time.Second); f.svc.repositoryBusy(f.repo) && time.Now().Before(deadline); {
 		time.Sleep(10 * time.Millisecond)
 	}
+	plan, err := parseExecutionPlan(run.ExecutionPlan)
+	if err == nil && plan.hasDelivery() && f.svc.lookupCandidate(plan.CandidateID) != nil {
+		t.Fatal("terminal delivery retained its temporary source tree")
+	}
 	return run
 }
 func (f *deliveryFixture) retry(t *testing.T, id string) *store.ReleaseRun {

@@ -3,6 +3,7 @@ package publisher
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,7 @@ func automaticCandidateChecks(secrets []SensitiveFinding, deps []DependencyFindi
 	results := []CheckResult{
 		{ID: "rundock:scope", Name: "文件范围与版本", Status: CheckPassed, Required: true, Reason: "已生成本次提交的独立副本，并校验所选文件和计划版本。"},
 		{ID: "rundock:secrets", Name: "敏感内容", Status: CheckPassed, Required: true, Reason: "已扫描所选文件和保留的历史内容，未发现需要阻止提交的敏感内容。"},
-		{ID: "rundock:dependencies", Name: "本地文件依赖", Status: CheckPassed, Required: true, Reason: "已检查可识别的本地文件引用，未发现阻断问题；不代表构建或测试已通过。"},
+		{ID: "rundock:dependencies", Name: "文件读取", Status: CheckPassed, Required: true, Reason: "所选文件可读取。引用推断仅供参考，代码是否有效由项目检查和构建确认。"},
 	}
 	if unresolved > 0 {
 		results[0].Status = CheckBlocked
@@ -33,7 +34,7 @@ func automaticCandidateChecks(secrets []SensitiveFinding, deps []DependencyFindi
 	}
 	if hasBlockingDependency(deps) {
 		results[2].Status = CheckFailed
-		results[2].Reason = "所选代码引用了未纳入的文件，请查看具体依赖。"
+		results[2].Reason = "有选中文件无法读取，请检查文件权限或刷新后重试。"
 	}
 	return results
 }
@@ -92,6 +93,11 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 		cand.mu.Unlock()
 		return view, nil
 	}
+	if cand.View.Status == CheckPassed && cand.View.Accepted {
+		view := cloneView(cand.View)
+		cand.mu.Unlock()
+		return view, nil
+	}
 	profiles := append([]releaseconfig.CheckProfile{}, cand.FrozenProfiles...)
 	profiles, versionErr := s.expandCandidateCheckVersions(ctx, cand, profiles)
 	if versionErr != nil {
@@ -103,6 +109,16 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 	}
 	automatic := append([]CheckResult{}, cand.AutomaticChecks...)
 	results := plannedCheckResults(profiles, append([]string{}, cand.TargetKinds...))
+	// Permissions changed without changing the tree or frozen commands. Previously
+	// completed checks remain evidence; only unfinished or failed commands run.
+	for i := range results {
+		for _, previous := range cand.View.CheckResults {
+			if previous.ID == results[i].ID && previous.Status == CheckPassed {
+				results[i] = previous
+				break
+			}
+		}
+	}
 	withAutomatic := func() []CheckResult { return append(append([]CheckResult{}, automatic...), results...) }
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -117,7 +133,7 @@ func (s *Service) RunCandidateChecks(ctx context.Context, appID, candidateID str
 		profileByID[profile.ID] = profile
 	}
 	for i := range results {
-		if results[i].Status == CheckSkipped || results[i].Status == CheckUnverified {
+		if results[i].Status == CheckPassed || results[i].Status == CheckSkipped || results[i].Status == CheckUnverified {
 			continue
 		}
 		profile, ok := profileByID[results[i].ID]
@@ -286,9 +302,6 @@ func runProfileCommand(ctx context.Context, candidateRoot string, profile releas
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if tool := missingDirectCheckTool(profile.Command); tool != "" {
-		return CheckUnverified, "", missingCheckToolReason(tool)
-	}
 	cwd := candidateRoot
 	if strings.TrimSpace(profile.WorkingDir) != "" {
 		abs, err := secureProjectPath(candidateRoot, profile.WorkingDir, true)
@@ -298,9 +311,18 @@ func runProfileCommand(ctx context.Context, candidateRoot string, profile releas
 		cwd = abs
 	}
 	name, args := checkShell(profile.Command)
+	workspace, tempErr := newScratch("command")
+	if tempErr != nil {
+		return CheckUnverified, "", "无法创建检查临时目录，请确认磁盘空间和目录权限"
+	}
+	defer func() {
+		if err := workspace.cleanup(); err != nil {
+			logText += "\n部分临时文件仍被占用，RunDock 将自动重试清理。"
+		}
+	}()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = cwd
-	cmd.Env = sanitizedCheckEnv()
+	cmd.Env = scratchEnvironment(sanitizedCheckEnv(), workspace.Dir)
 	prepareCheckProcess(cmd)
 	output := &limitedBuffer{max: maxCheckLogBytes}
 	cmd.Stdout = output
@@ -309,7 +331,7 @@ func runProfileCommand(ctx context.Context, candidateRoot string, profile releas
 		if isMissingTool(err) {
 			return CheckUnverified, "", missingCheckToolReason(name)
 		}
-		return CheckFailed, "", "无法启动检查命令"
+		return CheckUnverified, redactSensitiveLog(err.Error()), "无法启动检查命令，请查看执行日志"
 	}
 	closeJob, jobErr := attachCheckProcess(cmd)
 	if jobErr != nil {
@@ -322,19 +344,25 @@ func runProfileCommand(ctx context.Context, candidateRoot string, profile releas
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		text := output.String()
+		text := decodeCheckOutput(output.String())
 		if err != nil {
-			if isMissingTool(err) || cmd.ProcessState.ExitCode() == 127 || cmd.ProcessState.ExitCode() == 9009 {
+			missingTool := missingExecutedCheckTool(profile.Command, cwd)
+			if missingTool != "" || isMissingTool(err) || cmd.ProcessState.ExitCode() == 127 || cmd.ProcessState.ExitCode() == 9009 {
+				// Diagnose only after shell execution failed. A preliminary PATH
+				// lookup would wrongly reject local scripts and fallback commands.
+				if missingTool != "" {
+					return CheckUnverified, text, missingCheckToolReason(missingTool)
+				}
 				return CheckUnverified, text, "必需检查工具不可用"
 			}
-			return CheckFailed, text, "检查命令失败"
+			return CheckFailed, text, fmt.Sprintf("项目检查未通过（退出码 %d），请查看执行日志", cmd.ProcessState.ExitCode())
 		}
 		return CheckPassed, text, ""
 	case <-ctx.Done():
 		closeJob()
 		cmd.Process.Kill()
 		<-done
-		text := output.String()
+		text := decodeCheckOutput(output.String())
 		if ctx.Err() == context.DeadlineExceeded {
 			return CheckFailed, text, "检查超时"
 		}

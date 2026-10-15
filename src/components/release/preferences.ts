@@ -134,12 +134,27 @@ export function installPreferences(ctx: ReleaseContext) {
             // Handle rejection immediately while history/config load independently;
             // report the original preflight failure through the dialog below.
             const localPreflight = Promise.allSettled([api.releasePreflight(appId, false)] as const);
-            const [historyResult, configResult] = await Promise.allSettled([
-                api.listReleases(appId), api.getReleaseConfig(appId),
+            const [historyResult, configResult, preparationsResult] = await Promise.allSettled([
+                api.listReleases(appId), api.getReleaseConfig(appId), api.listReleasePreparations(appId),
             ] as const);
             if (!isCurrent())
                 return;
+            // An unavailable journal/history is unknown, never an empty list.
+            // Keep the form locked and expose Reload so an already submitted
+            // task cannot silently turn into a fresh publish button.
+            if (historyResult.status === 'rejected' || preparationsResult.status === 'rejected') {
+                ctx.submissionUncertain.value = true;
+                throw new Error(tr('无法确认上次提交结果，请恢复连接后重试。'));
+            }
             ctx.history.value = historyResult.status === 'fulfilled' ? historyResult.value : [];
+            ctx.preparationHistory.value = preparationsResult.status === 'fulfilled' ? preparationsResult.value : [];
+            ctx.submissionUncertain.value = false;
+            const pendingSubmission = ctx.preparationHistory.value.find(item => item.status === 'submitting' && !item.runId);
+            if (pendingSubmission) {
+                ctx.preparation.value = pendingSubmission;
+                ctx.submissionUncertain.value = true;
+                ctx.error.value = tr('提交结果待确认，请核对任务记录；不要重复发布。');
+            }
             if (configResult.status === 'fulfilled') {
                 ctx.configEndpointAvailable.value = true;
                 ctx.applyReleaseConfig(configResult.value);
@@ -156,6 +171,10 @@ export function installPreferences(ctx: ReleaseContext) {
             const resumable = ctx.history.value.find((run) => run.status === 'queued' || run.status === 'running');
             if (resumable)
                 ctx.showRun(resumable);
+            else {
+                const submitted = ctx.preparationHistory.value.find(item => item.id === ctx.preparation.value?.id && item.runId);
+                if (submitted) ctx.showRun((await api.getReleaseRun(submitted.runId)).run);
+            }
             const [preflightResult] = await localPreflight;
             if (!isCurrent())
                 return;

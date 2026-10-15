@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -108,6 +109,41 @@ func (c CLI) JSON(ctx context.Context, method, path string, body any, out any) e
 		}
 		args = append(args, "--input", "-")
 	}
+	err = readRetry(ctx, method, func() error {
+		return githubJSONAttempt(ctx, args, input, out)
+	}, func(ctx context.Context) error {
+		timer := time.NewTimer(300 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("%s：%w", githubOperation(method, path), err)
+	}
+	return nil
+}
+
+func githubOperation(method, path string) string {
+	if method != "GET" && method != "HEAD" {
+		return "GitHub 操作结果未确认，继续前将核对远端状态"
+	}
+	if path == "user" {
+		return "读取 GitHub 账号失败"
+	}
+	if strings.Contains(path, "/contents/.github/workflows") {
+		return "读取 GitHub 自动发布配置失败"
+	}
+	if strings.Contains(path, "/releases") {
+		return "读取 GitHub 版本信息失败"
+	}
+	return "读取 GitHub 仓库信息失败"
+}
+
+func githubJSONAttempt(ctx context.Context, args []string, input []byte, out any) error {
 	cmd, err := cliCommand(ctx, args...)
 	if err != nil {
 		return err
@@ -115,11 +151,20 @@ func (c CLI) JSON(ctx context.Context, method, path string, body any, out any) e
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)
 	}
-	var result cappedWriter
+	var result, stderr cappedWriter
 	result.max = 16 << 20
+	stderr.max = 16 << 10
 	cmd.Stdout = &result
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	runErr := cmd.Run()
+	return decodeGitHubResponse(ctx, runErr, &result, stderr.String(), out)
+}
+
+// Classify stderr into fixed messages; never persist raw CLI output, URLs or tokens.
+func decodeGitHubResponse(ctx context.Context, runErr error, result *cappedWriter, stderr string, out any) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	data := result.Bytes()
 	head, raw, ok := bytes.Cut(data, []byte("\r\n\r\n"))
 	if !ok {
@@ -133,15 +178,73 @@ func (c CLI) JSON(ctx context.Context, method, path string, body any, out any) e
 	if status >= 400 {
 		return &HTTPError{status}
 	}
-	if runErr != nil || !ok || status < 200 || status >= 300 || result.overflow {
-		return failure("github_request_unconfirmed", "GitHub 请求结果尚未确认，请核对后重试")
+	if runErr != nil {
+		return githubTransportError(stderr)
+	}
+	if !ok || status < 200 || status >= 300 || result.overflow {
+		return failure("github_response_invalid", "GitHub 返回的信息不完整，请稍后重试")
 	}
 	if out != nil && len(bytes.TrimSpace(raw)) > 0 {
-		if err = json.Unmarshal(raw, out); err != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
 			return failure("github_response_invalid", "GitHub 返回了无法识别的响应")
 		}
 	}
 	return nil
+}
+
+func githubTransportError(stderr string) error {
+	s := strings.ToLower(stderr)
+	contains := func(parts ...string) bool {
+		for _, part := range parts {
+			if strings.Contains(s, part) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case contains("x509", "certificate"):
+		return failure("github_certificate_invalid", "GitHub 安全证书无法验证，请检查系统时间或代理证书后重试")
+	case contains("timeout", "timed out", "deadline exceeded"):
+		return failure("github_connection_timeout", "连接 GitHub 超时，请确认网络或代理可用后重试")
+	case contains("no such host", "could not resolve"):
+		return failure("github_dns_failed", "无法找到 GitHub 服务器，请检查网络或代理后重试")
+	case contains("connection refused", "actively refused", "proxyconnect", "connectex"):
+		return failure("github_connection_failed", "无法连接 GitHub 或代理，请确认网络或代理已开启后重试")
+	case contains("eof", "connection reset", "stream error", "goaway", "broken pipe"):
+		return failure("github_connection_interrupted", "读取 GitHub 信息时连接中断，请稍后重试")
+	default:
+		return failure("github_request_unconfirmed", "未收到 GitHub 的完整响应，请确认连接后重试")
+	}
+}
+
+// Only repeat transient READ failures, at most once within the original deadline.
+// Writes must be reconciled by the delivery engine to avoid duplicate releases.
+func readRetry(ctx context.Context, method string, attempt func() error, wait func(context.Context) error) error {
+	err := attempt()
+	if err == nil || ctx.Err() != nil || (method != "GET" && method != "HEAD") || !transientGitHubRead(err) {
+		return err
+	}
+	if err = wait(ctx); err != nil {
+		return err
+	}
+	return attempt()
+}
+
+func transientGitHubRead(err error) bool {
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Status == 500 || httpErr.Status == 502 || httpErr.Status == 503 || httpErr.Status == 504
+	}
+	var e *Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Code {
+	case "github_connection_timeout", "github_dns_failed", "github_connection_failed", "github_connection_interrupted":
+		return true
+	}
+	return false
 }
 
 func (c CLI) Upload(ctx context.Context, repo string, id int64, path, name string) error {

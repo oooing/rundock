@@ -54,6 +54,9 @@
 .completion-banner.failed { border-color: var(--red); background: color-mix(in srgb, var(--red) 7%, var(--bg-elev)); }
 .completion-banner.failed .completion-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .m-foot { flex-wrap: wrap; align-items: center; }
+.submission-feedback { flex: 0 0 100%; margin: 0; max-height: 96px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; line-height: 1.5; color: var(--amber); }
+.submission-feedback.ready { color: var(--green); }
+.submission-feedback.error { color: var(--red); }
 .history-button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}.history-count{font-size:11px;color:var(--text-faint);font-variant-numeric:tabular-nums}.release-history{min-width:0}.release-history .history-row{padding:14px 0;align-items:center;grid-template-columns:minmax(100px,1fr) minmax(60px,1fr) auto}.release-history .history-row code{min-width:0;overflow-wrap:anywhere;white-space:normal}.history-button:focus-visible,.release-history .history-row:focus-visible,.history-back:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .m-head.history-navigation{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px}.history-navigation h2{font-size:16px;text-align:center}.history-navigation h2:focus{outline:none}.history-navigation>.icon{justify-self:end}.history-back{justify-self:start;display:inline-flex;align-items:center;gap:2px;min-height:44px;padding:0 4px 0 0;color:var(--accent);font-size:13px;white-space:nowrap;border:0;background:transparent}.history-back svg{width:22px;height:22px;flex:none}
 .history-back{max-width:100%;min-width:0}.history-back span{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -200,6 +203,7 @@
 .progress-block .run-target.running { background: #203047; }
 .progress-block .run-target.failed { background: #42272e; }
 .progress-block .run-target.succeeded { background: #1c332c; }
+.target-result-detail { display: block; margin-top: 4px; line-height: 1.5; overflow-wrap: anywhere; font-size: 11px; color: var(--text-dim); }
 .progress-block .execution-details { border-top: 1px solid var(--border); padding-top: 8px; }
 .progress-block .execution-details > summary { padding: 10px 0; }
 .progress-block .log-box { padding: 14px; font-size: 11px; line-height: 1.75; }

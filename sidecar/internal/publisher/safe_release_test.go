@@ -154,16 +154,16 @@ func TestCandidateSpacesChineseRenameDeletionAndMissingDeps(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(candidateWork(t, svc, view.ID), "tracked.txt")); !os.IsNotExist(err) && fileExists(filepath.Join(candidateWork(t, svc, view.ID), "tracked.txt")) {
 		t.Fatalf("deleted tracked file should be absent from candidate")
 	}
-	missingHelper, blockedPrivate := false, false
+	missingHelper, reportedPrivate := false, false
 	for _, dep := range view.DependencyFindings {
 		if dep.Missing == "src/helper.js" {
 			missingHelper = true
 		}
-		if dep.Missing == "src/private.js" && dep.Blocked {
-			blockedPrivate = true
+		if dep.Missing == "src/private.js" && !dep.Blocked {
+			reportedPrivate = true
 		}
 	}
-	if !missingHelper || !blockedPrivate {
+	if !missingHelper || !reportedPrivate || hasBlockingDependency(view.DependencyFindings) {
 		t.Fatalf("deps: %+v", view.DependencyFindings)
 	}
 }

@@ -17,6 +17,11 @@ runInNewContext(scoped.outputFiles[0].text, scopeContext)
 const { releaseSettingsLabels, releaseSettingsDetails } = scopeContext.module.exports
 const tokens = value => (value.match(/\{\d+\}/g) || []).sort().join(',')
 
+test('an unavailable check is not presented as a failed code test', () => {
+  assert.equal(releaseSettingsLabels['无法开始检查'][0], '无法检查')
+  assert.notEqual(releaseSettingsLabels['无法开始检查'][0], '检查失败')
+})
+
 test('edited copy preserves translation keys, English coverage and interpolation', () => {
   const problems = []
   for (const [key, [zh, en]] of Object.entries({ ...labelCopy, ...detailCopy, ...releaseSettingsDetails, ...releaseSettingsLabels })) {

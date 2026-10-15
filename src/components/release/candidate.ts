@@ -74,7 +74,7 @@ export function installCandidate(ctx: ReleaseContext) {
             return;
         // Do not publish here. Validate once after the entire batch is resolved.
         ctx.resolvingReview.value = true;
-        void ctx.inspectCandidate().finally(() => { ctx.resolvingReview.value = false; });
+        void ctx.inspectCandidate(true).finally(() => { ctx.resolvingReview.value = false; });
     };
     ctx.changeReleaseIntent = function (intent: 'formal' | 'save-progress') {
         if (ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || ctx.releaseIntent.value === intent)
@@ -117,23 +117,27 @@ export function installCandidate(ctx: ReleaseContext) {
         }
     };
     ctx.ignoreSafetyFile = async function (file: ReleaseFileClassification) {
-        if (ctx.ignoringFile.value || ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || file.tracked)
+        return ctx.ignoreSafetyFiles([file]);
+    };
+    ctx.ignoreSafetyFiles = async function (files: ReleaseFileClassification[]) {
+        if (!files.length || ctx.ignoringFile.value || ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || files.some(file => file.tracked))
             throw new Error(tr('当前不能修改忽略清单，请稍后重试。'));
         ctx.ignoringFile.value = true;
         try {
-            const result = await api.ignoreReleaseFile(ctx.props.app.id, file.path, file.contentFingerprint);
+            const result = await api.ignoreReleaseFiles(ctx.props.app.id, files.map(({path,contentFingerprint}) => ({path,contentFingerprint})));
             if (!ctx.disposed) {
                 ctx.candidate.value = null;
                 ctx.candidateSignature.value = '';
-                ctx.manualDecisions.value = ctx.manualDecisions.value.filter(item => item.path !== file.path);
+                const ignored = new Set(files.map(file => file.path));
+                ctx.manualDecisions.value = ctx.manualDecisions.value.filter(item => !ignored.has(item.path));
                 ctx.applyPreflight(result.preflight, false, true);
             }
-            return result.ignoreFile;
+            return result.ignoreFiles.join('、');
         } finally {
             ctx.ignoringFile.value = false;
         }
     };
-    ctx.inspectCandidate = async function () {
+    ctx.inspectCandidate = async function (reuseReview = false) {
         if (ctx.checkingCandidate.value || ctx.ignoringFile.value || !ctx.preflight.value)
             return false;
         ctx.checkingCandidate.value = true;
@@ -142,20 +146,35 @@ export function installCandidate(ctx: ReleaseContext) {
         const controller = new AbortController();
         ctx.candidateAbort = controller;
         try {
-            await api.saveReleaseProfile(ctx.props.app.id, ctx.profileBody());
-            if (ctx.disposed || epoch !== ctx.candidateEpoch)
-                return false;
-            const fresh = await api.releasePreflight(ctx.props.app.id, false);
-            if (ctx.disposed || epoch !== ctx.candidateEpoch)
-                return false;
-            ctx.applyPreflight(fresh, false, true);
-            const request = JSON.parse(JSON.stringify(ctx.candidateRequest.value)) as ReleaseCandidateRequest;
-            const signature = JSON.stringify(request);
-            const prepared = await api.prepareReleaseCandidate(ctx.props.app.id, request, controller.signal);
+            await ctx.savePreparation('checking');
+            if (ctx.disposed || epoch !== ctx.candidateEpoch) return false;
+            const previous = ctx.candidateSignature.value ? JSON.parse(ctx.candidateSignature.value) : null;
+            const current = JSON.parse(JSON.stringify(ctx.candidateRequest.value)) as ReleaseCandidateRequest;
+            const withoutExceptions = (value: ReleaseCandidateRequest) => { const { sensitiveExceptions: _exceptions, ...plan } = value; return JSON.stringify(plan); };
+            const reuse = reuseReview === true && ctx.candidate.value && previous && withoutExceptions(previous) === withoutExceptions(current) &&
+                !['stale','cancelled','running'].includes(ctx.candidate.value.status);
+            let request: ReleaseCandidateRequest;
+            let prepared: ReleaseCandidate;
+            if (reuse) {
+                request = current;
+                prepared = await api.reviewReleaseCandidate(ctx.props.app.id, ctx.candidate.value!.id, request.sensitiveExceptions, controller.signal);
+            } else {
+                await api.saveReleaseProfile(ctx.props.app.id, ctx.profileBody());
+                if (ctx.disposed || epoch !== ctx.candidateEpoch)
+                    return false;
+                const fresh = await api.releasePreflight(ctx.props.app.id, false);
+                if (ctx.disposed || epoch !== ctx.candidateEpoch)
+                    return false;
+                ctx.applyPreflight(fresh, false, true);
+                request = JSON.parse(JSON.stringify(ctx.candidateRequest.value)) as ReleaseCandidateRequest;
+                prepared = await api.prepareReleaseCandidate(ctx.props.app.id, request, controller.signal);
+            }
             if (ctx.disposed || epoch !== ctx.candidateEpoch)
                 return false;
             ctx.candidate.value = prepared;
-            ctx.candidateSignature.value = signature;
+            await ctx.savePreparation('checking');
+            if (ctx.disposed || epoch !== ctx.candidateEpoch) return false;
+            ctx.candidateSignature.value = JSON.stringify(request);
             ctx.reviewSignature.value = '';
             ctx.findingDecisions.value = {};
             if (request.intent === 'save-progress')
@@ -165,6 +184,7 @@ export function installCandidate(ctx: ReleaseContext) {
             if (prepared.sensitiveFindings.length || prepared.dependencyFindings.some(item => item.blocked) ||
                 prepared.checkResults.some(check => check.id === 'rundock:scope' && check.status === 'blocked'))
                 return false;
+            if (prepared.accepted && prepared.status === 'passed') return true;
             ctx.candidate.value = { ...prepared, status: 'running' };
             const poll = async () => {
                 try {
@@ -200,6 +220,8 @@ export function installCandidate(ctx: ReleaseContext) {
                 ctx.checkingCandidate.value = false;
                 if (ctx.candidatePoll)
                     clearTimeout(ctx.candidatePoll);
+                try { await ctx.savePreparation(ctx.error.value ? 'error' : ctx.candidateReady.value ? 'ready' : ctx.candidate.value?.status === 'cancelled' ? 'cancelled' : 'blocked'); }
+                catch(reason) { ctx.error.value = tr('无法保存发布准备记录，请检查本机服务后重试。') + ' ' + ctx.messageOf(reason); }
             }
         }
     };
@@ -220,8 +242,10 @@ export function installCandidate(ctx: ReleaseContext) {
                     ctx.error.value = ctx.messageOf(reason);
             }
         }
-        if (!ctx.disposed && epoch === ctx.candidateEpoch)
+        if (!ctx.disposed && epoch === ctx.candidateEpoch) {
             ctx.checkingCandidate.value = false;
+            try { await ctx.savePreparation('cancelled'); } catch { ctx.error.value = tr('检查已停止，但记录保存失败。请恢复连接后重新核对。'); }
+        }
     };
     ctx.saveSafetyConfig = async function (rules: ReleaseFileRule[], checks: ReleaseCheckProfile[]) {
         if (!ctx.releaseConfig.value)

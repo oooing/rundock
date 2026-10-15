@@ -166,5 +166,5 @@ func truncateTargetOutput(value string) string {
 	if len(value) <= limit {
 		return value
 	}
-	return value[:limit] + "\n…输出过长，已截断…"
+	return strings.ToValidUTF8(value[:limit/2]+"\n…中间输出过长，已省略；保留开头和末尾…\n"+value[len(value)-limit/2:], "�")
 }

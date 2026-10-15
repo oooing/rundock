@@ -31,7 +31,7 @@ func (r *networkTraceRunner) Run(ctx context.Context, dir, name string, args ...
 			r.deadlines = append(r.deadlines, deadline)
 		}
 		r.mu.Unlock()
-		if r.forbidNetwork || (r.forbidTags && args[2] == "ls-remote") {
+		if r.forbidNetwork || (r.forbidTags && args[2] == "ls-remote" && !contains(args, "--heads")) {
 			return "unexpected remote command", errors.New("network forbidden by test")
 		}
 	}
@@ -144,7 +144,7 @@ func TestPushingPlainCommitDoesNotCheckTags(t *testing.T) {
 	if completed := waitRelease(t, svc, run.ID); completed.Status != "succeeded" {
 		t.Fatalf("plain push failed: %+v", completed)
 	}
-	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 || runner.count("push") != 1 {
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 1 || runner.count("push") != 1 {
 		t.Fatalf("wrong network actions: %#v", runner.calls)
 	}
 }
@@ -189,7 +189,7 @@ func TestLocalVersionChangeRequiresConfirmationBeforeMutation(t *testing.T) {
 	if completed := waitRelease(t, svc, run.ID); completed.Status != "succeeded" || completed.TagName != "v1.0.3" {
 		t.Fatalf("confirmed version failed: %+v", completed)
 	}
-	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 {
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 1 {
 		t.Fatalf("extra per-version network check: %#v", runner.calls)
 	}
 }

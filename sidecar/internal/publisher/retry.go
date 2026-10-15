@@ -74,6 +74,7 @@ func (s *Service) Retry(runID string, requests ...RetryRequest) (*store.ReleaseR
 
 func (s *Service) retry(run *store.ReleaseRun) {
 	defer s.release(run.RepoRoot)
+	defer s.finishReleaseCandidate(run)
 	ctx, done := s.runContext(run.ID)
 	defer done()
 	retryStarted := time.Now()

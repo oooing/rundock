@@ -8,6 +8,10 @@ export function installState(ctx: ReleaseContext) {
     ctx.savingProfile = ref(false);
     ctx.publishing = ref(false);
     ctx.autoSubmitting = ref(false);
+    ctx.preparation = ref(null);
+    ctx.preparationHistory = ref([]);
+    ctx.runConnectionError = ref('');
+    ctx.submissionUncertain = ref(false);
     ctx.unstaging = ref(false);
     ctx.unstageNotice = ref('');
     ctx.error = ref('');
@@ -22,6 +26,7 @@ export function installState(ctx: ReleaseContext) {
     ctx.candidate = ref<ReleaseCandidate | null>(null);
     ctx.checkingCandidate = ref(false);
     ctx.ignoringFile = ref(false);
+    ctx.pendingIgnoreCount = ref(0);
     ctx.checksEnabled = ref(true);
     ctx.candidateSignature = ref('');
     ctx.reviewSignature = ref('');

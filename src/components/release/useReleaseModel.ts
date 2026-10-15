@@ -11,6 +11,7 @@ import { installSelection } from './selection';
 import { installState } from './state';
 import { installSubmission } from './submission';
 import { installSync } from './sync';
+import { installPreparation } from './preparation';
 export function useReleaseModel(props: {
     app: AppView;
 }, emit: (e: 'close') => void) {
@@ -26,6 +27,7 @@ export function useReleaseModel(props: {
     installPreferences(ctx);
     installNotes(ctx);
     installSubmission(ctx);
+    installPreparation(ctx);
     installLifecycle(ctx);
     return ctx;
 }

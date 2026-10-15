@@ -36,7 +36,7 @@ func TestLocalJSImportsUseExecutableTokens(t *testing.T) {
 	}
 }
 
-func TestDependencyCheckGeneratedFixtureDoesNotBlockButRealMissingFileDoes(t *testing.T) {
+func TestDependencyCheckGeneratedFixtureAndMissingReferenceAreNotReleaseGates(t *testing.T) {
 	root := t.TempDir()
 	rel := "scripts/acceptance/release-settings.mjs"
 	source := "import { writeFileSync } from 'node:fs';\n" +
@@ -48,8 +48,8 @@ func TestDependencyCheckGeneratedFixtureDoesNotBlockButRealMissingFileDoes(t *te
 	}
 	writeTestFile(t, filepath.Join(root, rel), source+"\nimport './real-helper.js';")
 	got := findMissingLocalDependencies(root, root, []string{rel}, nil)
-	if len(got) != 1 || !got[0].Blocked || got[0].Missing != "scripts/acceptance/real-helper.js" {
-		t.Fatalf("real missing dependency must still block: %+v", got)
+	if len(got) != 1 || got[0].Blocked || got[0].Missing != "scripts/acceptance/real-helper.js" {
+		t.Fatalf("inferred reference must remain advisory: %+v", got)
 	}
 }
 

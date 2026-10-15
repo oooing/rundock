@@ -3,7 +3,10 @@ package publisher
 import (
 	"context"
 	"github.com/launcher-sidecar/internal/releaseconfig"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +16,7 @@ func TestMissingCheckToolIdentifiesExecutableNotArguments(t *testing.T) {
 	name := "rundock_intentionally_missing_check_tool_9281"
 	for _, command := range []string{name + " --private-value=do-not-echo", `"` + name + `" --private-value=do-not-echo`} {
 		status, log, reason := runProfileCommand(context.Background(), t.TempDir(), releaseconfig.CheckProfile{Command: command})
-		if status != CheckUnverified || log != "" || !strings.Contains(reason, name) || !strings.Contains(reason, "PATH") || strings.Contains(reason, "do-not-echo") {
+		if status != CheckUnverified || !strings.Contains(reason, name) || !strings.Contains(reason, "PATH") || strings.Contains(reason+log, "do-not-echo") {
 			t.Fatalf("status=%s reason=%s log=%s", status, reason, log)
 		}
 	}
@@ -26,13 +29,46 @@ func TestMissingCheckToolIdentifiesExecutableNotArguments(t *testing.T) {
 
 func TestPwshAvailabilityUsesLauncherEnvironment(t *testing.T) {
 	// Models Windows-launched RunDock: the agent's private runtime is not on PATH.
-	t.Setenv("PATH", t.TempDir())
+	toolPath := t.TempDir()
+	if runtime.GOOS == "windows" {
+		toolPath += string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32")
+	}
+	t.Setenv("PATH", toolPath)
 	if _, err := exec.LookPath("pwsh"); err == nil {
 		t.Skip("pwsh is resolved independently of PATH")
 	}
 	status, log, reason := runProfileCommand(context.Background(), t.TempDir(), releaseconfig.CheckProfile{Command: "pwsh -NoProfile -File check.ps1"})
-	if status != CheckUnverified || log != "" || !strings.Contains(reason, "PowerShell 7") || !strings.Contains(reason, "pwsh") {
+	if status != CheckUnverified || !strings.Contains(reason, "PowerShell 7") || !strings.Contains(reason, "pwsh") {
 		t.Fatalf("status=%s reason=%s log=%s", status, reason, log)
+	}
+}
+
+func TestCheckShellDecidesLocalScriptsAndFallbacks(t *testing.T) {
+	root := t.TempDir()
+	command := "rundock_missing_optional_tool_9871 || echo fallback-success"
+	status, log, reason := runProfileCommand(context.Background(), root, releaseconfig.CheckProfile{Command: command, TimeoutSeconds: 10})
+	if status != CheckPassed || !strings.Contains(log, "fallback-success") {
+		t.Fatalf("fallback rejected: %s %s %s", status, reason, log)
+	}
+	if runtime.GOOS == "windows" {
+		writeTestFile(t, filepath.Join(root, "rundock-local-check.cmd"), "@echo local-success\r\n@exit /b 0\r\n")
+		status, log, reason = runProfileCommand(context.Background(), root, releaseconfig.CheckProfile{Command: "rundock-local-check.cmd", TimeoutSeconds: 10})
+		if status != CheckPassed || !strings.Contains(log, "local-success") {
+			t.Fatalf("local script rejected: %s %s %s", status, reason, log)
+		}
+		writeTestFile(t, filepath.Join(root, "rundock-local-fail.cmd"), "@exit /b 23\r\n")
+		status, _, reason = runProfileCommand(context.Background(), root, releaseconfig.CheckProfile{Command: "rundock-local-fail.cmd", TimeoutSeconds: 10})
+		if status != CheckFailed || !strings.Contains(reason, "23") {
+			t.Fatalf("local failure mislabeled missing: %s %s", status, reason)
+		}
+	}
+	status, _, reason = runProfileCommand(context.Background(), root, releaseconfig.CheckProfile{Command: "rundock_missing_optional_tool_9871 || exit 23", TimeoutSeconds: 10})
+	if status != CheckFailed || !strings.Contains(reason, "23") {
+		t.Fatalf("fallback failure mislabeled missing: %s %s", status, reason)
+	}
+	status, _, reason = runProfileCommand(context.Background(), root, releaseconfig.CheckProfile{Command: "exit 23", TimeoutSeconds: 10})
+	if status != CheckFailed || !strings.Contains(reason, "23") {
+		t.Fatalf("exit reason lost: %s %s", status, reason)
 	}
 }
 

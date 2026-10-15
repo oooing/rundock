@@ -7,11 +7,16 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/launcher-sidecar/internal/releaseconfig"
 )
 
 func classifyChanges(repo string, changes []FileChange, rules []releaseconfig.FileRule, decisions []ManualDecision) []FileClassification {
+	return classifyChangesWithHashes(repo, changes, rules, decisions, nil)
+}
+
+func classifyChangesWithHashes(repo string, changes []FileChange, rules []releaseconfig.FileRule, decisions []ManualDecision, hashes map[string]string) []FileClassification {
 	decisionByPath := map[string]ManualDecision{}
 	for _, decision := range decisions {
 		path := filepath.ToSlash(decision.Path)
@@ -19,18 +24,36 @@ func classifyChanges(repo string, changes []FileChange, rules []releaseconfig.Fi
 			decisionByPath[path] = decision
 		}
 	}
-	out := make([]FileClassification, 0, len(changes))
-	for _, change := range changes {
-		item := classifyOne(repo, change, rules)
-		if decision, ok := decisionByPath[item.Path]; ok {
-			item = applyManualDecision(item, decision)
-		}
-		out = append(out, item)
+	out := make([]FileClassification, len(changes))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				change := changes[index]
+				item := classifyOneWithHash(repo, change, rules, hashes[filepath.ToSlash(change.Path)])
+				if decision, ok := decisionByPath[item.Path]; ok {
+					item = applyManualDecision(item, decision)
+				}
+				out[index] = item
+			}
+		}()
 	}
+	for index := range changes {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
 	return out
 }
 
 func classifyOne(repo string, change FileChange, rules []releaseconfig.FileRule) FileClassification {
+	return classifyOneWithHash(repo, change, rules, "")
+}
+
+func classifyOneWithHash(repo string, change FileChange, rules []releaseconfig.FileRule, hash string) FileClassification {
 	item := FileClassification{
 		Path:               filepath.ToSlash(change.Path),
 		OldPath:            filepath.ToSlash(change.OldPath),
@@ -40,7 +63,7 @@ func classifyOne(repo string, change FileChange, rules []releaseconfig.FileRule)
 		Sources:            []string{},
 		RuleIDs:            []string{},
 		Group:              classificationGroup(change.Path),
-		ContentFingerprint: fileContentFingerprint(repo, change),
+		ContentFingerprint: fileContentFingerprintWithHash(repo, change, hash),
 	}
 	kinds := map[string][]releaseconfig.FileRule{}
 	for _, rule := range rules {
@@ -141,7 +164,7 @@ func applyHeuristic(item *FileClassification, change FileChange) {
 		item.Reasons = append(item.Reasons, "未跟踪的构建、缓存或临时输出，默认不提交且不会删除")
 		return
 	}
-	if strings.HasPrefix(strings.ToLower(item.Path), "reports/") {
+	if isLocalVerificationPath(item.Path) {
 		item.Category = CategoryLocal
 		item.Reasons = append(item.Reasons, "未跟踪的报告、快照或本地验证资料，默认留在本地；需要共享时可手动纳入")
 		return
@@ -153,6 +176,18 @@ func applyHeuristic(item *FileClassification, change FileChange) {
 	}
 	item.Category = CategoryReview
 	item.Reasons = append(item.Reasons, "用途未知，需要确认后再正式发布")
+}
+
+// Root-level evidence folders are not source roots. Apply only as an untracked
+// fallback: explicit project rules, tracked changes and manual choices take priority.
+func isLocalVerificationPath(rel string) bool {
+	rel = strings.ToLower(filepath.ToSlash(rel))
+	for _, prefix := range []string{"artifacts/", "outputs/", "reports/"} {
+		if strings.HasPrefix(rel, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func applyManualDecision(item FileClassification, decision ManualDecision) FileClassification {
@@ -213,6 +248,10 @@ func classificationGroup(rel string) string {
 }
 
 func fileContentFingerprint(repo string, change FileChange) string {
+	return fileContentFingerprintWithHash(repo, change, "")
+}
+
+func fileContentFingerprintWithHash(repo string, change FileChange, hash string) string {
 	if strings.ContainsAny(change.Status, "D") && change.OldPath == "" && !fileExists(filepath.Join(repo, filepath.FromSlash(change.Path))) {
 		sum := sha256.Sum256([]byte("deleted:" + change.Path))
 		return hex.EncodeToString(sum[:])
@@ -224,6 +263,11 @@ func fileContentFingerprint(repo string, change FileChange) string {
 	info, err := os.Lstat(safe)
 	if err != nil || isPathLink(info) || !info.Mode().IsRegular() {
 		return "unsupported:" + change.Path
+	}
+	// Path/link checks remain mandatory even when the bytes were already read
+	// for the request's status snapshot. No timestamp cache is used.
+	if len(hash) == sha256.Size*2 {
+		return hash
 	}
 	raw, err := os.ReadFile(safe)
 	if err != nil {

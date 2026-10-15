@@ -259,6 +259,7 @@ export function installPlatforms(ctx: ReleaseContext) {
         target_check: tr("检查目标"), target_build: tr("构建目标"), target_package: tr("打包目标"),
         target_publish: tr("上传目标"), target_deploy: tr("部署目标"), tagging: tr("创建 Tag"),
         pushing_branch: tr("推送分支"), pushing_tag: tr("推送 Tag"), completed: tr("发布完成"),
+        delivery_connecting: tr("连接 GitHub"),
         delivery_preparing: tr("验证并保存产物"), delivery_preflight: tr("核对交付条件"), delivery_publish: tr("上传并核验 GitHub Release"),
     }));
     ctx.targetStageLabel = computed<Record<string, string>>(() => ({

@@ -10,6 +10,7 @@ import (
 // The sealed path never re-enters target execution or candidate lookup.
 func (s *Service) resumeDelivery(run *store.ReleaseRun, plan *executionPlan) {
 	defer s.release(run.RepoRoot)
+	defer s.finishReleaseCandidate(run)
 	ctx, done := s.runContext(run.ID)
 	defer done()
 	stage := "delivery_preflight"

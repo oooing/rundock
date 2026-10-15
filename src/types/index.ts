@@ -477,7 +477,7 @@ export interface ReleaseCandidate {
   id: string; fingerprint: string; status: string; intent: string; accepted: boolean; canFormal: boolean; canSaveProgress: boolean
   classifications: ReleaseFileClassification[]; selectedPaths: string[]; warnings: string[]; mutationDetected: boolean; treeHash: string
   sensitiveFindings: Array<{path:string;kind:string;reason:string;line?:number;redacted:string;fingerprint:string;contentFingerprint:string}>
-  dependencyFindings: Array<{path:string;reference:string;missing:string;reason:string;blocked:boolean;suggestion?:string}>
+  dependencyFindings: Array<{kind?:string;path:string;reference:string;missing:string;reason:string;blocked:boolean;suggestion?:string}>
   checkResults: Array<{id:string;name:string;status:string;reason?:string;log?:string;required:boolean;durationMs?:number}>
 }
 
@@ -491,6 +491,7 @@ export interface ExportSnapshot {
 }
 
 export interface CloudBuildStatus {
+  targets?: Array<{targetId: string; state: string; summary: string; url: string}>
   releaseRunId: string
   appId: string
   appName: string

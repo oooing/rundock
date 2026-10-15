@@ -3,6 +3,8 @@ package store
 import "database/sql"
 
 type ReleaseTargetRun struct {
+	Name         string  `json:"name,omitempty"`
+	VersionGroup string  `json:"versionGroup,omitempty"`
 	ReleaseRunID string  `json:"releaseRunId"`
 	TargetID     string  `json:"targetId"`
 	Build        bool    `json:"build"`

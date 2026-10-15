@@ -175,6 +175,7 @@ func (s *Server) handleAppReleases(w http.ResponseWriter, r *http.Request, appID
 		}
 		run, err := s.Publisher.Start(r.Context(), appID, body)
 		if err != nil {
+			_ = s.Store.RejectReleasePreparation(appID, body.CandidateID)
 			s.recordPublisherFailure(appID, "release.create", err, time.Since(started))
 			writePublisherError(w, err)
 			return
@@ -205,6 +206,8 @@ func (s *Server) recordPublisherFailure(appID, operation string, err error, dura
 func (s *Server) handleAppReleasePrep(w http.ResponseWriter, r *http.Request) {
 	appID, rest := pathTail("/api/apps/", r.URL.Path)
 	switch {
+	case rest == "release/preparations":
+		s.handleReleasePreparations(w, r, appID)
 	case rest == "release/candidate" || strings.HasPrefix(rest, "release/candidate/"):
 		s.handleReleaseCandidate(w, r, appID, strings.TrimPrefix(rest, "release/candidate"))
 	default:
@@ -229,6 +232,21 @@ func (s *Server) handleReleaseCandidate(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		view, err := s.Publisher.PrepareCandidate(r.Context(), appID, body)
+		if err != nil {
+			writePublisherError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	case rest == "review" && r.Method == http.MethodPost:
+		var body struct {
+			CandidateID string                         `json:"candidateId"`
+			Exceptions  []publisher.SensitiveException `json:"sensitiveExceptions"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		view, err := s.Publisher.ReviewCandidate(r.Context(), appID, body.CandidateID, body.Exceptions)
 		if err != nil {
 			writePublisherError(w, err)
 			return

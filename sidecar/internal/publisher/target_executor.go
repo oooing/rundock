@@ -208,7 +208,8 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			}
 			stepStatus, stepSeverity, stepCode, stepMessage, stepKind := "succeeded", "info", "", target.Name+" 的命令执行完成", "performance"
 			if commandErr != nil {
-				stepStatus, stepSeverity, stepCode, stepMessage, stepKind = "failed", "error", "target_step_failed", target.Name+" 的命令执行失败", "error"
+				stepStatus, stepSeverity, stepKind = "failed", "error", "error"
+				stepCode, stepMessage = targetCommandFailure(target.Name, step.name, out, commandErr)
 			}
 			s.recordRelease(run, diagnostics.Event{
 				Kind: stepKind, Severity: stepSeverity, Source: "release", Operation: "release.target_step",
@@ -241,9 +242,9 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			}
 			baseline = after
 			if commandErr != nil {
-				message := target.Name + " 的“" + stepLabel(step.name) + "”命令执行失败"
-				_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, "target_step_failed", message, true, true)
-				return &targetExecutionError{Stage: stage, Code: "target_step_failed", Message: message, TargetID: target.ID}
+				code, message := targetCommandFailure(target.Name, step.name, out, commandErr)
+				_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, code, message, true, true)
+				return &targetExecutionError{Stage: stage, Code: code, Message: message, TargetID: target.ID}
 			}
 			if err := s.store.MarkReleaseTargetStepDone(run.ID, target.ID, step.name); err != nil {
 				return err

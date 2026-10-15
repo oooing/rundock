@@ -65,7 +65,7 @@ func failure(code, message string) error { return &Error{code, message} }
 func ErrorInfo(err error) (string, string) {
 	var e *Error
 	if errors.As(err, &e) {
-		return e.Code, e.Message
+		return e.Code, err.Error()
 	}
 	var proxyError *netproxy.UnavailableError
 	if errors.As(err, &proxyError) {
@@ -74,12 +74,34 @@ func ErrorInfo(err error) (string, string) {
 	if errors.Is(err, context.Canceled) {
 		return "delivery_cancelled", "交付已取消；可核对远端状态后继续"
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "github_connection_timeout", "连接 GitHub 超时，请确认网络或代理可用后重试"
+	}
+	var httpError *HTTPError
+	if errors.As(err, &httpError) {
+		return fmt.Sprintf("github_http_%d", httpError.Status), err.Error()
+	}
 	return "delivery_unconfirmed", "交付结果尚未确认，请检查连接和账号后继续；系统会先核对远端状态"
 }
 
 type HTTPError struct{ Status int }
 
-func (e *HTTPError) Error() string { return fmt.Sprintf("GitHub HTTP %d", e.Status) }
+func (e *HTTPError) Error() string {
+	message := "GitHub 暂时不可用，请稍后重试"
+	switch e.Status {
+	case 401:
+		message = "GitHub 登录已失效，请重新登录发布账号"
+	case 403:
+		message = "GitHub 拒绝访问，请检查账号权限或请求次数限制"
+	case 404:
+		message = "GitHub 未找到所需内容，请检查仓库地址及账号访问权限"
+	case 409, 422:
+		message = "GitHub 内容存在冲突，请核对版本和远端记录后重试"
+	case 429:
+		message = "GitHub 请求次数过多，请稍后重试"
+	}
+	return fmt.Sprintf("%s（HTTP %d）", message, e.Status)
+}
 func isStatus(err error, status int) bool {
 	var e *HTTPError
 	return errors.As(err, &e) && e.Status == status

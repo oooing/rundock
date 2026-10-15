@@ -27,10 +27,26 @@ export function deliveryProgressState(state: string): ProgressState {
     : ['creating_draft', 'uploading', 'publishing'].includes(state) ? 'running' : 'waiting'
 }
 // Delivery state is authoritative: target rows remain waiting_publish during upload.
-export function targetProgress(target: ReleaseTargetRun, deliveries: ReleaseDelivery[], definitions: ReleaseTarget[]) {
+export function targetProgress(target: ReleaseTargetRun, deliveries: ReleaseDelivery[], definitions: ReleaseTarget[], cloudBuild?: CloudBuildStatus | null) {
   const definition = definitions.find(item => item.id === target.targetId)
-  const delivery = target.publish && definition ? deliveries.find(item => item.groupId === definition.versionGroup) : undefined
+  const group = target.versionGroup || definition?.versionGroup
+  const delivery = target.publish && group ? deliveries.find(item => item.groupId === group) : undefined
   if (delivery) return { state: deliveryProgressState(delivery.state), label: deliveryProgressLabels[delivery.state] || delivery.state, error: delivery.errorMessage }
+  const cloudTarget = target.publish && ['handed_off','remote_pending','triggered'].includes(target.status) && target.releaseRunId === cloudBuild?.releaseRunId ? cloudBuild?.targets?.find(item => item.targetId === target.targetId) : undefined
+  if (cloudTarget) {
+    if (cloudBuild?.state === 'unavailable' && !['succeeded','failed'].includes(cloudTarget.state))
+      return {state:'waiting' as ProgressState,label:'连接中断，结果待确认',error:''}
+    const labels: Record<string,string> = {succeeded:'云端构建已完成',failed:'云端执行失败',running:'云端执行中',pending:'等待云端结果',superseded:'已有新版本，此版本未完成'}
+    const state: ProgressState = cloudTarget.state === 'succeeded' ? 'succeeded' : cloudTarget.state === 'failed' ? 'failed' : cloudTarget.state === 'running' ? 'running' : cloudTarget.state === 'superseded' ? 'skipped' : 'waiting'
+    return {state,label:labels[cloudTarget.state] || '结果待确认',error:cloudTarget.summary}
+  }
+  // Handoff records describe local dispatch, not the eventual cloud result.
+  // Aggregate success proves all matched workflows succeeded; aggregate failure
+  // or supersession cannot identify an individual target's outcome.
+  if (target.publish && ['handed_off', 'remote_pending', 'triggered'].includes(target.status)
+    && target.releaseRunId && cloudBuild?.releaseRunId === target.releaseRunId && cloudBuild.state === 'succeeded') {
+    return { state: 'succeeded' as ProgressState, label: '云端构建已完成', error: '' }
+  }
   const state: ProgressState = ['running', 'succeeded', 'failed', 'cancelled', 'skipped'].includes(target.status)
     ? target.status as ProgressState : 'waiting'
   const labels: Record<string, string> = { build: '构建', package: '打包', check: '检查', checking: '检查', artifacts: '核对产物', publish: '上传', deploy: '部署', waiting_publish: '等待上传或部署', ready_to_publish: '等待上传或部署', triggered: '等待云端处理', cloud_pending: '云端结果待确认', completed: '已完成' }
@@ -48,9 +64,10 @@ export function releaseProgress(input: {
   const allPublished = deliveries.length > 0 && deliveries.every(item => item.state === 'published')
   const failed = run.status === 'failed' || cloudBuild?.state === 'failed'
   const cancelled = run.status === 'cancelled' || /cancelled/.test(run.errorCode || '')
+  const superseded = cloudHandoff && cloudBuild?.state === 'superseded'
   const cloudPending = cloudHandoff && !['succeeded', 'superseded', 'failed'].includes(cloudBuild?.state || '')
   const finished = run.status === 'succeeded' && !cloudPending && !failed && (!hasDelivery || allPublished || localOnly)
-  const state: ProgressState = cancelled ? 'cancelled' : failed ? 'failed' : finished ? 'succeeded' : 'running'
+  const state: ProgressState = cancelled ? 'cancelled' : failed ? 'failed' : superseded ? 'skipped' : finished ? 'succeeded' : 'running'
   const currentDelivery = deliveries.find(item => ['creating_draft', 'uploading', 'publishing', 'failed'].includes(item.state))
   const definitions: Array<[string, string]> = [['prepare', '准备与检查']]
   if (hasBuild) definitions.push(['build', '构建与打包'], ['verify', '校验并保存产物'])
@@ -61,8 +78,12 @@ export function releaseProgress(input: {
   definitions.push(['complete', localOnly || !run.pushRemote ? '本地完成' : hasDelivery ? '发布完成' : '流程完成'])
   let phase = 'prepare'
   const stage = run.stage
+  // Older records used delivery_preflight for both the pre-build connection
+  // check and the post-build verification. No commit means construction never began.
+  const connecting = stage === 'delivery_connecting' || stage === 'delivery_preflight' && !run.commitSha
   if (['building_targets', 'target_build', 'target_package', 'target_check', 'local_check', 'local_build', 'local_package'].includes(stage)) phase = 'build'
   if (['local_verifying', 'local_saving', 'delivery_preparing', 'delivery_preflight'].includes(stage)) phase = 'verify'
+  if (connecting) { phase = 'prepare'; definitions[0][1] = '连接 GitHub' }
   if (['tagging', 'pushing_branch', 'pushing_tag'].includes(stage)) phase = run.pushRemote ? 'push' : hasBuild ? 'verify' : 'prepare'
   if (['publishing_targets', 'target_publish', 'target_deploy'].includes(stage)) phase = hasDelivery ? 'upload' : 'execute'
   if (stage === 'delivery_publish') phase = currentDelivery?.state === 'publishing' ? 'release' : 'upload'
@@ -71,7 +92,7 @@ export function releaseProgress(input: {
   let index = definitions.findIndex(([id]) => id === phase)
   if (index < 0) index = 0
   const steps: ProgressStep[] = definitions.map(([id, label], position) => ({ id, label,
-    state: finished || position < index ? 'succeeded' : position > index ? 'waiting' : state,
+    state: superseded && ['cloud','complete'].includes(id) ? 'skipped' : finished || position < index ? 'succeeded' : position > index ? 'waiting' : state,
   }))
   // Groups upload/publish sequentially, so a publishing group does not prove
   // that the other groups' assets are uploaded. Never mark that aggregate done.
@@ -93,7 +114,9 @@ export function releaseProgress(input: {
   if (cancelled) title = '本次操作已取消'
   const next = state === 'running' ? steps.slice(index + 1).find(item => item.state === 'waiting')?.label : undefined
   return { state, title, phaseLabel: steps[index]?.label || '执行', steps, next, currentDelivery, activeTarget, published: deliveries.filter(item => item.state === 'published').length,
-    error: currentDelivery?.errorMessage || targets.find(item => item.status === 'failed')?.errorMessage || run.errorMessage || (cloudBuild?.state === 'failed' ? cloudBuild.summary : ''),
+    error: stage === 'delivery_preflight' && !run.commitSha && run.errorCode === 'github_request_unconfirmed'
+      ? '读取 GitHub 信息失败；旧记录未保存具体连接原因，请返回发布重试。'
+      : currentDelivery?.errorMessage || targets.find(item => item.status === 'failed')?.errorMessage || run.errorMessage || (cloudBuild?.state === 'failed' ? cloudBuild.summary : ''),
     syncPending: allPublished && deliveries.some(item => ['pending', 'deploying', 'deployment_requested', 'deployment_failed', 'deployment_rejected', 'unverified'].includes(item.syncState)),
   }
 }

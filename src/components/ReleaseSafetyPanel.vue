@@ -5,13 +5,15 @@ import { tr } from '@/i18n'
 import ReleaseCheckIssues from './ReleaseCheckIssues.vue'
 import ReleaseFilePreview from './ReleaseFilePreview.vue'
 import type { ReleaseCandidate, ReleaseFileCategory, ReleaseFileClassification, ReleaseManualDecision } from '@/types'
-const props = withDefaults(defineProps<{ignoreFile?:(file:ReleaseFileClassification)=>Promise<string>;appId:string;intent:'formal'|'save-progress';checksEnabled?:boolean;locked?:boolean;cloudBuild?:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean;files: ReleaseFileClassification[]; selected: Record<string,boolean>; decisions: ReleaseManualDecision[]; candidate: ReleaseCandidate|null; busy: boolean; stale: boolean}>(),{checksEnabled:true,locked:false})
-const emit = defineEmits<{'update:checksEnabled':[enabled:boolean]; choose:[file:ReleaseFileClassification,included:boolean]; recommend:[]; cancel:[]; refresh:[]; check:[]; exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
+const props = withDefaults(defineProps<{ignoreFile?:(file:ReleaseFileClassification)=>Promise<string>;ignoreFiles?:(files:ReleaseFileClassification[])=>Promise<string>;appId:string;intent:'formal'|'save-progress';checksEnabled?:boolean;locked?:boolean;cloudBuild?:boolean;findingDecisions?:Record<string,'allow'|'exclude'>;resolvingReview?:boolean;files: ReleaseFileClassification[]; selected: Record<string,boolean>; decisions: ReleaseManualDecision[]; candidate: ReleaseCandidate|null; busy: boolean; stale: boolean}>(),{checksEnabled:true,locked:false})
+const emit = defineEmits<{'update:checksEnabled':[enabled:boolean]; 'ignore-pending':[count:number]; choose:[file:ReleaseFileClassification,included:boolean]; recommend:[]; cancel:[]; refresh:[]; check:[]; exception:[finding:ReleaseCandidate['sensitiveFindings'][number],reason:string]}>()
 const category=ref<ReleaseFileCategory|null>(null)
 const fileTabsId=useId()
 const fileTabs=ref<HTMLElement|null>(null)
 const previewPath=ref<string|null>(null)
 const pendingIgnores=ref<ReleaseFileClassification[]>([])
+watch(pendingIgnores,files=>emit('ignore-pending',files.length),{immediate:true,flush:'sync'})
+onBeforeUnmount(()=>emit('ignore-pending',0))
 const bulkIgnore=ref(false)
 const ignoredCount=ref(0)
 const bulkHelpId=useId()
@@ -31,18 +33,22 @@ function onHelpViewportChange(event:Event){if(event.target instanceof Node && bu
 onMounted(()=>{window.addEventListener('resize',onHelpViewportChange);window.addEventListener('scroll',onHelpViewportChange,true)})
 onBeforeUnmount(()=>{window.removeEventListener('resize',onHelpViewportChange);window.removeEventListener('scroll',onHelpViewportChange,true)})
 const ignoring=ref(false),ignoreError=ref(''),ignoreNotice=ref('')
-async function confirmIgnore(){
+async function applyIgnores(){
   if(!pendingIgnores.value.length || ignoring.value || props.busy || props.locked || !props.ignoreFile) return
   ignoring.value=true;ignoreError.value=''
   try{
-    for(const file of [...pendingIgnores.value]){
-      const current=props.files.find(item=>item.path===file.path && item.contentFingerprint===file.contentFingerprint)
-      if(!current || current.tracked) throw new Error(tr('文件已变化，请重新选择后再忽略。'))
-      const ignoreFile=await props.ignoreFile(current)
-      pendingIgnores.value=pendingIgnores.value.filter(item=>item.path!==file.path)
-      ignoredCount.value+=1
-      ignoreNotice.value=bulkIgnore.value?tr('已忽略 {0} 个，剩余 {1} 个。删除忽略规则可恢复。',[ignoredCount.value,pendingIgnores.value.length]):tr('已加入 {0}；以后不再列出此文件。撤销时请删除对应忽略规则。',[ignoreFile])
+    const files=[...pendingIgnores.value]
+    const currentFiles=new Map(props.files.map(file=>[file.path,file]))
+    for(const file of files){
+      const current=currentFiles.get(file.path)
+      if(current && (current.contentFingerprint!==file.contentFingerprint || current.tracked)) throw new Error(tr('文件已变化，请重新选择后再忽略。'))
     }
+    const ignoreFile=bulkIgnore.value && props.ignoreFiles
+      ? await props.ignoreFiles(files)
+      : files.length===1 ? await props.ignoreFile(files[0]) : (()=>{throw new Error(tr('批量忽略暂不可用，请重新加载。'))})()
+    pendingIgnores.value=[]
+    ignoredCount.value=files.length
+    ignoreNotice.value=bulkIgnore.value?tr('已忽略 {0} 个文件。删除忽略规则可恢复。',[files.length]):tr('已加入 {0}；以后不再列出此文件。撤销时请删除对应忽略规则。',[ignoreFile])
     bulkIgnore.value=false
   }catch(error){ignoreError.value=error instanceof Error?error.message:String(error)}
   finally{ignoring.value=false}
@@ -78,7 +84,7 @@ async function onFileTabKeydown(event:KeyboardEvent){
 }
 const visibleFiles = computed(()=>groups.value.find(group=>group.id===activeCategory.value)?.files ?? [])
 const reviewFiles=computed(()=>props.files.filter(file=>file.category==='review'))
-const canBulkIgnore=computed(()=>!!props.ignoreFile && reviewFiles.value.length>0 && reviewFiles.value.every(file=>!file.tracked))
+const canBulkIgnore=computed(()=>!!props.ignoreFiles && reviewFiles.value.length>0 && reviewFiles.value.every(file=>!file.tracked))
 const bulkDecision=computed(()=>{
   if(bulkIgnore.value && pendingIgnores.value.length) return 'ignore'
   if(reviewFiles.value.every(file=>reviewDecision(file)==='exclude')) return 'exclude'
@@ -94,12 +100,20 @@ watch([()=>props.files,()=>props.decisions,()=>props.busy,()=>props.locked,ignor
 const displayStatus=computed(()=>props.busy?'running':hasOnlyFileReviewBlock(props.candidate)?'review':props.candidate?.intent==='formal' && (props.candidate.sensitiveFindings.length || props.candidate.dependencyFindings.some(item=>item.blocked))?'blocked':props.candidate?.status||'pending')
 const labels:Record<string,string>={review:tr('待确认文件'),pending:tr('提交时自动检查'),running:tr('检查中'),passed:tr('检查通过'),failed:tr('检查失败'),cancelled:tr('已取消'),unverified:tr('未验证'),stale:tr('已失效'),blocked:tr('已阻断'),ready:tr('可以提交'),skipped:tr('已跳过')}
 function cancelIgnore(){pendingIgnores.value=[];bulkIgnore.value=false;ignoredCount.value=0;ignoreError.value=''}
+function skipFailedIgnores(){
+  if(ignoring.value || props.busy || props.locked) return
+  for(const file of pendingIgnores.value){
+    const current=props.files.find(item=>item.path===file.path)
+    if(current) emit('choose',current,false)
+  }
+  cancelIgnore()
+}
 function chooseBulk(event:Event){
   if(props.busy || props.locked || ignoring.value) return
   const value=(event.target as HTMLSelectElement).value
   category.value='review';cancelIgnore();ignoreNotice.value=''
   if(value==='ignore'){
-    if(canBulkIgnore.value){pendingIgnores.value=[...reviewFiles.value];bulkIgnore.value=true}
+    if(canBulkIgnore.value){pendingIgnores.value=[...reviewFiles.value];bulkIgnore.value=true;return applyIgnores()}
     return
   }
   if(value==='include' || value==='exclude') for(const file of reviewFiles.value) emit('choose',file,value==='include')
@@ -109,7 +123,7 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
   category.value='review'
   const value=(event.target as HTMLSelectElement).value
   if(value==='ignore'){
-    if(!file.tracked && props.ignoreFile){pendingIgnores.value=[file];bulkIgnore.value=false;ignoredCount.value=0;ignoreError.value='';ignoreNotice.value=''}
+    if(!file.tracked && props.ignoreFile){pendingIgnores.value=[file];bulkIgnore.value=false;ignoredCount.value=0;ignoreError.value='';ignoreNotice.value='';return applyIgnores()}
     return
   }
   cancelIgnore()
@@ -136,6 +150,15 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
       </div></div>
     </div>
     </div>
+    <div v-if="pendingIgnores.length" class="ignore-status" role="status">
+      <p v-if="ignoring">{{tr('正在忽略，剩余 {0} 个文件…',[pendingIgnores.length])}}</p>
+      <template v-else-if="ignoreError">
+        <p role="alert">{{tr('忽略未完成：{0}',[ignoreError])}}</p>
+        <details><summary>{{tr('查看文件')}}</summary><code v-for="file in pendingIgnores" :key="file.path">{{file.path}}</code></details>
+        <button type="button" :disabled="busy || locked" @click="applyIgnores">{{tr('重试')}}</button>
+        <button type="button" :disabled="busy || locked" @click="skipFailedIgnores">{{tr('本次跳过')}}</button>
+      </template>
+    </div>
     <div :id="`${fileTabsId}-panel`" ref="fileList" class="file-groups" role="tabpanel" :aria-labelledby="`${fileTabsId}-tab-${activeCategory}`" tabindex="0">
         <div v-for="file in visibleFiles" :key="file.path" class="scope-file">
           <div class="file-row" :class="{'review-row':file.category==='review'}">
@@ -153,19 +176,11 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
         </div>
         <p v-if="!visibleFiles.length" class="empty-files">{{tr(activeCategory==='review'?'暂无待确认的文件。':activeCategory==='recommend'?'暂无建议保存的改动。':'没有匹配的文件')}}</p>
     </div>
-    <div v-if="pendingIgnores.length" class="ignore-confirm">
-      <code v-for="file in pendingIgnores" :key="file.path">{{file.path}}</code>
-      <p>{{tr('仅将这个文件加入适用的 .gitignore，不删除文件、不自动提交；以后不再出现在待提交列表中。')}}</p>
-      <p>{{tr('忽略规则本身可随项目提交；要恢复此文件，请删除对应规则。')}}</p>
-      <button type="button" :disabled="busy || locked || ignoring" @click="confirmIgnore">{{ignoring?tr('正在加入…'):tr('确认加入忽略清单')}}</button>
-      <button type="button" :disabled="ignoring" @click="cancelIgnore">{{tr('取消')}}</button>
-      <p v-if="ignoreError" role="alert">{{ignoreError}}</p>
-    </div>
     <p v-if="ignoreNotice" class="ignore-notice" role="status">{{ignoreNotice}}</p>
     <slot name="after-files" />
     <div class="candidate-result" aria-live="polite" tabindex="-1">
       <div class="safety-head"><label class="check-toggle"><input type="checkbox" role="switch" :checked="checksEnabled" :disabled="busy || locked" aria-describedby="release-check-help" @change="emit('update:checksEnabled',($event.target as HTMLInputElement).checked)" /><strong>{{tr('启用检查')}}</strong></label><span v-if="!checksEnabled || stale || displayStatus !== 'pending'" :class="!checksEnabled?'stale':stale?'stale':displayStatus">{{!checksEnabled?tr('未检查'):stale?tr('需重新检查'):displayStatus==='blocked'?tr('待处理'):labels[displayStatus]||displayStatus}}</span></div>
-      <p id="release-check-help">{{checksEnabled?tr('检查敏感信息、遗漏文件和已配置的测试，减少误传与发布失败。'):tr('不检查敏感信息、遗漏文件和测试；Git、版本校验及云端检查不受影响。')}}</p>
+      <p id="release-check-help">{{checksEnabled?busy?tr('正在检查所选文件、私密信息、配套文件和项目测试。'):tr('提交前检查所选内容；已通过且内容未变时，直接沿用结果。'):tr('不检查敏感信息、遗漏文件和测试；Git、版本校验及云端检查不受影响。')}}</p>
       <p v-if="checksEnabled && stale">{{tr('文件或发布范围已变化，下次提交时会自动重新检查。')}}</p>
       <p v-if="checksEnabled && candidate?.accepted && !candidate.checksSkipped && !stale && !busy" class="passed">{{cloudBuild?tr('本地检查已通过。GitHub 构建会在发布后执行，结果另行显示。'):tr('发布前检查已通过。')}}</p>
       <ReleaseCheckIssues v-if="checksEnabled && candidate && !candidate.checksSkipped" :app-id="appId" :candidate="candidate" :files="files" :selected="selected" :busy="busy" :stale="stale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @review="showPendingFiles" @choose="(file,included)=>emit('choose',file,included)" @check="emit('check')" @exception="(finding,reason)=>emit('exception',finding,reason)" />
@@ -173,9 +188,10 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
   </div>
 </template>
 <style scoped>
-.ignore-confirm{margin:0;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:12px;overflow-wrap:anywhere}.ignore-confirm p{margin:8px 0;color:var(--text-faint);line-height:1.6}.ignore-confirm button{margin:4px 8px 0 0;min-height:34px;font-size:12px}.ignore-confirm [role=alert]{color:var(--red)}.ignore-notice{font-size:12px;color:var(--green);line-height:1.6}
+.ignore-status details{max-height:140px;overflow:auto}.ignore-status details code{display:block;margin-top:6px}
+.ignore-status{margin:8px 0;font-size:12px;overflow-wrap:anywhere}.ignore-status p{margin:8px 0;color:var(--text-faint);line-height:1.6}.ignore-status button{margin:4px 8px 0 0;min-height:34px;font-size:12px}.ignore-status [role=alert]{color:var(--red)}.ignore-notice{font-size:12px;color:var(--green);line-height:1.6}
 .candidate-result .review{color:var(--amber)}
-.ignore-confirm>code{display:block}.bulk-control{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-faint)}.bulk-select{width:140px;max-width:100%;padding:6px 9px;font-size:12px;color:var(--text)}.bulk-select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ignore-status>code{display:block}.bulk-control{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-faint)}.bulk-select{width:140px;max-width:100%;padding:6px 9px;font-size:12px;color:var(--text)}.bulk-select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .bulk-control .bulk-help-button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--text-faint)}.bulk-help-button svg{width:17px;height:17px}.bulk-control .bulk-help-button:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--accent)}.bulk-help-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .bulk-help-popover{position:fixed;inset:auto;margin:0;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);overflow:auto;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elev-2);color:var(--text);box-shadow:0 8px 24px #0005;font-size:12px;line-height:1.6;overscroll-behavior:contain}.bulk-help-popover p{margin:0;color:var(--text-dim)}.bulk-help-popover dl{display:grid;gap:10px;margin:12px 0 0}.bulk-help-popover dl>div{display:grid;grid-template-columns:60px minmax(0,1fr);gap:10px}.bulk-help-popover dt{font-weight:600}.bulk-help-popover dd{margin:0;color:var(--text-dim)}.bulk-help-popover .bulk-help-limit{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);color:var(--amber)}
 @media(pointer:coarse){.bulk-select{min-height:44px}.bulk-control .bulk-help-button{width:44px;height:44px}}
@@ -196,6 +212,6 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
 .file-name:focus-visible,.scope-actions button:focus-visible,.category-counts button:focus-visible,.file-groups:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (pointer: coarse) { .scope-file .file-name,.scope-actions button,.category-counts button { min-height: 44px; } }
 .review-row select { width: 210px; max-width: 100%; }
-.ignore-confirm button:focus-visible,.review-row select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 480px) { .review-row { flex-wrap: wrap; }.review-row .file-name { flex-basis: 100%; }.review-row select { width: 100%; }.ignore-confirm button { margin-bottom: 6px; min-height: 40px; } }
+.ignore-status button:focus-visible,.review-row select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 480px) { .review-row { flex-wrap: wrap; }.review-row .file-name { flex-basis: 100%; }.review-row select { width: 100%; }.ignore-status button { margin-bottom: 6px; min-height: 40px; } }
 </style>

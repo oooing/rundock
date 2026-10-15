@@ -26,6 +26,8 @@ type Service struct {
 	diagnostics      *diagnostics.Service
 	candidatesMu     sync.Mutex
 	candidates       map[string]*releaseCandidate
+	scratchCancel    context.CancelFunc
+	scratchDone      chan struct{}
 	// Set before monitoring starts. Called only after a changed snapshot is saved.
 	OnCloudBuildChange func(*store.CloudBuild)
 }

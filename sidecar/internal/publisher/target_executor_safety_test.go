@@ -259,8 +259,8 @@ func TestNamespacedReleaseUsesLocalVersionWithoutRemotePrecheck(t *testing.T) {
 	if run.Status != "succeeded" || run.TagName != "mobile/v5.0.1" || run.TargetVersion != "5.0.1" {
 		t.Fatalf("auto version did not use local namespaced version: %+v", run)
 	}
-	if runner.count("fetch") != 0 || runner.count("ls-remote") != 0 {
-		t.Fatalf("release preparation queried the remote: %+v", runner.calls)
+	if runner.count("fetch") != 0 || runner.count("ls-remote") != 1 {
+		t.Fatalf("expected exactly one upload branch check: %+v", runner.calls)
 	}
 	remoteTag := strings.TrimSpace(runGit(t, repo, "ls-remote", "origin", "refs/tags/mobile/v5.2.0"))
 	if !strings.HasPrefix(remoteTag, pf.HeadSHA+"\t") {

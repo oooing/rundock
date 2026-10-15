@@ -20,6 +20,7 @@ const localSnapshotBytesLimit int64 = 2 << 30
 // This is source isolation, not a sandbox for arbitrary project commands. Only
 // saved commands are executed; no dependencies are linked to the live project.
 type localBuildSnapshot struct {
+	scratch   *scratchWorkspace
 	Dir, Root string
 	Files     map[string]string
 	SHA256    string
@@ -104,11 +105,12 @@ func (s *Service) createLocalSnapshot(ctx context.Context, root string, outputPa
 	if err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp("", "rundock-local-build-")
+	workspace, err := newScratch("snapshot")
 	if err != nil {
 		return nil, &Error{Code: "local_snapshot_failed", Message: "无法创建独立构建目录"}
 	}
-	snapshot := &localBuildSnapshot{Dir: dir, Root: filepath.Join(dir, "source"), Files: map[string]string{}}
+	dir := workspace.Dir
+	snapshot := &localBuildSnapshot{scratch: workspace, Dir: dir, Root: filepath.Join(dir, "source"), Files: map[string]string{}}
 	if err = os.Mkdir(snapshot.Root, 0700); err != nil {
 		snapshot.cleanup()
 		return nil, err
@@ -264,6 +266,10 @@ func localSourceHash(ctx context.Context, path string) (string, error) {
 }
 
 func (snapshot *localBuildSnapshot) cleanup() {
+	if snapshot != nil && snapshot.scratch != nil {
+		_ = snapshot.scratch.cleanup()
+		return
+	}
 	if snapshot == nil || snapshot.Dir == "" {
 		return
 	}

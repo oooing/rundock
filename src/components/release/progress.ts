@@ -21,12 +21,15 @@ export function installProgress(ctx: ReleaseContext) {
         ctx.retryConfirmationRequired.value = undefined;
         ctx.retryConfirmationTargets.value = [];
         ctx.error.value = '';
+        ctx.runConnectionError.value = '';
+        ctx.submissionUncertain.value = false;
         rememberReleaseSession({ appId: ctx.props.app.id, runId: run.id });
         ctx.schedulePoll(0);
     };
     ctx.historyStatus = function (run: ReleaseRun) {
         if (run.status === 'succeeded')
-            return run.pushRemote ? tr("已推送") : tr("本地完成");
+            return run.pushRemote ? tr("查看发布结果") : tr("本地完成");
+        if (/cancelled/.test(run.errorCode || '')) return tr('已取消');
         return run.status === 'failed' ? tr("失败") : tr("进行中");
     };
     ctx.schedulePoll = function (delay = 700) {
@@ -47,6 +50,7 @@ export function installProgress(ctx: ReleaseContext) {
             if (ctx.disposed || epoch !== viewEpoch || ctx.activeRun.value?.id !== run.id)
                 return;
             ctx.activeRun.value = view.run;
+            ctx.runConnectionError.value = '';
             ctx.runTargets.value = view.targets || [];
             ctx.runArtifacts.value = view.artifacts || [];
             ctx.runAutomation.value = view.automation || null;
@@ -59,17 +63,19 @@ export function installProgress(ctx: ReleaseContext) {
             if (view.run.status === 'queued' || view.run.status === 'running')
                 ctx.schedulePoll();
             else {
-                ctx.history.value = await api.listReleases(ctx.props.app.id);
+                const history = await api.listReleases(ctx.props.app.id).catch(() => null);
+                if (history && !ctx.disposed && epoch === viewEpoch) ctx.history.value = history;
                 if (ctx.disposed || epoch !== viewEpoch || ctx.activeRun.value?.id !== run.id)
                     return;
-                if (view.run.status === 'succeeded' && ctx.automationHandedOff.value && !ctx.cloudBuildSettled.value)
+                if (view.run.status === 'succeeded' && (ctx.automationHandedOff.value && !ctx.cloudBuildSettled.value
+                    || ctx.runDeliveries.value.some(item => ['pending','unverified','deploying','deployment_requested'].includes(item.syncState))))
                     ctx.schedulePoll(15000);
             }
         }
         catch (reason) {
             if (ctx.disposed || epoch !== viewEpoch || ctx.activeRun.value?.id !== run.id)
                 return;
-            ctx.error.value = ctx.messageOf(reason);
+            ctx.runConnectionError.value = ctx.messageOf(reason);
             ctx.schedulePoll(1500);
         }
     };
@@ -134,6 +140,18 @@ export function installProgress(ctx: ReleaseContext) {
         ctx.retryConfirmationTargets.value = [];
     };
     ctx.startNew = function () {
+        ctx.preparation.value = null;
+        const run = ctx.activeRun.value;
+        if (run?.status === 'failed' && !run.commitSha
+            && ['preparing', 'delivery_connecting', 'delivery_preflight'].includes(run.stage)
+            && ctx.candidateReady.value) {
+            // A connection failure did not consume the accepted candidate. Keep
+            // the draft, exceptions and completed checks; publish validates the
+            // repository fingerprint again before any changes.
+            ctx.leaveRunView();
+            ctx.error.value = '';
+            return;
+        }
         ctx.candidate.value = null;
         ctx.candidateSignature.value = '';
         ctx.leaveRunView();

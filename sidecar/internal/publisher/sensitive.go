@@ -169,7 +169,7 @@ func secretAssignmentLiteral(rel, value string) (string, bool) {
 	base := strings.ToLower(filepath.Base(rel))
 	ext := strings.ToLower(filepath.Ext(base))
 	switch ext {
-	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".rs", ".java", ".kt", ".swift", ".cs", ".c", ".h", ".cpp", ".rb", ".php", ".dart", ".json":
+	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".rs", ".java", ".kt", ".swift", ".cs", ".c", ".h", ".cpp", ".rb", ".php", ".dart", ".json", ".ps1", ".psm1":
 		return "", false
 	}
 	if i := strings.Index(value, " #"); i >= 0 {

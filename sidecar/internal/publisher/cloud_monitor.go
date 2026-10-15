@@ -115,12 +115,15 @@ func (s *Service) checkCloudBuilds(ctx context.Context, read githubReader, now t
 			build.Errors = 1
 			if old != nil {
 				build.Errors = old.Errors + 1
+				if len(build.Targets) == 0 {
+					build.Targets = old.Targets
+				}
 			}
 			// A lost connection never erases an already observed build failure.
 			if old != nil && old.State == "failed" {
 				build.State, build.Summary, build.URL, build.AlertKey = old.State, old.Summary, old.URL, old.AlertKey
 			}
-			if build.Errors >= 3 && build.State != "failed" {
+			if build.State != "failed" {
 				build.State = "unavailable"
 				build.Summary = "暂时无法读取 GitHub 构建状态，请打开 GitHub 查看；私有仓库需要已登录且有 Actions 读取权限的 GitHub CLI。"
 				build.AlertKey = id + ":unavailable"
@@ -211,8 +214,30 @@ func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo
 	seen := map[string]bool{}
 	failures := []string{}
 	summaries := []string{}
+	targetResults := map[string]store.CloudTargetBuild{}
 	pending := false
 	for _, candidate := range matched {
+		item := store.CloudTargetBuild{State: "pending", URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d", repo, candidate.ID)}
+		switch {
+		case recovered[candidate.ID].ID != 0:
+			item.State = "superseded"
+			item.Summary = "已有新版本完成；此版本未完成发布。"
+		case candidate.Status == "completed" && candidate.Conclusion == "success":
+			item.State = "succeeded"
+		case cloudFailure(candidate.Conclusion):
+			item.State = "failed"
+			item.Summary = candidate.Name + "：" + cloudConclusion(candidate.Conclusion)
+		case candidate.Status != "completed":
+			item.State = "running"
+		default:
+			item.Summary = "工作流已结束，但未确认发布成功。"
+		}
+		// Explicit dispatch has an exact target identity. Legacy tags can map
+		// to multiple workflows: only unanimous success proves that tag done.
+		previous, exists := targetResults[candidate.HeadBranch]
+		if !exists || item.State == "failed" || previous.State != "failed" && item.State != "succeeded" {
+			targetResults[candidate.HeadBranch] = item
+		}
 		seen[candidate.HeadBranch] = true
 		if len(failures) == 0 {
 			build.URL = fmt.Sprintf("https://github.com/%s/actions/runs/%d", repo, candidate.ID)
@@ -260,6 +285,27 @@ func (s *Service) inspectCloudBuild(ctx context.Context, read githubReader, repo
 			}
 		}
 		summaries = append(summaries, summary)
+		item.Summary = summary
+		targetResults[candidate.HeadBranch] = item
+	}
+	for _, target := range plan.Targets {
+		if !target.Selection.Publish {
+			continue
+		}
+		version, ok := plan.releaseVersionForGroup(target.VersionGroup)
+		if !ok {
+			continue
+		}
+		key := version.TagName
+		if event == "workflow_dispatch" {
+			key = "rundock:" + run.ID + ":" + target.ID
+		}
+		item, ok := targetResults[key]
+		if !ok {
+			item = store.CloudTargetBuild{State: "pending", Summary: "尚未找到对应的云端任务，请查看工作流是否已启动。"}
+		}
+		item.TargetID = target.ID
+		build.Targets = append(build.Targets, item)
 	}
 	if len(failures) > 0 {
 		sort.Strings(failures)

@@ -22,32 +22,35 @@ import (
 )
 
 type releaseCandidate struct {
-	FileModes        map[string]string
-	ID               string
-	AppID            string
-	RepoRoot         string
-	GitDir           string
-	Dir              string
-	Index            string
-	Work             string
-	Fingerprint      string
-	Binding          string
-	Request          CandidateRequest
-	FileDigests      map[string]string
-	SafetyReady      bool
-	TreeHash         string
-	HeadSHA          string
-	Intent           string
-	Selected         []string
-	VersionFiles     map[string][]byte
-	VersionOriginals map[string][]byte
-	FrozenRules      []releaseconfig.FileRule
-	FrozenProfiles   []releaseconfig.CheckProfile
-	AutomaticChecks  []CheckResult
-	TargetKinds      []string
-	View             CandidateView
-	cancel           context.CancelFunc
-	mu               sync.Mutex
+	scratch             *scratchWorkspace
+	lastUsed            time.Time // guarded by candidatesMu
+	FileModes           map[string]string
+	ID                  string
+	AppID               string
+	RepoRoot            string
+	GitDir              string
+	Dir                 string
+	Index               string
+	Work                string
+	Fingerprint         string
+	Binding             string
+	Request             CandidateRequest
+	FileDigests         map[string]string
+	SafetyReady         bool
+	TreeHash            string
+	HeadSHA             string
+	Intent              string
+	Selected            []string
+	VersionFiles        map[string][]byte
+	VersionOriginals    map[string][]byte
+	FrozenRules         []releaseconfig.FileRule
+	FrozenProfiles      []releaseconfig.CheckProfile
+	AutomaticChecks     []CheckResult
+	BaseClassifications []FileClassification
+	TargetKinds         []string
+	View                CandidateView
+	cancel              context.CancelFunc
+	mu                  sync.Mutex
 }
 
 func (s *Service) PrepareCandidate(ctx context.Context, appID string, req CandidateRequest) (*CandidateView, error) {
@@ -86,6 +89,9 @@ func (s *Service) PrepareCandidate(ctx context.Context, appID string, req Candid
 	for _, path := range selected {
 		selectedSet[path] = true
 	}
+	// This request already supersedes the previous selection. Release its tree
+	// before materializing the replacement, instead of briefly doubling disk use.
+	s.discardSupersededCandidates(appID, pf.RepoRoot)
 	cand, err := s.buildIsolatedCandidate(ctx, appID, pf, selected, req, cfg)
 	if err != nil {
 		return nil, err
@@ -96,6 +102,7 @@ func (s *Service) PrepareCandidate(ctx context.Context, appID string, req Candid
 	cand.FrozenProfiles = profiles
 	cand.TargetKinds = kinds
 	cand.Request = req
+	cand.BaseClassifications = cloneView(CandidateView{Classifications: classifications}).Classifications
 	cand.Binding = candidateBinding(req, pf, cfg)
 	cand.FileDigests, err = candidateFileDigests(cand.Work)
 	if err != nil {
@@ -251,14 +258,22 @@ func (s *Service) CancelCandidate(appID, id string) (*CandidateView, error) {
 	}
 	view := cloneView(cand.View)
 	cand.mu.Unlock()
+	s.cleanIdleCandidates(time.Now())
 	return view, nil
 }
 
 func (s *Service) buildIsolatedCandidate(ctx context.Context, appID string, pf *Preflight, selected []string, req CandidateRequest, cfg *releaseconfig.Config) (*releaseCandidate, error) {
-	dir, err := os.MkdirTemp("", "rundock-candidate-*")
+	workspace, err := newScratch("candidate")
 	if err != nil {
 		return nil, &Error{Code: "candidate_failed", Message: "无法创建隔离候选目录"}
 	}
+	dir := workspace.Dir
+	keep := false
+	defer func() {
+		if !keep {
+			_ = workspace.cleanup()
+		}
+	}()
 	work := filepath.Join(dir, "tree")
 	index := filepath.Join(dir, "index")
 	if err := os.MkdirAll(work, 0o755); err != nil {
@@ -280,7 +295,7 @@ func (s *Service) buildIsolatedCandidate(ctx context.Context, appID string, pf *
 		_ = os.RemoveAll(dir)
 		return nil, &Error{Code: "status_changed", Message: "HEAD 在预检后已变化，请重新检查"}
 	}
-	cand := &releaseCandidate{ID: newCandidateID(), AppID: appID, RepoRoot: pf.RepoRoot, GitDir: gitDir, Dir: dir, Index: index, Work: work, HeadSHA: head, Selected: append([]string{}, selected...), VersionFiles: map[string][]byte{}}
+	cand := &releaseCandidate{scratch: workspace, ID: newCandidateID(), AppID: appID, RepoRoot: pf.RepoRoot, GitDir: gitDir, Dir: dir, Index: index, Work: work, HeadSHA: head, Selected: append([]string{}, selected...), VersionFiles: map[string][]byte{}}
 	if err := inspectUnsupportedTree(ctx, pf.RepoRoot); err != nil {
 		cand.cleanup()
 		return nil, err
@@ -335,6 +350,7 @@ func (s *Service) buildIsolatedCandidate(ctx context.Context, appID string, pf *
 		return nil, err
 	}
 	cand.Fingerprint = fp
+	keep = true
 	return cand, nil
 }
 
@@ -713,6 +729,10 @@ func newCandidateID() string {
 }
 
 func (c *releaseCandidate) cleanup() {
+	if c != nil && c.scratch != nil {
+		_ = c.scratch.cleanup()
+		return
+	}
 	if c == nil || c.Dir == "" {
 		return
 	}
@@ -742,24 +762,10 @@ func (s *Service) storeCandidate(cand *releaseCandidate) {
 	if s.candidates == nil {
 		s.candidates = map[string]*releaseCandidate{}
 	}
-	replaced := []string{}
-	for id, existing := range s.candidates {
-		if existing.AppID != cand.AppID || existing.ID == cand.ID {
-			continue
-		}
-		existing.mu.Lock()
-		running := existing.View.Status == CheckRunning
-		existing.mu.Unlock()
-		if running {
-			continue
-		}
-		existing.cleanup()
-		replaced = append(replaced, id)
-	}
-	for _, id := range replaced {
-		delete(s.candidates, id)
-	}
+	// Replacement is handled before copying, under the repository reservation.
+	// A project moved to another repository must not delete an active old tree.
 	s.candidates[cand.ID] = cand
+	cand.lastUsed = time.Now()
 }
 
 func (s *Service) lookupCandidate(id string) *releaseCandidate {
@@ -768,7 +774,11 @@ func (s *Service) lookupCandidate(id string) *releaseCandidate {
 	if s.candidates == nil {
 		return nil
 	}
-	return s.candidates[id]
+	cand := s.candidates[id]
+	if cand != nil {
+		cand.lastUsed = time.Now()
+	}
+	return cand
 }
 
 func hasBlockingDependency(findings []DependencyFinding) bool {

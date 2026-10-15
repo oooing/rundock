@@ -5,9 +5,24 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import { parse } from '@vue/compiler-sfc'
 const result=await build({entryPoints:['src/utils/releaseIssues.ts'],bundle:true,write:false,format:'esm',platform:'node'})
-const {groupSensitiveFindings,hasReleaseIssues,releaseCheckPresentation}=await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
+const {groupSensitiveFindings,hasReleaseIssues,releaseCheckPresentation,dependencyPresentation}=await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 const candidate=overrides=>({sensitiveFindings:[],dependencyFindings:[],checkResults:[],status:'ready',...overrides})
 const {hasOnlyFileReviewBlock}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text).toString('base64'))
+
+test('missing dependencies distinguish local material, omitted files, unreadable files and unresolved references',()=>{
+ const finding={path:'artifacts/before-src/App.jsx',missing:'artifacts/before-src/icon.svg',kind:'missing'}
+ const backup={path:finding.path,tracked:false,category:'recommend',reasons:['未跟踪的本地验证资料'],sources:['heuristic','manual']}
+ assert.equal(dependencyPresentation(finding,[backup]).title,'资料不完整')
+ assert.equal(dependencyPresentation(finding,[backup]).canExclude,true)
+ assert.equal(dependencyPresentation(finding,[{...backup,tracked:true}]).canExclude,false)
+ assert.equal(dependencyPresentation(finding,[{...backup,reasons:['明确的项目规则']}]).canExclude,false)
+ assert.equal(dependencyPresentation({...finding,kind:'unreadable'},[backup]).title,'无法读取')
+ assert.equal(dependencyPresentation({...finding,kind:'unresolved'},[]).title,'引用未找到')
+ const target={path:finding.missing,category:'recommend'}
+ assert.equal(dependencyPresentation({...finding,kind:'not_selected'},[target]).title,'文件未选')
+ assert.equal(dependencyPresentation(finding,[target]).title,'缺少文件','deleted file must not be mislabeled as just unselected')
+ assert.equal(dependencyPresentation({...finding,kind:undefined},[target]).title,'文件未选','old backend compatibility')
+})
 
 test('file confirmation is amber review, including old failed snapshots, never masking real failures',()=>{
  for(const status of ['blocked','failed']){
@@ -33,6 +48,10 @@ test('check errors expose the actual reason and distinguish unavailable tools fr
  assert.equal(releaseCheckPresentation({status:'unverified',reason:'版本文件被修改'}).label,'尚未验证');
  assert.match(releaseCheckPresentation({status:'failed'}).reason,/没有执行日志/);
  assert.match(releaseCheckPresentation({status:'failed',log:'specific failure'}).reason,/查看执行日志/);
+ for (const reason of ['无法启动检查命令，请查看执行日志','检查工作目录无效或不可用','无法建立检查进程的取消保护']) {
+  const unavailable=releaseCheckPresentation({status:'unverified',reason});
+  assert.equal(unavailable.label,'无法开始检查'); assert.match(unavailable.suggestion,/尚未启动/);
+ }
 })
 
 test('failure reason and next action are outside collapsed log details',()=>{

@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"fmt"
+	"github.com/launcher-sidecar/internal/delivery"
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/releaseconfig"
 	"github.com/launcher-sidecar/internal/store"
@@ -11,6 +12,7 @@ import (
 
 func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []string, message, checkCommand string) {
 	defer s.release(run.RepoRoot)
+	defer s.finishReleaseCandidate(run)
 	ctx, done := s.runContext(run.ID)
 	defer done()
 	releaseStarted := time.Now()
@@ -104,8 +106,13 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		}
 	}
 	if plan.hasDelivery() {
+		setStage("delivery_connecting")
 		if err := s.preflightDeliveryBuild(ctx, run, plan); err != nil {
-			s.failDelivery(run, "delivery_preflight", err)
+			code, message := delivery.ErrorInfo(err)
+			if typed, ok := err.(*Error); ok {
+				code, message = typed.Code, typed.Message
+			}
+			fail("delivery_connecting", code, message)
 			return
 		}
 	}

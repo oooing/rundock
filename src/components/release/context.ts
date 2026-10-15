@@ -40,6 +40,12 @@ export interface ReleaseContext {
     savingProfile: Ref<boolean, boolean>;
     publishing: Ref<boolean, boolean>;
     autoSubmitting: Ref<boolean, boolean>;
+    preparation: Ref<import('./preparation').ReleasePreparation | null>;
+    preparationHistory: Ref<import('./preparation').ReleasePreparation[]>;
+    savePreparation: (status: string, runId?: string) => Promise<void>;
+    restorePreparation: (saved: import('./preparation').ReleasePreparation) => Promise<void>;
+    runConnectionError: Ref<string>;
+    submissionUncertain: Ref<boolean>;
     unstaging: Ref<boolean, boolean>;
     unstageNotice: Ref<string, string>;
     error: Ref<string, string>;
@@ -54,7 +60,9 @@ export interface ReleaseContext {
     candidate: Ref<ReleaseCandidate | null>;
     checkingCandidate: Ref<boolean, boolean>;
     ignoringFile: Ref<boolean>;
+    pendingIgnoreCount: Ref<number>;
     ignoreSafetyFile: (file: ReleaseFileClassification) => Promise<string>;
+    ignoreSafetyFiles: (files: ReleaseFileClassification[]) => Promise<string>;
     checksEnabled: Ref<boolean, boolean>;
     candidateSignature: Ref<string, string>;
     reviewSignature: Ref<string, string>;
@@ -80,7 +88,7 @@ export interface ReleaseContext {
     continueResolvedReview: () => void;
     changeReleaseIntent: (intent: "formal" | "save-progress") => void;
     refreshSafety: () => Promise<void>;
-    inspectCandidate: () => Promise<boolean>;
+    inspectCandidate: (reuseReview?: boolean) => Promise<boolean>;
     cancelCandidate: () => Promise<void>;
     saveSafetyConfig: (rules: ReleaseFileRule[], checks: ReleaseCheckProfile[]) => Promise<void>;
     versionInputs: Ref<Record<string, string>>;

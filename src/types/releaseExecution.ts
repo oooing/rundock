@@ -1,4 +1,6 @@
 export interface ReleaseTargetRun {
+  name?: string
+  versionGroup?: string
   releaseRunId: string
   targetId: string
   build: boolean

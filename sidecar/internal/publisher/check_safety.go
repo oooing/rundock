@@ -1,10 +1,42 @@
 package publisher
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
+
+// Called only after actual failure. Do not attribute a compound command's final
+// exit to its first executable, or reject a script resolved by the shell's cwd.
+func missingExecutedCheckTool(command, cwd string) string {
+	if strings.ContainsAny(command, "&|;<>()\r\n") {
+		return ""
+	}
+	tool := missingDirectCheckTool(command)
+	if tool == "" {
+		return ""
+	}
+	candidates := []string{tool}
+	if runtime.GOOS == "windows" && filepath.Ext(tool) == "" {
+		for _, ext := range strings.Split(os.Getenv("PATHEXT"), ";") {
+			if ext != "" {
+				candidates = append(candidates, tool+ext)
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(cwd, candidate)
+		}
+		if fileExists(candidate) {
+			return ""
+		}
+	}
+	return tool
+}
 
 // Only resolve a literal first command. Shell expressions and builtins still
 // run in the configured shell; they are never inferred to have passed.

@@ -188,16 +188,20 @@ func (s *Service) preflightDeliveryBuild(ctx context.Context, run *store.Release
 	if err != nil {
 		return err
 	}
-	checked := map[string]bool{}
+	checked := map[[2]string]bool{}
 	for _, target := range plan.Targets {
-		if target.Delivery == nil || !target.Selection.Publish || checked[target.VersionGroup] {
+		if target.Delivery == nil || !target.Selection.Publish {
 			continue
 		}
 		d := target.Delivery
+		key := [2]string{strings.ToLower(d.Repository), strings.ToLower(d.Account)}
+		if checked[key] {
+			continue
+		}
 		if err = s.delivery.Preflight(ctx, delivery.Batch{Repository: d.Repository, Account: d.Account, Workflows: workflows}); err != nil {
 			return err
 		}
-		checked[target.VersionGroup] = true
+		checked[key] = true
 	}
 	return nil
 }

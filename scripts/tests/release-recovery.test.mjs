@@ -14,6 +14,7 @@ function fixture(history, { saved, historyError } = {}) {
       async releasePreflight() { calls.push('preflight'); return {} },
       async listReleases() { calls.push('history'); if (historyError) throw historyError; return history },
       async getReleaseConfig() { calls.push('config'); return {} },
+      async listReleasePreparations() { return [] },
     },
     tr: text => text,
     readReleasePreferences: () => ({}),
@@ -24,7 +25,7 @@ function fixture(history, { saved, historyError } = {}) {
     applyReleaseConfig() {}, applyPreflight() {}, messageOf: String,
     showRun: run => shown.push(run),
   }
-  for (const key of ['loading', 'error', 'errorCode', 'versionPlanNotice', 'configNotice', 'history', 'configEndpointAvailable', 'gitOnly', 'profileReady']) {
+  for (const key of ['loading', 'error', 'errorCode', 'versionPlanNotice', 'configNotice', 'history', 'configEndpointAvailable', 'gitOnly', 'profileReady', 'preparationHistory', 'preparation', 'submissionUncertain']) {
     ctx[key] = { value: null }
   }
   const exports = {}

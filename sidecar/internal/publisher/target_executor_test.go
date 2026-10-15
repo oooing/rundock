@@ -697,7 +697,9 @@ func newShortTargetExecutorFixture(t *testing.T) (*Service, string, func()) {
 		_ = os.RemoveAll(base)
 		t.Fatal(err)
 	}
-	return New(db), repo, func() {
+	svc := New(db)
+	t.Cleanup(svc.Close)
+	return svc, repo, func() {
 		_ = db.Close()
 		_ = os.RemoveAll(base)
 	}

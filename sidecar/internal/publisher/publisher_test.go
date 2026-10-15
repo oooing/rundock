@@ -156,21 +156,7 @@ func TestReleaseCommitsSelectedFilesAndPushesTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		current, getErr := svc.store.GetReleaseRun(run.ID)
-		if getErr != nil {
-			t.Fatal(getErr)
-		}
-		if current.Status == "succeeded" {
-			run = current
-			break
-		}
-		if current.Status == "failed" {
-			t.Fatalf("release failed at %s: %s", current.Stage, current.ErrorMessage)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	run = waitRelease(t, svc, run.ID)
 	if run.Status != "succeeded" {
 		t.Fatalf("release did not finish: %+v", run)
 	}
@@ -323,18 +309,32 @@ func TestRetryContinuesFromTagging(t *testing.T) {
 
 func waitRelease(t *testing.T, svc *Service, runID string) *store.ReleaseRun {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	// These are integration tests: real Windows Git/Node processes, candidate
+	// snapshots, signatures and SQLite. Keep a bounded allowance, independent of
+	// production step timeouts, and report progress instead of a silent timeout.
+	started := time.Now()
+	deadline := started.Add(60 * time.Second)
+	if suiteDeadline, ok := t.Deadline(); ok && suiteDeadline.Add(-time.Second).Before(deadline) {
+		deadline = suiteDeadline.Add(-time.Second)
+	}
+	var last *store.ReleaseRun
+	stage := ""
 	for time.Now().Before(deadline) {
 		run, err := svc.store.GetReleaseRun(runID)
 		if err != nil {
 			t.Fatal(err)
+		}
+		last = run
+		if run.Stage != stage {
+			stage = run.Stage
+			t.Logf("release progress after %s: status=%s stage=%s", time.Since(started).Round(time.Millisecond), run.Status, stage)
 		}
 		if run.Status == "succeeded" || run.Status == "failed" {
 			return run
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("release %s did not finish", runID)
+	t.Fatalf("release %s did not finish after %s: last state=%+v", runID, time.Since(started).Round(time.Millisecond), last)
 	return nil
 }
 
@@ -384,12 +384,16 @@ func newReleaseFixture(t *testing.T) (*Service, string, func()) {
 		t.Fatal(err)
 	}
 	svc := New(db)
+	t.Cleanup(svc.Close)
 	return svc, repo, func() { _ = db.Close() }
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -445,10 +449,11 @@ func acceptCandidate(t *testing.T, svc *Service, req CreateRequest) CreateReques
 	if err != nil {
 		t.Fatal(err)
 	}
-	ensureNoopCheckProfile(t, pf.RepoRoot)
-	pf, err = svc.PreflightLocal(context.Background(), "app1")
-	if err != nil {
-		t.Fatal(err)
+	if ensureNoopCheckProfile(t, pf.RepoRoot) {
+		pf, err = svc.PreflightLocal(context.Background(), "app1")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	req.ManualDecisions = append(req.ManualDecisions, reviewExcludes(pf)...)
 	req.StatusFingerprint = pf.StatusFingerprint
@@ -473,7 +478,8 @@ func acceptCandidate(t *testing.T, svc *Service, req CreateRequest) CreateReques
 	return req
 }
 
-func ensureNoopCheckProfile(t *testing.T, repo string) {
+// Return whether the fixture changed; unchanged setup needs no second Git scan.
+func ensureNoopCheckProfile(t *testing.T, repo string) bool {
 	t.Helper()
 	path := filepath.Join(repo, ".launcher", "release.yaml")
 	doc := map[string]any{"schemaVersion": 1, "versionGroups": []any{}, "targets": []any{}}
@@ -486,7 +492,7 @@ func ensureNoopCheckProfile(t *testing.T, repo string) {
 	for _, item := range profiles {
 		row, _ := item.(map[string]any)
 		if row["id"] == "fixture-ok" {
-			return
+			return false
 		}
 	}
 	doc["checkProfiles"] = append(profiles, map[string]any{"id": "fixture-ok", "name": "fixture-ok", "command": "cd .", "required": true})
@@ -498,6 +504,7 @@ func ensureNoopCheckProfile(t *testing.T, repo string) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, path, string(raw)+"\n")
+	return true
 }
 
 func reviewExcludes(pf *Preflight) []ManualDecision {

@@ -4,16 +4,23 @@ import { tr } from '@/i18n'
 import UiIcon from './UiIcon.vue'
 import { artifactSizeSummary, progressLabels, releaseProgress } from '@/utils/releaseProgress'
 import type { ProgressRun } from '@/utils/releaseProgress'
-import type { CloudBuildStatus, ReleaseTarget } from '@/types'
+import { releaseFailureAdvice } from '@/utils/releaseFailure'
+import type { CloudBuildStatus, ReleaseLog, ReleaseTarget } from '@/types'
 import type { ReleaseDelivery, ReleaseTargetRun } from '@/types/releaseExecution'
 const props = withDefaults(defineProps<{
   run: ProgressRun; targets?: ReleaseTargetRun[]; deliveries?: ReleaseDelivery[]; definitions?: ReleaseTarget[];
   artifacts?: Array<{ sizeBytes?: number }>; cloudHandoff?: boolean; cloudBuild?: CloudBuildStatus | null; localOnly?: boolean;
   canRetryUpload?: boolean; retrying?: boolean; retryDisabled?: boolean;
-}>(), { targets: () => [], deliveries: () => [], definitions: () => [], artifacts: () => [] })
+  logs?: ReleaseLog[]; connectionLost?: boolean; pendingResult?: boolean;
+}>(), { targets: () => [], deliveries: () => [], definitions: () => [], artifacts: () => [], logs: () => [] })
 const emit = defineEmits<{ retry: [] }>()
-const progress = computed(() => releaseProgress({ ...props, deliveryPlanned: ['queued', 'running'].includes(props.run.status) && props.run.selectedTargets.some(choice => choice.publish && props.definitions.some(item => item.id === choice.targetId && item.delivery)) }))
+const progress = computed(() => {
+  const value = releaseProgress({ ...props, deliveryPlanned: props.run.selectedTargets.some(choice => choice.publish && props.definitions.some(item => item.id === choice.targetId && item.delivery)) })
+  return props.connectionLost ? {...value,state:'waiting' as const,title:'连接中断，结果待确认'}
+    : props.pendingResult ? {...value,state:'waiting' as const,title:'正在读取任务结果。',steps:value.steps.map(step=>({...step,state:'waiting' as const}))} : value
+})
 const size = computed(() => artifactSizeSummary(props.artifacts))
+const failureAdvice = computed(() => releaseFailureAdvice(props.run, props.logs))
 const currentName = computed(() => {
   const current = progress.value.currentDelivery
   if (current) return props.run.versions?.find(version => version.versionGroupId === current.groupId)?.versionGroupName || current.groupId
@@ -33,7 +40,7 @@ const currentName = computed(() => {
     </div>
     <slot name="actions"></slot>
     </div>
-    <p v-if="progress.error" class="progress-error" role="alert">{{ tr(progress.error) }}</p>
+    <p v-if="failureAdvice || progress.error" class="progress-error" role="alert"><template v-if="failureAdvice"><strong>{{ tr(failureAdvice.reason, failureAdvice.values) }}</strong><span class="failure-action">{{ tr(failureAdvice.action) }}</span></template><template v-else>{{ tr(progress.error) }}</template></p>
     <ol class="release-step-list" :style="{ '--step-count': progress.steps.length }" :aria-label="tr('本次流程')">
       <li v-for="(step, index) in progress.steps" :key="step.id" :class="step.state" :aria-current="step.state === 'running' ? 'step' : undefined">
         <span class="step-mark" aria-hidden="true">{{ step.state === 'succeeded' ? '✓' : step.state === 'failed' ? '!' : step.state === 'cancelled' || step.state === 'skipped' ? '−' : index + 1 }}</span>
@@ -57,6 +64,7 @@ const currentName = computed(() => {
 .release-progress-overview { --status-color: #93beff; --status-tint: #213047; flex-shrink: 0; padding: 20px; border-bottom: 1px solid var(--border, #39424e); background: #191e27; color: var(--text, #e5e9ef); min-width: 0; }
 .release-progress-overview.succeeded { --status-color: #7ce6b9; --status-tint: #1c4035; background: #172720; border-bottom-color: #345749; }
 .release-progress-overview.failed { --status-color: #ffaaaa; --status-tint: #542f37; background: #2c1e25; border-bottom-color: #73424c; }
+.failure-action { display: block; margin-top: 4px; }
 .release-progress-overview.cancelled { --status-color: #f3cf8c; --status-tint: #443922; }
 .progress-topline { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .progress-headline { display: flex; align-items: center; gap: 14px; color: var(--status-color); min-width: 0; }

@@ -121,6 +121,7 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	s.portBackendPort = port
 	s.httpSrv = &http.Server{Handler: s.Router()}
+	s.Publisher.StartScratchMaintenance()
 	cloudCtx, cloudCancel := context.WithCancel(context.Background())
 	s.cloudCancel = cloudCancel
 	s.cloudDone = make(chan struct{})
@@ -151,6 +152,9 @@ func (s *Server) Shutdown() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		shutdownErr = s.httpSrv.Shutdown(ctx)
 		cancel()
+	}
+	if s.Publisher != nil {
+		s.Publisher.Close()
 	}
 	if s.Diagnostics != nil {
 		if err := s.Diagnostics.Close(); shutdownErr == nil {

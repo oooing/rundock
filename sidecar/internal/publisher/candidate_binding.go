@@ -70,18 +70,23 @@ func candidateBinding(req CandidateRequest, pf *Preflight, cfg *releaseconfig.Co
 }
 
 func (s *Service) validateCandidateBinding(ctx context.Context, cand *releaseCandidate, req CandidateRequest) error {
+	_, _, err := s.candidateBindingState(ctx, cand, req)
+	return err
+}
+
+func (s *Service) candidateBindingState(ctx context.Context, cand *releaseCandidate, req CandidateRequest) (*Preflight, *releaseconfig.Config, error) {
 	pf, err := s.PreflightLocal(ctx, cand.AppID)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	cfg, err := s.releaseConfig.Get(ctx, cand.AppID)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if pf.HeadSHA != cand.HeadSHA || candidateBinding(req, pf, cfg) != cand.Binding {
-		return &Error{Code: "candidate_stale", Message: "文件内容、选择、版本或发布配置已变化，请重新检查候选版本"}
+		return nil, nil, &Error{Code: "candidate_stale", Message: "文件内容、选择、版本或发布配置已变化，请重新检查候选版本"}
 	}
-	return validateCandidateBytes(cand)
+	return pf, cfg, validateCandidateBytes(cand)
 }
 
 func candidateFileDigests(root string) (map[string]string, error) {

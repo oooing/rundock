@@ -24,8 +24,10 @@ use tauri::{Emitter, Manager, WindowEvent};
 
 mod window_layout;
 mod desktop_exit;
+mod desktop_restart;
 mod project_picker;
 mod app_update;
+mod update_transaction;
 mod system_locale;
 
 #[cfg(not(debug_assertions))]
@@ -196,12 +198,26 @@ fn sidecar_base() -> Option<String> {
 /// Exit only after the chosen action succeeds; errors leave the window usable.
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle, keep_projects: bool) -> Result<(), String> {
+    if let Some(directory) = sidecar_data_dir() {
+        if let Some(pending) = update_transaction::load(&directory)? {
+            if matches!(pending.phase.as_str(), "installing" | "restoring") {
+                return Err("正在安装或恢复项目，请完成后再退出".into());
+            }
+        }
+    }
     let port = sidecar_data_dir()
         .and_then(|dir| read_port_file(&dir))
         .ok_or_else(|| "无法连接后台，请稍后重试".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         if !sidecar_health_ok(&port) {
             return Err("无法连接后台，请稍后重试".to_string());
+        }
+        if !keep_projects {
+            if let Some(directory) = sidecar_data_dir() {
+                if update_transaction::prepare_scheduled_exit(&directory, port.parse().map_err(|_| "后台端口无效")?)? {
+                    return Ok(());
+                }
+            }
         }
         desktop_exit::prepare_exit(&port, keep_projects)
     })
@@ -219,6 +235,10 @@ async fn quit_app(app: tauri::AppHandle, keep_projects: bool) -> Result<(), Stri
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = desktop_restart::wait_for_previous_instance(env!("CARGO_PKG_VERSION")) {
+        eprintln!("{error}");
+        return;
+    }
     let mut builder = tauri::Builder::default();
 
     // 必须最先注册：第二次启动时立即终止新实例，并恢复、显示和聚焦已有窗口。
@@ -254,6 +274,11 @@ pub fn run() {
                 }
             }
             let data_dir = sidecar_data_dir().unwrap_or_else(|| PathBuf::from("."));
+            match app_update::startup(app.handle(), &data_dir, SIDECAR_PORT.parse().unwrap()) {
+                Ok(true) => return Ok(()),
+                Err(error) => append_shell_log(&data_dir, &format!("[update] {error}")),
+                _ => {}
+            }
             let child = if sidecar_health_ok(SIDECAR_PORT) {
                 println!("[shell] reuse existing sidecar on {}", SIDECAR_PORT);
                 None
@@ -276,6 +301,13 @@ pub fn run() {
                 .or_else(|| sidecar_health_ok(SIDECAR_PORT).then(|| SIDECAR_PORT.to_string()))
                 .unwrap_or_else(|| SIDECAR_PORT.to_string());
             let base = format!("http://127.0.0.1:{}", port);
+            let restore_dir = data_dir.clone();
+            let restore_port = port.parse().unwrap_or(17654);
+            std::thread::spawn(move || {
+                if let Err(error) = update_transaction::restore(&restore_dir, restore_port) {
+                    append_shell_log(&restore_dir, &format!("[update restore] {error}"));
+                }
+            });
             println!("[shell] sidecar base = {}", base);
 
             // 3. 注入基址到前端：通过 eval 设置 window.__LAUNCHER_BASE__。
@@ -352,7 +384,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_shell::init())
         .manage(app_update::UpdateState::default())
-        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, system_locale, set_ui_language, project_picker::select_project_path, app_update::check_app_update, app_update::download_app_update, app_update::install_app_update])
+        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, system_locale, set_ui_language, project_picker::select_project_path, app_update::check_app_update, app_update::download_app_update, app_update::install_app_update, app_update::update_install_plan, app_update::schedule_app_update, app_update::app_update_status, app_update::cancel_scheduled_update, app_update::retry_update_restore])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

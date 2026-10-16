@@ -13,6 +13,7 @@ func isProcessGone(pid int) bool {
 	if err != nil {
 		return true
 	}
+	defer p.Release()
 	// sigzero 跨平台：非 Windows 用 Signal(0)；Windows 见 alive_windows.go 覆盖。
 	return !processAlive(p, pid)
 }

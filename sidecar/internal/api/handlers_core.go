@@ -9,12 +9,15 @@ import (
 )
 
 // GET /api/health -> 健康检查（前端探活 + 判断 sidecar 已就绪）。
+var BuildVersion = "dev"
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":       "ok",
 		"apiVersion":   "2",
 		"capabilities": "release-v2",
 		"instanceId":   s.instanceID,
+		"version":      BuildVersion,
 	})
 }
 

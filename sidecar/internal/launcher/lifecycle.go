@@ -7,6 +7,7 @@ import (
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/logbus"
 	"github.com/launcher-sidecar/internal/proc"
+	"strconv"
 	"time"
 )
 
@@ -79,6 +80,13 @@ func (l *Launcher) watchExit(appID string, rt *app.Runtime, handle *proc.Handle,
 
 // Stop 停止一个 app。分级：Ctrl-Break -> grace -> Terminate(taskkill /t /f) -> 端口确认。
 func (l *Launcher) Stop(appID string) (err error) {
+	return l.stop(appID, true)
+}
+
+// StopForUpdate never escalates to killing a live process after the grace period.
+func (l *Launcher) StopForUpdate(appID string) error { return l.stop(appID, false) }
+
+func (l *Launcher) stop(appID string, force bool) (err error) {
 	started := time.Now()
 	defer func() {
 		if l.Diagnostics == nil {
@@ -105,6 +113,9 @@ func (l *Launcher) Stop(appID string) (err error) {
 		return nil // 幂等：应用已停止，直接返回成功
 	}
 	gracePeriod := durationFromSetting(l.Store, "grace_period_seconds", 8)
+	if !force && gracePeriod > 15*time.Second {
+		gracePeriod = 15 * time.Second
+	}
 	col := rs.collector
 	rt, _ := l.Manager.Registry.Get(appID)
 	if rt != nil {
@@ -115,19 +126,26 @@ func (l *Launcher) Stop(appID string) (err error) {
 	}
 
 	// Remember only this run's process tree. Never kill a port's unrelated owner.
-	owned := collectProcessTree(rs.rootPID)
-	l.mu.Lock()
-	seen := map[int]bool{}
-	for _, pid := range rs.stopPIDs {
-		seen[pid] = true
-	}
-	for _, pid := range owned {
-		if !seen[pid] {
-			rs.stopPIDs = append(rs.stopPIDs, pid)
-			seen[pid] = true
+	owned := collectProcessIdentities(rs.rootPID)
+	if rt != nil && rt.RootCreated != "" {
+		expected, _ := strconv.ParseUint(rt.RootCreated, 10, 64)
+		if owned[rs.rootPID] != expected {
+			owned = nil
 		}
 	}
-	tracked := append([]int(nil), rs.stopPIDs...)
+	l.mu.Lock()
+	if rs.stopIdentities == nil {
+		rs.stopIdentities = map[int]uint64{}
+	}
+	for pid, created := range owned {
+		if _, ok := rs.stopIdentities[pid]; !ok {
+			rs.stopIdentities[pid] = created
+		}
+	}
+	tracked := map[int]uint64{}
+	for pid, created := range rs.stopIdentities {
+		tracked[pid] = created
+	}
 	l.mu.Unlock()
 
 	finished := func() bool {
@@ -136,8 +154,8 @@ func (l *Launcher) Stop(appID string) (err error) {
 		default:
 			return false
 		}
-		for _, pid := range tracked {
-			if !isProcessGone(pid) {
+		for pid, created := range tracked {
+			if pid != rs.rootPID && !processIdentityGone(pid, created) {
 				return false
 			}
 		}
@@ -176,6 +194,13 @@ func (l *Launcher) Stop(appID string) (err error) {
 	}
 	if wait(gracePeriod) {
 		return finish()
+	}
+
+	if !force {
+		if rt != nil {
+			l.Manager.Transition(rt, app.StatusDegraded, nil)
+		}
+		return fmt.Errorf("项目未正常退出，已取消安装；请保存工作并手动停止后重试")
 	}
 
 	if col != nil {

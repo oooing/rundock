@@ -37,6 +37,8 @@ pub struct UpdateInfo {
     notes: String,
     url: String,
     size: u64,
+    #[serde(rename = "installedLocally")]
+    installed_locally: bool,
 }
 #[derive(Clone)]
 struct Candidate {
@@ -44,7 +46,8 @@ struct Candidate {
     installer: Asset,
     checksum: Asset,
 }
-struct Ready {
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Ready {
     path: PathBuf,
     hash: String,
     size: u64,
@@ -53,6 +56,8 @@ struct Ready {
 struct Session {
     candidate: Option<Candidate>,
     ready: Option<Ready>,
+    installed: Option<(String, bool)>,
+    plan: Option<crate::update_transaction::Plan>,
 }
 #[derive(Default)]
 pub struct UpdateState(Mutex<Session>);
@@ -108,6 +113,7 @@ fn select_update(releases: Vec<Release>, current: &Version, msi: bool) -> Option
                         notes: r.body.unwrap_or_default(),
                         url: format!("{REPOSITORY}/releases/tag/v{version}"),
                         size: installer.size,
+                        installed_locally: false,
                     },
                     installer,
                     checksum,
@@ -325,6 +331,23 @@ pub async fn check_app_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo
         let state = app.state::<UpdateState>();
         let mut session = state.0.try_lock().map_err(|_| "正在处理更新，请稍后重试")?;
         let current = Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        if !cfg!(debug_assertions) {
+            let target = crate::desktop_restart::installed_executable(
+                &std::env::current_exe().map_err(|e| e.to_string())?,
+            )?;
+            let installed = crate::desktop_restart::file_version(&target)?;
+            if Version::parse(&installed).map_err(|e| e.to_string())? > current {
+                session.installed = Some((installed.clone(), false));
+                return Ok(Some(UpdateInfo {
+                    version: installed,
+                    notes: String::new(),
+                    url: String::new(),
+                    size: 0,
+                    installed_locally: true,
+                }));
+            }
+        }
         session.candidate = fetch_candidate(&current, installer_is_msi()?)?;
         session.ready = None;
         Ok(session.candidate.as_ref().map(|c| c.info.clone()))
@@ -358,39 +381,246 @@ pub async fn download_app_update(
     .await
     .map_err(|e| e.to_string())?
 }
-#[tauri::command]
-pub async fn install_app_update(app: tauri::AppHandle) -> Result<InstallResult, String> {
+fn update_dir() -> Result<PathBuf, String> {
+    crate::sidecar_data_dir().ok_or("无法确定更新记录目录".into())
+}
+fn production_only() -> Result<(), String> {
     if cfg!(debug_assertions) || !cfg!(target_os = "windows") {
-        return Err("请在已安装的 Windows 正式版中升级".into());
+        return Err("请在已安装的 Windows 正式版中更新".into());
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_install_plan(
+    app: tauri::AppHandle,
+) -> Result<crate::update_transaction::Plan, String> {
+    production_only()?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<UpdateState>();
-        let session = state.0.try_lock().map_err(|_| "正在处理更新，请稍后重试")?;
-        verify_ready(session.ready.as_ref().ok_or("请先下载安装包")?)?;
-        // Install without exiting the shell or stopping the project owner.
-        // The installer stages loaded files; new code starts on the next exit/start.
-        let mut command = installer_command(
-            &session.ready.as_ref().ok_or("请先下载安装包")?.path,
-            std::env::var_os("SystemRoot").as_deref(),
-        )?;
-        let status = command
-            .spawn()
-            .map_err(|e| format!("无法打开安装程序：{e}"))?
-            .wait()
-            .map_err(|e| format!("无法确认安装结果：{e}"))?;
-        if !status.success() && status.code() != Some(3010) {
-            return Err(format!("安装未完成（退出码 {:?}），RunDock 和项目继续运行", status.code()));
+        let mut session = state.0.try_lock().map_err(|_| "正在处理更新")?;
+        let plan = crate::update_transaction::plan(crate::SIDECAR_PORT.parse().unwrap())?;
+        session.plan = Some(plan.clone());
+        Ok(plan)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn schedule_app_update(app: tauri::AppHandle) -> Result<(), String> {
+    production_only()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<UpdateState>();
+        let session = state.0.try_lock().map_err(|_| "正在处理更新")?;
+        let (version, installer) = update_input(&session)?;
+        let p = crate::update_transaction::Pending {
+            version,
+            installer,
+            phase: "scheduled".into(),
+            projects: vec![],
+            remaining: vec![],
+            error: String::new(),
+            failures: vec![],
+        };
+        crate::update_transaction::save(&update_dir()?, &p)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn update_input(session: &Session) -> Result<(String, Option<Ready>), String> {
+    if let Some((version, reboot)) = &session.installed {
+        if *reboot {
+            return Err("此更新需要重启电脑，请保存工作后手动重启".into());
         }
-        Ok(InstallResult { requires_restart: status.code() == Some(3010) })
+        return Ok((version.clone(), None));
+    }
+    if let Some(ready) = &session.ready {
+        verify_ready(ready)?;
+        return Ok((
+            session
+                .candidate
+                .as_ref()
+                .ok_or("更新记录已失效")?
+                .info
+                .version
+                .clone(),
+            Some(ready.clone()),
+        ));
+    }
+    let pending = crate::update_transaction::load(&update_dir()?)?.ok_or("请先下载安装包")?;
+    if pending.phase != "scheduled" {
+        return Err("请先下载安装包".into());
+    }
+    if let Some(ready) = &pending.installer {
+        verify_ready(ready)?
+    }
+    Ok((pending.version, pending.installer))
+}
+#[tauri::command]
+pub fn app_update_status() -> Result<Option<crate::update_transaction::Pending>, String> {
+    crate::update_transaction::load(&update_dir()?)
+}
+#[tauri::command]
+pub fn cancel_scheduled_update() -> Result<(), String> {
+    let d = update_dir()?;
+    if let Some(p) = crate::update_transaction::load(&d)? {
+        if p.phase != "scheduled" && p.phase != "finished" {
+            return Err("更新正在执行，请稍后重试".into());
+        }
+        fs::remove_file(crate::update_transaction::path(&d)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+#[tauri::command]
+pub async fn retry_update_restore() -> Result<(), String> {
+    production_only()?;
+    let d = update_dir()?;
+    let mut p = crate::update_transaction::load(&d)?.ok_or("没有待恢复的项目")?;
+    if p.phase != "finished" {
+        return Err("正在恢复项目，请稍候".into());
+    }
+    p.phase = "restoring".into();
+    crate::update_transaction::save(&d, &p)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::update_transaction::restore(&d, crate::SIDECAR_PORT.parse().unwrap())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InstallResult {
-    requires_restart: bool,
+fn recover_projects(
+    directory: &Path,
+    port: u16,
+    p: &mut crate::update_transaction::Pending,
+    error: String,
+) -> Result<(), String> {
+    p.error = error.clone();
+    p.phase = "restoring".into();
+    crate::update_transaction::save(directory, p)?;
+    if !crate::update_transaction::connected(port) {
+        let d = directory.to_path_buf();
+        if crate::spawn_sidecar(&d).is_ok() {
+            let _ = crate::wait_for_sidecar(&d, 15);
+        }
+    }
+    let _ = crate::update_transaction::restore(directory, port);
+    Err(error)
+}
+fn perform_update(
+    app: &tauri::AppHandle,
+    directory: &Path,
+    port: u16,
+    mut p: crate::update_transaction::Pending,
+) -> Result<(), String> {
+    // Verify before stopping anything; write intent before each destructive phase.
+    if let Some(ready) = &p.installer {
+        if let Err(e) = verify_ready(ready) {
+            return recover_projects(directory, port, &mut p, e);
+        }
+    }
+    p.phase = "installing".into();
+    if let Err(e) = crate::update_transaction::save(directory, &p) {
+        return recover_projects(directory, port, &mut p, e);
+    }
+    let result = (|| {
+        if let Some(ready) = &p.installer {
+            let status = installer_command(&ready.path, std::env::var_os("SystemRoot").as_deref())?
+                .spawn()
+                .map_err(|e| format!("无法启动安装：{e}"))?
+                .wait()
+                .map_err(|e| e.to_string())?;
+            if status.code() == Some(3010) {
+                return Err("安装需要重启电脑。请保存工作后手动重启；项目恢复情况见下方".into());
+            }
+            if !status.success() {
+                return Err(format!(
+                    "安装未完成（退出码 {:?}），已尝试恢复原先运行的项目",
+                    status.code()
+                ));
+            }
+        }
+        #[cfg(windows)]
+        {
+            let current = std::env::current_exe().map_err(|e| e.to_string())?;
+            let target = crate::desktop_restart::installed_executable(&current)?;
+            if crate::desktop_restart::file_version(&target)? != p.version {
+                return Err("安装后的版本不匹配，已尝试恢复项目，请重新下载安装包".into());
+            }
+            p.phase = "restoring".into();
+            crate::update_transaction::save(directory, &p)?;
+            crate::desktop_restart::prepare(&current, &p.version)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        return recover_projects(directory, port, &mut p, e);
+    }
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn install_app_update(app: tauri::AppHandle, fingerprint: String) -> Result<(), String> {
+    production_only()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<UpdateState>();
+        let mut session = state.0.try_lock().map_err(|_| "正在处理更新")?;
+        let (version, installer) = update_input(&session)?;
+        let plan = session.plan.take().ok_or("请先查看将停止的项目")?;
+        if plan.fingerprint != fingerprint {
+            return Err("确认已失效，请重新查看项目清单".into());
+        }
+        let d = update_dir()?;
+        let port = crate::SIDECAR_PORT.parse().unwrap();
+        let mut p = crate::update_transaction::Pending {
+            version,
+            installer,
+            phase: "restoring".into(),
+            remaining: plan.projects.clone(),
+            projects: plan.projects.clone(),
+            error: String::new(),
+            failures: vec![],
+        };
+        crate::update_transaction::save(&d, &p)?;
+        if let Err((e, restore)) = crate::update_transaction::stop(port, &plan) {
+            if restore {
+                return recover_projects(&d, port, &mut p, e);
+            }
+            p.phase = "finished".into();
+            p.error = e.clone();
+            p.remaining.clear();
+            crate::update_transaction::save(&d, &p)?;
+            return Err(e);
+        }
+        perform_update(&app, &d, port, p)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Called once in desktop setup, BEFORE creating the backend. A retained backend
+/// (including tray/keep-projects mode) always postpones a scheduled installation.
+pub fn startup(app: &tauri::AppHandle, directory: &Path, port: u16) -> Result<bool, String> {
+    if cfg!(debug_assertions) || !cfg!(target_os = "windows") {
+        return Ok(false);
+    }
+    let Some(mut p) = crate::update_transaction::load(directory)? else {
+        return Ok(false);
+    };
+    if !crate::update_transaction::can_install_on_start(&p, port) {
+        return Ok(false);
+    }
+    if let Err(e) = perform_update(app, directory, port, p.clone()) {
+        // Do not retry an unattended failed installation on every launch.
+        p = crate::update_transaction::load(directory)?.unwrap_or(p);
+        if p.phase == "scheduled" {
+            p.phase = "finished".into();
+            p.error = e;
+            crate::update_transaction::save(directory, &p)?;
+        }
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 // Keep argument construction separate so tests never execute an installer.
@@ -401,8 +631,8 @@ fn installer_command(
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("exe") => {
             let mut command = std::process::Command::new(path);
-            // Tauri NSIS: preserve the installation and user data, show progress,
-            // leave the existing app and all project owners running.
+            // The transaction already stopped managed projects and the backend.
+            // Keep the old shell available to show a failed-install report.
             command.args(["/UPDATE", "/P"]);
             Ok(command)
         }
@@ -410,10 +640,11 @@ fn installer_command(
             let root = system_root.ok_or("无法找到 Windows 安装服务")?;
             let mut command =
                 std::process::Command::new(PathBuf::from(root).join("System32/msiexec.exe"));
-            command
-                .arg("/i")
-                .arg(path)
-                .args(["/passive", "/norestart", "MSIRESTARTMANAGERCONTROL=Disable"]);
+            command.arg("/i").arg(path).args([
+                "/passive",
+                "/norestart",
+                "MSIRESTARTMANAGERCONTROL=Disable",
+            ]);
             Ok(command)
         }
         _ => Err("安装包格式不受支持，请重新检查更新".into()),
@@ -428,10 +659,7 @@ mod tests {
         let path = Path::new("C:/test cache/中文/RunDock_2.0.27_x64-setup.exe");
         let command = installer_command(path, None).unwrap();
         assert_eq!(command.get_program(), path.as_os_str());
-        assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
-            ["/UPDATE", "/P"]
-        );
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["/UPDATE", "/P"]);
     }
 
     #[test]

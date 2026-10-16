@@ -183,7 +183,7 @@ $binaryBytes = if ($binaryExisted) { [IO.File]::ReadAllBytes($tauriBinary) } els
 
 try {
     Write-Host '[release] 编译 Go sidecar'
-    Invoke-Checked $go @('build', '-trimpath', '-o', $temporarySidecar, './cmd/launcher-sidecar') (Join-Path $codeDirectory 'sidecar')
+    Invoke-Checked $go @('build', '-trimpath', '-ldflags', "-X github.com/launcher-sidecar/internal/api.BuildVersion=$tagVersion", '-o', $temporarySidecar, './cmd/launcher-sidecar') (Join-Path $codeDirectory 'sidecar')
 
     Write-Host '[release] sidecar 健康检查'
     $smokeData = Join-Path $temporaryRoot ("appdata-{0}" -f [Guid]::NewGuid().ToString('N'))

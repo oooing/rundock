@@ -94,6 +94,9 @@ func (s *Server) Router() http.Handler {
 
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/desktop/shutdown", s.handleDesktopShutdown)
+	mux.HandleFunc("/api/desktop/update-plan", s.handleDesktopUpdatePlan)
+	mux.HandleFunc("/api/desktop/update-stop", s.handleDesktopUpdateStop)
+	mux.HandleFunc("/api/desktop/update-restore", s.handleDesktopUpdateRestore)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/import/discover", s.handleDiscoverImport)
 	mux.HandleFunc("/api/apps", s.handleApps)

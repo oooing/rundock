@@ -16,6 +16,7 @@ const percent = computed(() => update.total ? Math.min(100, Math.floor(update.do
           {{ tr('新版本 v{0}', [update.info.version]) }}
           <span v-if="update.phase === 'downloading'"> · {{ tr('下载中 {0}%', [percent]) }}</span>
           <span v-else-if="update.phase === 'ready'"> · {{ tr('可安装') }}</span>
+          <span v-else-if="update.phase === 'scheduled'"> · {{ tr('下次启动安装') }}</span>
           <span v-else-if="update.phase === 'installed'"> · {{ tr('已安装') }}</span>
         </p>
         <p v-else-if="isTauri">{{ update.phase === 'current' ? tr('已是最新版本') : tr('启动时自动检查更新') }}</p>

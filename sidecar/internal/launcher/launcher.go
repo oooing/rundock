@@ -37,13 +37,13 @@ type Launcher struct {
 
 // runState 一个 app 当前启动的运行态（进程句柄 + collector + cancel）。
 type runState struct {
-	exitDone      chan struct{}
-	stopPIDs      []int
-	handle        *proc.Handle
-	collector     *logbus.Collector
-	cancel        context.CancelFunc
-	rootPID       int
-	candidateURLs []string // 从日志解析到的候选 URL（供服务发现优先使用）
+	exitDone       chan struct{}
+	stopIdentities map[int]uint64
+	handle         *proc.Handle
+	collector      *logbus.Collector
+	cancel         context.CancelFunc
+	rootPID        int
+	candidateURLs  []string // 从日志解析到的候选 URL（供服务发现优先使用）
 }
 
 // New 创建 launcher。运行参数在每次操作时读取，保存后无需重启后台。

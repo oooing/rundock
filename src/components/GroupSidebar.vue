@@ -137,9 +137,9 @@ async function createGroup() {
     </nav>
 
     <div class="footer">
-      <button v-if="isTauri && appUpdate.info && ['downloading', 'ready', 'available'].includes(appUpdate.phase)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' }" @click="openAppUpdate">
+      <button v-if="isTauri && appUpdate.info && ['downloading', 'ready', 'available', 'installed', 'scheduled', 'confirming', 'planning', 'installing', 'restoring', 'finished'].includes(appUpdate.phase)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' || appUpdate.phase === 'installed' }" @click="openAppUpdate">
         <UiIcon :name="appUpdate.phase === 'ready' ? 'check-circle' : 'refresh'" :size="16" />
-        <span><strong>{{ appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small>v{{ appUpdate.info.version }}<template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
+        <span><strong>{{ appUpdate.phase === 'scheduled' ? tr('下次启动安装') : appUpdate.phase === 'restoring' ? tr('正在恢复项目') : appUpdate.phase === 'finished' ? tr('更新结果，点击查看') : appUpdate.phase === 'installing' ? tr('正在安装…') : appUpdate.phase === 'installed' ? tr('新版已安装，点击查看') : appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small>v{{ appUpdate.info.version }}<template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
       </button>
       <div class="footer-row">
         <button class="ghost settings-link" @click="emit('settings')"><UiIcon name="settings" :size="16" />{{ tr('设置') }}</button>

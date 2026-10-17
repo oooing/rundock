@@ -2,6 +2,9 @@ module github.com/launcher-sidecar
 
 go 1.23.4
 
+// v0.1.4 plus suspended creation/resume, so jobs own children before execution.
+replace github.com/UserExistsError/conpty => ./third_party/conpty
+
 require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/tdewolff/parse/v2 v2.8.16

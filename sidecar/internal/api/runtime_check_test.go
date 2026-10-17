@@ -58,8 +58,8 @@ func TestRuntimeChecksRecoverWithoutMutatingHistoryOrGrantingControl(t *testing.
 	if row["status"] != "running" || row["runId"] != "" || row["pid"] != 100 {
 		t.Fatal(row)
 	}
-	if row["lastUrl"] != a.HealthURL {
-		t.Fatal("stale non-listening address shown as current", row["lastUrl"])
+	if row["lastUrl"] != "" {
+		t.Fatal("unverified address shown as current page", row["lastUrl"])
 	}
 	if len(s.Manager.Registry.All()) != 0 {
 		t.Fatal("observer gained managed process ownership")

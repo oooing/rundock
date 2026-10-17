@@ -27,7 +27,7 @@ type conPTYSession struct {
 }
 
 // startConPTY 用伪控制台启动一条命令，返回会话与根 PID。
-func startConPTY(ctx context.Context, cmd string, args []string, cwd string, env []string, onOutput func(b []byte)) (*conPTYSession, int, error) {
+func startConPTY(ctx context.Context, cmd string, args []string, cwd string, env []string, onOutput func(b []byte), suspended ...bool) (*conPTYSession, int, error) {
 	// 拼命令行：给含空格的参数加引号（路径里有空格时必须，否则 cmd.exe 会在空格处截断）
 	cmdLine := quoteIfSpace(cmd)
 	for _, a := range args {
@@ -35,6 +35,9 @@ func startConPTY(ctx context.Context, cmd string, args []string, cwd string, env
 	}
 
 	opts := []conpty.ConPtyOption{conpty.ConPtyEnv(env)}
+	if len(suspended) > 0 && suspended[0] {
+		opts = append(opts, conpty.ConPtySuspended())
+	}
 	if cwd != "" {
 		opts = append(opts, conpty.ConPtyWorkDir(cwd))
 	}
@@ -109,7 +112,7 @@ func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line 
 	innerCtx, cancel := context.WithCancel(ctx)
 	lb := newLineBuffer(onLine)
 	env := mergeEnv(pc.Env)
-	sess, pid, err := startConPTY(innerCtx, pc.Cmd, pc.Args, pc.Cwd, env, lb.feed)
+	sess, pid, err := startConPTY(innerCtx, pc.Cmd, pc.Args, pc.Cwd, env, lb.feed, true)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -121,7 +124,18 @@ func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line 
 		pty:     sess,
 	}
 	// 把根进程加入 Job Object，sidecar 退出时整棵进程树仍会被回收。
-	h.jobCloser = assignJob(pid)
+	h.group, err = newProcessGroup(pid)
+	if err != nil {
+		_ = sess.close()
+		cancel()
+		return nil, fmt.Errorf("无法建立项目进程托管，已取消启动: %w", err)
+	}
+	h.identityCreated = h.IdentityCreated()
+	if err := sess.c.Resume(); err != nil {
+		_ = h.Close()
+		cancel()
+		return nil, fmt.Errorf("无法恢复项目启动: %w", err)
+	}
 	go func() {
 		select {
 		case <-h.exited:

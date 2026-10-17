@@ -30,6 +30,9 @@ type RuntimeSnapshot struct {
 	Processes      []Process
 	Listeners      []probe.PortListener
 	ReservedRanges []PortRange
+	Projects       []*store.App
+	ManagedRoots   []ProcessOwner
+	LauncherPID    int
 }
 
 func ReadRuntimeSnapshot() (RuntimeSnapshot, error) {
@@ -73,27 +76,7 @@ func InspectRuntime(a *store.App, known []*store.AppService, snapshot RuntimeSna
 	for _, p := range snapshot.Processes {
 		byPID[p.PID] = p
 	}
-	belongs := func(pid int) bool {
-		visited := map[int]bool{}
-		for pid > 4 && !visited[pid] {
-			visited[pid] = true
-			p, exists := byPID[pid]
-			if !exists || p.Created == "" || p.Executable == "" {
-				return false
-			}
-			if Belongs(a.Cwd, p) {
-				return true
-			}
-			parent, exists := byPID[p.ParentPID]
-			born, _ := strconv.ParseUint(p.Created, 10, 64)
-			parentBorn, _ := strconv.ParseUint(parent.Created, 10, 64)
-			if !exists || born == 0 || parentBorn == 0 || parentBorn > born {
-				return false
-			}
-			pid = p.ParentPID
-		}
-		return false
-	}
+	belongs := runtimeOwnership(a, snapshot, byPID)
 	ports := map[int]bool{}
 	bindings := RequiredBindings(a)
 	previous := map[int]*store.AppService{}
@@ -143,7 +126,7 @@ func InspectRuntime(a *store.App, known []*store.AppService, snapshot RuntimeSna
 	// Also catch a still-running entry script before it opens any port. Editors
 	// and terminals merely mentioning the project folder are not enough.
 	for _, p := range snapshot.Processes {
-		if p.PID > 4 && p.Created != "" && p.Executable != "" && hasEntry(p, a.EntryScript) {
+		if p.PID > 4 && p.Created != "" && p.Executable != "" && hasEntry(p, a.EntryScript) && belongs(p.PID) {
 			if result.PID == 0 {
 				result.PID = p.PID
 			}

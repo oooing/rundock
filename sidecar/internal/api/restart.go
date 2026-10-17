@@ -44,6 +44,7 @@ func restartTree(a *store.App, snap recovery.RuntimeSnapshot, self int) ([]recov
 		return nil, fmt.Errorf("无法唯一确认项目启动进程，请先从原启动窗口退出；不会按端口强制关闭程序")
 	}
 	root := roots[0]
+	owned := recovery.OwnedProcesses(a, snap)
 	var result []recovery.Process
 	for _, p := range snap.Processes {
 		if !rawDescendant(p.PID, root.PID, byPID) {
@@ -54,6 +55,9 @@ func restartTree(a *store.App, snap recovery.RuntimeSnapshot, self int) ([]recov
 		}
 		if recovery.IsConsoleHost(p) {
 			continue
+		}
+		if !owned[p.PID] {
+			return nil, fmt.Errorf("启动进程包含其他项目或归属不明的程序，无法安全重启；未关闭任何程序")
 		}
 		if p.PID != root.PID && !recovery.IsProjectWorker(p, a.Cwd) {
 			return nil, fmt.Errorf("启动进程还包含无法确认归属的程序 %s，请从原启动位置处理；未关闭任何程序", filepath.Base(p.Executable))

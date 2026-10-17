@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -30,6 +33,38 @@ type cachedPortDiagnosis struct {
 	observation recovery.Observation
 }
 
+// Every consumer (cards, start checks, conflict resolution and restart plans)
+// receives the same project boundaries alongside the process snapshot.
+func (s *Server) readProjectRuntimeSnapshot() (recovery.RuntimeSnapshot, error) {
+	snapshot, err := recovery.ReadRuntimeSnapshot()
+	if err != nil {
+		return snapshot, err
+	}
+	projects, err := s.Store.ListApps()
+	if err != nil {
+		return recovery.RuntimeSnapshot{}, err
+	}
+	snapshot.Projects = projects
+	snapshot.LauncherPID = os.Getpid()
+	for _, rt := range s.Manager.Registry.All() {
+		if s.Manager.Registry.IsRunning(rt.AppID) {
+			snapshot.ManagedRoots = append(snapshot.ManagedRoots, recovery.ProcessOwner{AppID: rt.AppID, PID: rt.RootPID, Created: rt.RootCreated})
+			if h, ok := rt.ProcessHandle.(interface {
+				Members() (map[int]uint64, bool, error)
+			}); ok {
+				members, _, err := h.Members()
+				if err != nil {
+					return recovery.RuntimeSnapshot{}, err
+				}
+				for pid, created := range members {
+					snapshot.ManagedRoots = append(snapshot.ManagedRoots, recovery.ProcessOwner{AppID: rt.AppID, PID: pid, Created: strconv.FormatUint(created, 10), Inherited: pid != rt.RootPID})
+				}
+			}
+		}
+	}
+	return snapshot, nil
+}
+
 func (m *runtimeMonitor) refresh(ctx context.Context) error {
 	select {
 	case m.gate <- struct{}{}:
@@ -38,6 +73,9 @@ func (m *runtimeMonitor) refresh(ctx context.Context) error {
 	}
 	defer func() { <-m.gate }()
 	snapshot, err := m.read()
+	if err != nil {
+		log.Printf("[runtime-check] snapshot failed: %v", err)
+	}
 	m.mu.Lock()
 	m.snapshot, m.err, m.checked = snapshot, err, time.Now()
 	m.mu.Unlock()
@@ -68,6 +106,24 @@ func (s *Server) observeRuntime(a *store.App) *recovery.Observation {
 		return &cached.observation
 	}
 	return &observation
+}
+
+// Reuse the shared process snapshot rather than launching WMI per project and
+// discovery tick. Missing/stale evidence postpones discovery, never widens it.
+func (s *Server) filterServiceProcesses(id string, members map[int]uint64) map[int]uint64 {
+	m := s.runtimeMonitor
+	m.mu.RLock()
+	snapshot, checked, err := m.snapshot, m.checked, m.err
+	m.mu.RUnlock()
+	if err != nil || checked.IsZero() || time.Since(checked) > 30*time.Second {
+		return nil
+	}
+	for _, a := range snapshot.Projects {
+		if a.ID == id {
+			return recovery.FilterServiceProcesses(a, snapshot, members)
+		}
+	}
+	return nil
 }
 
 func (s *Server) checkBeforeStart(ctx context.Context, a *store.App) error {

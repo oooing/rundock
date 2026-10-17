@@ -63,26 +63,25 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 
 // discoverServices 发现属于本 App 的所有监听端口，每个登记为一个 service（去重）。
 //
-// 三重确认策略（A + 进程树，覆盖进程树断裂的 batch 场景，且多项目不串）：
-//
-//	证据1（强）进程树归属：端口 PID 属于本进程树 → 直接纳入（spider 走这条）
-//	证据2（中）日志 URL：日志里明确出现了该端口的 URL → 纳入（batch 走这条）
-//	         但日志证据必须叠加"时间窗"约束：该端口是启动后才新出现的（不在 before 快照里），
-//	         避免把别的项目早就占着的端口误收。
-//
-// 只有两个证据都不满足才跳过。这样：
-//   - 进程树完整的项目（spider）→ 证据1 命中，准确
-//   - 进程树断裂的项目（batch）→ 证据2 命中，仍能发现
-//   - 无关端口 → 两证据都不满足，排除
-//   - 多项目并存 → 各自日志只提自己的 URL，互不干扰
+// Windows 原生托管以 Job 成员为准，入口退出不影响归属；日志 URL 不能扩大归属。
+// 无原生进程组的平台保留进程树及日志 URL + 启动时间窗的旧回退行为。
 func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []probe.PortListener, manualRoles map[int]string, declaredRoles map[int]probe.Role, hintedPorts map[int]bool, rejectedPorts map[int]int, col *logbus.Collector, scanRound int, readiness *startupReadiness) {
 	clear(rejectedPorts) // 仅在本轮去重；慢启动服务必须在下一轮重新探测。
 	all := probe.SnapshotListeners()
 
 	// === 证据1：进程树归属 ===
-	treePIDs := collectProcessTree(rt.RootPID)
+	treePIDs, authoritative, err := ownedRunProcesses(rt)
+	if err != nil {
+		if col != nil {
+			col.Warn("[监测] 无法读取本次启动的进程组，暂不登记新端口：" + err.Error())
+		}
+		return
+	}
+	if authoritative && l.FilterServiceProcesses != nil {
+		treePIDs = l.FilterServiceProcesses(appID, treePIDs)
+	}
 	treeSet := map[int]bool{}
-	for _, p := range treePIDs {
+	for p := range treePIDs {
 		treeSet[p] = true
 	}
 
@@ -133,7 +132,7 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 		inLog := logPorts[p.Port]
 		isNew := !beforePorts[p.Port] // 不在启动前快照里 = 启动后新出现
 		logEvidence := inLog && isNew
-		if !ownedByTree && !logEvidence {
+		if !ownedByTree && (authoritative || !logEvidence) {
 			continue
 		}
 		url := probe.JoinHostPort("localhost", p.Port)

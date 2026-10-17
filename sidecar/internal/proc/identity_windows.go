@@ -9,6 +9,9 @@ import (
 
 // Called immediately after spawn, before the run enters the public registry.
 func (h *Handle) IdentityCreated() string {
+	if h.identityCreated != "" {
+		return h.identityCreated
+	}
 	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(h.rootPID))
 	if err != nil {
 		return ""

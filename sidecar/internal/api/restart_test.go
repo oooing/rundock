@@ -45,6 +45,14 @@ func TestRestartTreeIdentityBoundaries(t *testing.T) {
 		{"shared browser child", func(s *recovery.RuntimeSnapshot) {
 			s.Processes = append(s.Processes, recovery.Process{PID: 104, ParentPID: 100, Created: "1200", Executable: `C:\Program Files\Chrome\chrome.exe`})
 		}, 999, false},
+		{"registered foreign project child without a listener", func(s *recovery.RuntimeSnapshot) {
+			s.Projects = []*store.App{{ID: "other", Cwd: `C:\other`}}
+			s.Processes = append(s.Processes, recovery.Process{PID: 104, ParentPID: 100, Created: "1200", Executable: `C:\tools\node.exe`, CommandLine: `node C:\other\worker.js`})
+		}, 999, false},
+		{"managed foreign child with shared executable", func(s *recovery.RuntimeSnapshot) {
+			s.ManagedRoots = []recovery.ProcessOwner{{AppID: "other", PID: 104, Created: "1200"}}
+			s.Processes = append(s.Processes, recovery.Process{PID: 104, ParentPID: 100, Created: "1200", Executable: `C:\fixture\worker.exe`})
+		}, 999, false},
 		{"detached project listener", func(s *recovery.RuntimeSnapshot) { s.Processes[1].ParentPID = 10 }, 999, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

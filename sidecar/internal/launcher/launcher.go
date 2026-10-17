@@ -22,13 +22,16 @@ import (
 
 // Launcher 持有所有依赖，提供 Start/Stop/Restart。
 type Launcher struct {
-	Store        *store.Store
-	Manager      *app.Manager
-	Hub          *logbus.Hub
-	Registry     *adapter.Registry
-	Diagnostics  *diagnostics.Service
-	BeforeStart  func(context.Context, *store.App) error
-	startProcess func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
+	Store       *store.Store
+	Manager     *app.Manager
+	Hub         *logbus.Hub
+	Registry    *adapter.Registry
+	Diagnostics *diagnostics.Service
+	BeforeStart func(context.Context, *store.App) error
+	// Service discovery may narrow a native Job at known project boundaries.
+	// This never changes the process group's lifetime or stop ownership.
+	FilterServiceProcesses func(string, map[int]uint64) map[int]uint64
+	startProcess           func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
 
 	// 每个 appID 的活跃编排上下文，停止时取用
 	mu   sync.Mutex
@@ -277,8 +280,9 @@ func (l *Launcher) start(ctx context.Context, appID string, temporaryPort int) e
 
 	rt := &app.Runtime{
 		AppID: appID, RunID: runID, PID: pid, RootPID: pid,
-		RootCreated: handle.IdentityCreated(),
-		Status:      app.StatusStarting, StartedAt: nowTime,
+		RootCreated:   handle.IdentityCreated(),
+		ProcessHandle: handle,
+		Status:        app.StatusStarting, StartedAt: nowTime,
 		TemporaryPort: a.TemporaryPort,
 	}
 	l.Manager.Registry.Set(appID, rt)
@@ -300,6 +304,13 @@ func (l *Launcher) start(ctx context.Context, appID string, temporaryPort int) e
 	}
 
 	// 后台监听进程退出
+	handle.OnRootExit = func(code int, children bool) {
+		if code == 0 && children {
+			collector.Info("[托管] 启动脚本已结束，后台进程仍在运行；RunDock 继续监测，可正常停止或重启")
+		} else if code == 0 && rt.GetStatus() == app.StatusStarting {
+			collector.Warn("[退出] 启动脚本已结束，未留下可托管的后台进程；如果服务由系统服务或容器启动，请使用对应的管理入口")
+		}
+	}
 	go func() { defer close(rs.exitDone); l.watchExit(appID, rt, handle, cancel, collector) }()
 
 	// 后台：多服务发现 + 健康检查 + 综合状态（替代旧的单服务 watchHealth/observePorts）

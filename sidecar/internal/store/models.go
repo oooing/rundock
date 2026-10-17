@@ -97,6 +97,10 @@ type AppService struct {
 	StatusScope    string `json:"statusScope"` // required|auxiliary; independent of role.
 	HealthReason   string `json:"healthReason,omitempty"`
 	HealthProbeURL string `json:"healthProbeUrl,omitempty"`
+	// Ephemeral browser evidence; never persisted as service health or role.
+	WebState  string `json:"webState,omitempty"`
+	WebReason string `json:"webReason,omitempty"`
+	WebURL    string `json:"webUrl,omitempty"`
 }
 
 // AppService 的 role 取值常量。

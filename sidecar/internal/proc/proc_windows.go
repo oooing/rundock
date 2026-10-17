@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 // configureHidden 在 Windows 上：隐藏控制台窗口 + CREATE_NO_WINDOW。
@@ -28,51 +25,13 @@ func configureHidden(cmd *exec.Cmd) {
 	}
 }
 
-// assignJob 为指定 PID 创建一个 Job Object（KILL_ON_JOB_CLOSE），并把进程加入其中。
-// 返回 closer：调用时关闭 Job Object 句柄；当 sidecar 进程退出时，所有 Job 内进程被自动终止。
-// 参考：golang.org/x/sys/windows 的 CreateJobObject / AssignProcessToJobObject，
-// 以及 GitLab Runner 的 job_windows.go 实现。
+// assignJob remains for legacy low-level ConPTY tests.
 func assignJob(pid int) func() error {
-	jobHandle, err := windows.CreateJobObject(nil, nil)
+	group, err := newProcessGroup(pid)
 	if err != nil {
 		return nil
 	}
-
-	// 设置扩展限制：JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
-	// KILL_ON_JOB_CLOSE：最后一个句柄关闭时杀掉所有进程
-	// BREAKAWAY_OK：允许子进程脱离（兼容部分框架），但仍受 Job 约束
-	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
-		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
-			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-		},
-	}
-	if _, err := windows.SetInformationJobObject(
-		jobHandle,
-		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
-		uint32(unsafe.Sizeof(info)),
-	); err != nil {
-		windows.CloseHandle(jobHandle)
-		return nil
-	}
-
-	// 打开目标进程句柄并加入 Job
-	hProc, err := windows.OpenProcess(windows.PROCESS_ALL_ACCESS, false, uint32(pid))
-	if err != nil {
-		windows.CloseHandle(jobHandle)
-		return nil
-	}
-	defer windows.CloseHandle(hProc)
-
-	if err := windows.AssignProcessToJobObject(jobHandle, hProc); err != nil {
-		// Windows 7 之前嵌套 Job 会失败；现代 Windows 支持，失败时仅记录不阻断启动
-		windows.CloseHandle(jobHandle)
-		return nil
-	}
-
-	return func() error {
-		return windows.CloseHandle(jobHandle)
-	}
+	return group.Close
 }
 
 // sendCtrlBreak 向进程组发送 CTRL_BREAK_EVENT，触发优雅停止（仅对同控制台进程组有效）。
@@ -108,6 +67,3 @@ func terminateTree(h *Handle) error {
 	}
 	return nil
 }
-
-// 消除未使用导入警告（保留 unsafe/windows 供 Job Object 使用）
-var _ = unsafe.Sizeof(0)

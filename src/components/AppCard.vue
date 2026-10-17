@@ -8,7 +8,7 @@ import UiIcon from '@/components/UiIcon.vue'
 import { CARD_COLOR_PALETTE, getCardVisualStyle, normalizeHexColor } from '@/utils/cardColors'
 import { runningEffect, startingEffect } from '@/stores/motion'
 import StartupIndicator from './StartupIndicator.vue'
-import { cardServices, cardServiceDetails } from '@/utils/cardServices'
+import { cardServices, cardServiceDetails, browserEntry, browserEntryLabel } from '@/utils/cardServices'
 import { useAppStartup } from '@/composables/useAppStartup'
 import AppStartupNotice from './AppStartupNotice.vue'
 import PortResolutionDialog from './PortResolutionDialog.vue'
@@ -195,7 +195,7 @@ function healthText(h: string): string {
 
 const sortedServices = computed(() => cardServices(a.value))
 const serviceDetails = computed(() => cardServiceDetails(a.value))
-const primaryURLInServices = computed(() => sortedServices.value.some(svc => svc.url === a.value.lastUrl))
+const primaryURLInServices = computed(() => sortedServices.value.some(svc => browserEntry(svc) === a.value.lastUrl))
 const serviceState = (svc: ReturnType<typeof cardServices>[number]) => a.value.runtimeCheck?.state === 'running' && svc.source === 'current' ? tr('正在监听') : svc.source === 'current'
   ? healthText(svc.health) : svc.source === 'history' ? tr('上次发现') : tr('配置端口')
 
@@ -258,8 +258,8 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
             </div>
           </div>
           <span class="svc-dot" :class="svc.source === 'current' && svc.statusScope !== 'auxiliary' ? svc.health : 'inactive'" :title="svc.statusScope === 'auxiliary' ? tr('辅助端口，不参与项目运行状态判定') : serviceState(svc)" role="img" :aria-label="svc.statusScope === 'auxiliary' ? tr('辅助端口，不参与项目运行状态判定') : serviceState(svc)"></span>
-          <a v-if="svc.url && svc.role !== 'database'" class="svc-url mono" :class="{ dim: svc.source !== 'current' }" :href="svc.url" :title="svc.url + ' · ' + serviceState(svc)" @click.prevent="openServiceUrl(svc.url)">{{ svc.url }}</a>
-          <span v-else class="svc-url">{{ svc.role === 'database' ? tr('数据库') : tr('待发现服务地址') }}</span>
+          <a v-if="browserEntry(svc)" class="svc-url mono" :href="browserEntry(svc)" :title="browserEntry(svc) + ' · ' + tr('网页可用')" @click.prevent="openServiceUrl(browserEntry(svc))">{{ browserEntry(svc) }}</a>
+          <span v-else class="svc-url" :title="svc.url">{{ tr(browserEntryLabel(svc)) }}</span>
           <span v-if="svc.source !== 'current'" class="svc-source">{{ serviceState(svc) }}</span>
           <span v-else-if="svc.statusScope === 'auxiliary'" class="svc-source" :title="tr('辅助端口，不参与项目运行状态判定')">{{ tr('辅助') }}</span>
           <span class="svc-port mono">:{{ svc.port }}</span>

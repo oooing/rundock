@@ -7,7 +7,6 @@ import (
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/logbus"
 	"github.com/launcher-sidecar/internal/proc"
-	"strconv"
 	"time"
 )
 
@@ -126,11 +125,13 @@ func (l *Launcher) stop(appID string, force bool) (err error) {
 	}
 
 	// Remember only this run's process tree. Never kill a port's unrelated owner.
-	owned := collectProcessIdentities(rs.rootPID)
-	if rt != nil && rt.RootCreated != "" {
-		expected, _ := strconv.ParseUint(rt.RootCreated, 10, 64)
-		if owned[rs.rootPID] != expected {
-			owned = nil
+	owned := map[int]uint64{}
+	if rt != nil {
+		var queryErr error
+		owned, _, queryErr = ownedRunProcesses(rt)
+		if queryErr != nil {
+			l.Manager.Transition(rt, app.StatusDegraded, nil)
+			return fmt.Errorf("无法确认本次启动的进程组，未按端口关闭任何程序：%w", queryErr)
 		}
 	}
 	l.mu.Lock()

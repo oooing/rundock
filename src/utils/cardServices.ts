@@ -6,7 +6,19 @@ const activeStates = ['starting', 'running', 'degraded', 'stopping']
 const validPort = (port: number) => Number.isInteger(port) && port >= 1 && port <= 65535
 const roleOrder = { frontend: 0, backend: 1, database: 2, unknown: 3 }
 const sortServices = (rows: CardService[]) => rows.sort((a, b) =>
-  (Number(a.statusScope === 'auxiliary') - Number(b.statusScope === 'auxiliary')) || (roleOrder[a.role || 'unknown'] - roleOrder[b.role || 'unknown']) || a.port - b.port)
+  (Number(a.statusScope === 'auxiliary') - Number(b.statusScope === 'auxiliary')) || (Number(b.webState === 'available') - Number(a.webState === 'available')) || (roleOrder[a.role || 'unknown'] - roleOrder[b.role || 'unknown']) || a.port - b.port)
+
+export function browserEntry(service: CardService): string {
+  return service.source === 'current' && service.webState === 'available' ? service.webUrl || '' : ''
+}
+
+export function browserEntryLabel(service: CardService): string {
+  if (service.role === 'database') return '数据库'
+  if (service.source !== 'current') return service.url || '待发现服务地址'
+  if (service.webState === 'not_page') return '无网页入口'
+  if (service.webState === 'unavailable') return '网页暂不可用'
+  return '正在确认网页'
+}
 
 // The card count describes discovered services, never configuration candidates.
 export function cardServices(app: AppView): CardService[] {

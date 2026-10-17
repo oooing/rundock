@@ -420,7 +420,7 @@ onUnmounted(() => {
           @stop="handleStop($event)"
           @restart="handleRestart($event)"
           @log="openLog($event)"
-          @open-url="(id, url) => apps.openURL(id, url)"
+          @open-url="(id, url) => apps.openURL(id, url).catch(e => showToast(e?.message || tr('打开网页失败'), 5000, 'error'))"
           @open-dir="apps.openDir($event)"
           @release="releaseAppId = $event"
           @delete="apps.remove($event)"

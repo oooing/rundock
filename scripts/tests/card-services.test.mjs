@@ -7,7 +7,23 @@ const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.Modu
 const exports = {}
 new Function('exports', compiled)(exports)
 const { cardServices, cardServiceDetails } = exports
+const { browserEntry, browserEntryLabel } = exports
 const service = (port, role = 'unknown') => ({ id: `${port}`, port, role, url: `http://localhost:${port}`, health: 'healthy' })
+
+test('browser links require page evidence independent of frontend role and service health', () => {
+  const extension = { ...service(3000, 'frontend'), webState: 'not_page' }
+  const web = { ...service(11784, 'unknown'), webState: 'available', webUrl: 'http://localhost:11784' }
+  const rows = cardServices({ status: 'running', services: [extension, web] })
+  assert.equal(rows[0].port, 11784)
+  assert.equal(browserEntry(rows[0]), web.webUrl)
+  assert.equal(browserEntry(rows[1]), '')
+  assert.equal(browserEntryLabel(rows[1]), '无网页入口')
+  for (const state of [undefined, 'checking', 'unavailable']) {
+    assert.equal(browserEntry({ ...web, source: 'current', webState: state }), '')
+  }
+  assert.equal(browserEntry({ ...web, source: 'history' }), '')
+  assert.equal(browserEntryLabel({ ...web, source: 'current', webState: 'unavailable' }), '网页暂不可用')
+})
 
 test('required services remain visible before auxiliary ports regardless of role', () => {
   const app = { status: 'running', services: [{ ...service(5284, 'frontend'), statusScope: 'auxiliary' }, service(17655, 'backend'), service(17656, 'frontend')] }

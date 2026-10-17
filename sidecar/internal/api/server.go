@@ -18,7 +18,6 @@ import (
 	"github.com/launcher-sidecar/internal/launcher"
 	"github.com/launcher-sidecar/internal/logbus"
 	"github.com/launcher-sidecar/internal/publisher"
-	"github.com/launcher-sidecar/internal/recovery"
 	"github.com/launcher-sidecar/internal/releaseconfig"
 	"github.com/launcher-sidecar/internal/store"
 )
@@ -42,6 +41,7 @@ type Server struct {
 	cloudCancel        context.CancelFunc
 	cloudDone          chan struct{}
 	runtimeMonitor     *runtimeMonitor
+	webEntries         *webEntryCache
 	runtimeDone        chan struct{}
 	portPlans          map[string]portPlan          // Guarded by startupMu; short-lived, single-use.
 	temporaryPortPlans map[string]temporaryPortPlan // Independent, non-destructive start tokens.
@@ -85,7 +85,7 @@ func New(s *store.Store, hub *logbus.Hub, reg *adapter.Registry) *Server {
 	if hub != nil {
 		pub.OnCloudBuildChange = hub.BroadcastCloudBuild
 	}
-	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg, instanceID: time.Now().UTC().Format(time.RFC3339Nano), shutdownRequested: make(chan struct{})}
+	return &Server{Store: s, Manager: mgr, Hub: hub, Launcher: l, Publisher: pub, ReleaseConfig: releaseconfig.New(s), Diagnostics: diag, Registry: reg, webEntries: newWebEntryCache(), instanceID: time.Now().UTC().Format(time.RFC3339Nano), shutdownRequested: make(chan struct{})}
 }
 
 // Router 构建路由（含 CORS 中间件）。
@@ -128,8 +128,9 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 	cloudCtx, cloudCancel := context.WithCancel(context.Background())
 	s.cloudCancel = cloudCancel
 	s.cloudDone = make(chan struct{})
-	s.runtimeMonitor = &runtimeMonitor{gate: make(chan struct{}, 1), read: recovery.ReadRuntimeSnapshot}
+	s.runtimeMonitor = &runtimeMonitor{gate: make(chan struct{}, 1), read: s.readProjectRuntimeSnapshot}
 	s.Launcher.BeforeStart = s.checkBeforeStart
+	s.Launcher.FilterServiceProcesses = s.filterServiceProcesses
 	s.runtimeDone = make(chan struct{})
 	go func() { defer close(s.runtimeDone); s.monitorRuntime(cloudCtx) }()
 	go func() { defer close(s.cloudDone); s.Publisher.MonitorCloudBuilds(cloudCtx) }()

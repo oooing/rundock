@@ -10,6 +10,8 @@ func configureHidden(cmd *exec.Cmd) {}
 // assignJob 非 Windows：无 Job Object，返回 nil closer。
 func assignJob(pid int) func() error { return nil }
 
+func newProcessGroup(pid int) (processGroup, error) { return nil, nil }
+
 // sendCtrlBreak 非 Windows：向进程发送 SIGINT。
 func sendCtrlBreak(h *Handle) error {
 	if h.cmd == nil || h.cmd.Process == nil {

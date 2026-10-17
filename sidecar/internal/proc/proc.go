@@ -15,7 +15,15 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
+
+type processGroup interface {
+	Members() (map[int]uint64, error)
+	Active() (bool, error)
+	Terminate() error
+	Close() error
+}
 
 // PreparedCommand 描述一条准备好的、可直接执行的命令。
 type PreparedCommand struct {
@@ -27,14 +35,17 @@ type PreparedCommand struct {
 
 // Handle 代表一个被托管的进程句柄。
 type Handle struct {
-	closeOnce sync.Once
-	closeErr  error
-	exited    chan struct{}
-	cmd       *exec.Cmd
-	rootPID   int
-	jobCloser func() error // Windows: 关闭 Job Object 句柄；其他平台 nil
-	cancel    context.CancelFunc
-	pty       interface{} // Windows ConPTY 会话（*conPTYSession），非 Windows 或普通模式为 nil
+	closeOnce       sync.Once
+	closeErr        error
+	exited          chan struct{}
+	cmd             *exec.Cmd
+	rootPID         int
+	jobCloser       func() error // Windows: 关闭 Job Object 句柄；其他平台 nil
+	group           processGroup
+	identityCreated string
+	OnRootExit      func(int, bool) // set before Wait; bool means owned children remain
+	cancel          context.CancelFunc
+	pty             interface{} // Windows ConPTY 会话（*conPTYSession），非 Windows 或普通模式为 nil
 }
 
 // IsConPTY 是否运行在 ConPTY 模式下。
@@ -44,9 +55,12 @@ func (h *Handle) IsConPTY() bool { return h.pty != nil }
 func (h *Handle) PID() int { return h.rootPID }
 
 // Close releases process resources once. Closing the Windows Job also reclaims
-// remaining children; call it after Wait has collected the root exit code.
+// remaining children; normal lifecycle callers close after Wait finishes the run.
 func (h *Handle) Close() error {
 	h.closeOnce.Do(func() {
+		if h.group != nil {
+			h.closeErr = h.group.Close()
+		}
 		if h.jobCloser != nil {
 			h.closeErr = h.jobCloser()
 		}
@@ -86,26 +100,70 @@ func Start(ctx context.Context, pc *PreparedCommand, onStdout, onStderr func(lin
 	}
 
 	// Windows：把根进程加入 Job Object，确保整棵树可被统一回收。
-	h.jobCloser = assignJob(h.rootPID)
+	group, err := newProcessGroup(h.rootPID)
+	h.group = group
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		cancel()
+		return nil, fmt.Errorf("无法建立项目进程托管，已取消启动: %w", err)
+	}
+	h.identityCreated = h.IdentityCreated()
 
 	return h, nil
 }
 
-// Wait 等待进程退出，返回退出码。
+// Wait 等待本次运行结束。入口正常退出后，继续等待 Windows Job 中的后台进程。
+// 入口启动失败时保留其退出码，由调用方 Close 回收剩余进程。
 func (h *Handle) Wait() (int, error) {
 	if h.exited != nil {
 		defer close(h.exited)
 	}
+	var code int
+	var err error
 	if h.pty != nil {
 		// ConPTY 模式
-		code, err := waitConPTY(h.pty)
+		code, err = waitConPTY(h.pty)
+	} else {
+		err = h.cmd.Wait()
+		code = -1
+		if h.cmd.ProcessState != nil {
+			code = h.cmd.ProcessState.ExitCode()
+		}
+	}
+	active := false
+	if h.group != nil {
+		var queryErr error
+		active, queryErr = h.group.Active()
+		if queryErr != nil {
+			return -1, fmt.Errorf("无法确认后台进程状态: %w", queryErr)
+		}
+	}
+	if h.OnRootExit != nil {
+		h.OnRootExit(code, active)
+	}
+	// A failing launcher is a failed run; Close cleans up its owned children.
+	if code != 0 || err != nil || h.group == nil {
 		return code, err
 	}
-	err := h.cmd.Wait()
-	if h.cmd.ProcessState != nil {
-		return h.cmd.ProcessState.ExitCode(), err
+	for active {
+		time.Sleep(100 * time.Millisecond)
+		active, err = h.group.Active()
+		if err != nil {
+			return -1, fmt.Errorf("无法确认后台进程状态: %w", err)
+		}
 	}
-	return -1, err
+	return code, err
+}
+
+// Members is authoritative Job membership, independent of a surviving parent.
+// supported=false retains the existing non-Windows process-tree fallback.
+func (h *Handle) Members() (members map[int]uint64, supported bool, err error) {
+	if h.group == nil {
+		return nil, false, nil
+	}
+	members, err = h.group.Members()
+	return members, true, err
 }
 
 // GracefulStop 发送 Ctrl-Break（普通模式）或 Ctrl+C（ConPTY 模式），给应用自行清理的机会。
@@ -117,9 +175,14 @@ func (h *Handle) GracefulStop() error {
 	return sendCtrlBreak(h)
 }
 
-// Terminate kills the tree while the root identity and ConPTY wait handle are
-// still valid. Wait/Close perform resource cleanup afterwards, never before kill.
-func (h *Handle) Terminate() error { return terminateTree(h) }
+// Terminate kills the owned Windows Job even after its entry process exits.
+// Other platforms retain their process-tree fallback. Wait/Close release resources.
+func (h *Handle) Terminate() error {
+	if h.group != nil {
+		return h.group.Terminate()
+	}
+	return terminateTree(h)
+}
 
 // mergeEnv 把注入变量合并到父进程环境。注入变量覆盖同名父进程变量。
 func mergeEnv(extra map[string]string) []string {

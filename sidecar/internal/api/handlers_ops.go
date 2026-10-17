@@ -159,6 +159,7 @@ func appView(a *store.App, s *Server) map[string]any {
 			row["lastUrl"] = launcher.PreferredOpenURL(a.EntryScript, "", check.Services)
 		}
 	}
+	s.applyWebEntries(a, row)
 	return row
 }
 
@@ -343,7 +344,19 @@ func (s *Server) handleOpenURL(w http.ResponseWriter, r *http.Request, id string
 		url, _ = appView(a, s)["lastUrl"].(string)
 	}
 	if url == "" {
-		writeError(w, http.StatusBadRequest, "no url available")
+		writeError(w, http.StatusBadRequest, "尚未发现可打开的网页，请稍后重试；扩展或接口服务可能没有网页入口。")
+		return
+	}
+	// Recheck the exact requested page on click: a cached green card cannot
+	// guarantee that the process or route is still available now.
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if result := probe.CheckWebEntry(ctx, url); result.State != "available" {
+		message := "网页暂时无法连接，请确认项目已启动后重试。"
+		if result.State == "not_page" {
+			message = "这个地址没有网页页面，可能是扩展或接口服务。请使用项目的其他网页入口。"
+		}
+		writeError(w, http.StatusConflict, message)
 		return
 	}
 	if err := openExternal(url); err != nil {

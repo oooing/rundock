@@ -42,7 +42,10 @@ func Snapshot() ([]Process, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("无法读取占用进程，请查看日志或手动处理")
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("进程查询超时: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("无法读取占用进程: %w", err)
 	}
 	var result []Process
 	err = json.Unmarshal(out, &result)

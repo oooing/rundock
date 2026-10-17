@@ -180,6 +180,9 @@ export interface AppService {
   statusScope?: 'required' | 'auxiliary'
   healthReason?: string
   healthProbeUrl?: string
+  webState?: 'checking' | 'available' | 'not_page' | 'unavailable'
+  webReason?: string
+  webUrl?: string
 }
 
 /** WebSocket 消息信封 */

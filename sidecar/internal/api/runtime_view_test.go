@@ -40,8 +40,8 @@ func TestRuntimeViewUsesCurrentRunAndClearsTerminalData(t *testing.T) {
 	if response["configUpdated"] != false || row["pid"] != 456 || row["runId"] != "new" {
 		t.Fatal(response)
 	}
-	if row["lastUrl"] != "http://127.0.0.1:4310/library" {
-		t.Fatal("backend discovery replaced main URL", row)
+	if row["lastUrl"] != "" {
+		t.Fatal("unverified configured page must not be advertised", row)
 	}
 	services := row["services"].([]*store.AppService)
 	if len(services) != 1 || services[0].AppRunID != "new" {

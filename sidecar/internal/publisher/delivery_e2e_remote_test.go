@@ -25,6 +25,7 @@ type remoteAsset struct {
 	Content []byte `json:"-"`
 }
 type remoteRelease struct {
+	Name       string `json:"name"`
 	ID         int64  `json:"id"`
 	Tag        string `json:"tag_name"`
 	Body       string `json:"body"`
@@ -33,6 +34,7 @@ type remoteRelease struct {
 	URL        string `json:"html_url"`
 }
 type deliveryRemote struct {
+	conflictTag                                       string
 	mu                                                sync.Mutex
 	repo, account                                     string
 	release                                           *remoteRelease
@@ -78,7 +80,7 @@ func (g *deliveryRemote) JSON(ctx context.Context, method, path string, body, ou
 			return &delivery.HTTPError{Status: 404}
 		}
 		sha := strings.TrimSpace(string(raw))
-		if g.tagConflict {
+		if g.tagConflict || g.conflictTag == tag {
 			sha = strings.Repeat("a", 40)
 		}
 		return remoteResult(map[string]any{"object": map[string]string{"type": "commit", "sha": sha}}, out)
@@ -102,7 +104,7 @@ func (g *deliveryRemote) JSON(ctx context.Context, method, path string, body, ou
 		}
 		value := body.(map[string]any)
 		g.creates++
-		g.release = &remoteRelease{ID: 1, Tag: value["tag_name"].(string), Body: value["body"].(string), Draft: true, Prerelease: value["prerelease"].(bool), URL: "https://github.com/fixture/project/releases/tag/" + value["tag_name"].(string)}
+		g.release = &remoteRelease{ID: 1, Name: value["name"].(string), Tag: value["tag_name"].(string), Body: value["body"].(string), Draft: true, Prerelease: value["prerelease"].(bool), URL: "https://github.com/fixture/project/releases/tag/" + value["tag_name"].(string)}
 		if g.loseCreate {
 			return fmt.Errorf("simulated lost draft response")
 		}

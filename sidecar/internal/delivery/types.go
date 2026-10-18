@@ -20,6 +20,8 @@ type File struct {
 }
 
 type Batch struct {
+	Title              string            `json:"title,omitempty"`
+	Components         []Component       `json:"components,omitempty"`
 	SchemaVersion      int               `json:"schemaVersion"`
 	RunID              string            `json:"runId"`
 	AppID              string            `json:"appId"`
@@ -38,6 +40,16 @@ type Batch struct {
 	DeploymentStrategy string            `json:"deploymentStrategy,omitempty"`
 	Workflows          map[string]string `json:"workflows"`
 	Files              []File            `json:"files"`
+}
+
+// Component retains independent versions and sync checks inside one release.
+type Component struct {
+	GroupID     string `json:"groupId"`
+	Name        string `json:"name"`
+	Tag         string `json:"tag"`
+	Version     string `json:"version"`
+	SyncURL     string `json:"syncUrl,omitempty"`
+	SyncPointer string `json:"syncPointer,omitempty"`
 }
 
 type Source struct{ TargetID, Path, SHA256 string }

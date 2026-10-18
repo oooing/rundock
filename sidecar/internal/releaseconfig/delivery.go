@@ -10,6 +10,9 @@ import (
 // Delivery is an opt-in destination. Absence preserves local artifact-only builds.
 // Account is an identity reference to the local gh credential provider, never a token.
 type Delivery struct {
+	// ReleaseGroup combines selected version groups into one atomic GitHub release.
+	// Empty preserves the existing one-release-per-version-group behavior.
+	ReleaseGroup   string      `json:"releaseGroup,omitempty"`
 	Provider       string      `json:"provider"`
 	Repository     string      `json:"repository"`
 	Account        string      `json:"account"`
@@ -66,6 +69,12 @@ func validateDelivery(t Target) error {
 		return nil
 	}
 	d := t.Delivery
+	if d.ReleaseGroup != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`).MatchString(d.ReleaseGroup) {
+		return fmt.Errorf("%s：合并发布分组格式无效", t.Name)
+	}
+	if d.ReleaseGroup != "" && d.Deployment != nil && d.Deployment.Workflow != "" {
+		return fmt.Errorf("%s：合并发布暂不支持自动触发部署工作流", t.Name)
+	}
 	if d.Provider != "github" || !deliveryRepoPattern.MatchString(d.Repository) || strings.Contains(d.Repository, "..") || !deliveryAccountPattern.MatchString(d.Account) {
 		return fmt.Errorf("%s：发布目的地必须包含 GitHub owner/repo 和登录账号", t.Name)
 	}

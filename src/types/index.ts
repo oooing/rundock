@@ -270,7 +270,7 @@ export interface ReleaseTargetSteps {
 
 /** 发布目标并不限定平台；kind 可由项目使用任意标识。 */
 export interface ReleaseTarget {
-	 delivery?: { provider: 'github'; repository: string; account: string; prerelease?: boolean; makeLatest?: boolean; workflowPolicy: 'dispatch-only'; sync?: { url: string; jsonPointer: string }; deployment?: { strategy?: 'workflow' | 'server-pull'; workflow?: string } }
+	 delivery?: { releaseGroup?: string; provider: 'github'; repository: string; account: string; prerelease?: boolean; makeLatest?: boolean; workflowPolicy: 'dispatch-only'; sync?: { url: string; jsonPointer: string }; deployment?: { strategy?: 'workflow' | 'server-pull'; workflow?: string } }
 	 timeouts?: Partial<Record<'check' | 'build' | 'package' | 'publish' | 'deploy', number>>
 	 artifactRules?: Array<{ pattern: string; min: number; max: number }>
 	 verification?: Array<{ name: string; command: string; timeoutSeconds?: number }>

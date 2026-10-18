@@ -48,6 +48,20 @@ func (e *Engine) Preflight(ctx context.Context, b Batch) error {
 }
 
 func (e *Engine) verifyTag(ctx context.Context, b Batch) error {
+	if err := e.verifySingleTag(ctx, b); err != nil {
+		return err
+	}
+	for _, component := range b.Components {
+		member := b
+		member.Tag = component.Tag
+		if err := e.verifySingleTag(ctx, member); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) verifySingleTag(ctx context.Context, b Batch) error {
 	var ref struct {
 		Object struct {
 			Type string `json:"type"`
@@ -200,7 +214,11 @@ func (e *Engine) Publish(ctx context.Context, b Batch) (resultErr error) {
 			return err
 		}
 		var created githubRelease
-		createErr := e.Client.JSON(ctx, "POST", "repos/"+b.Repository+"/releases", map[string]any{"tag_name": b.Tag, "target_commitish": b.Commit, "name": b.Tag, "body": b.Notes + "\n\n" + marker, "draft": true, "prerelease": b.Prerelease, "make_latest": "false"}, &created)
+		title := b.Title
+		if title == "" {
+			title = b.Tag
+		}
+		createErr := e.Client.JSON(ctx, "POST", "repos/"+b.Repository+"/releases", map[string]any{"tag_name": b.Tag, "target_commitish": b.Commit, "name": title, "body": b.Notes + "\n\n" + marker, "draft": true, "prerelease": b.Prerelease, "make_latest": "false"}, &created)
 		// Also reconcile a successful mutation whose response was lost.
 		release, err = e.findRelease(ctx, b)
 		if err != nil {

@@ -50,6 +50,9 @@ func validateDeliveryPlan(plan *executionPlan, createTag, push bool) error {
 		}
 		groups[t.VersionGroup] = string(raw)
 	}
+	if err := validateReleaseGroups(plan); err != nil {
+		return err
+	}
 	for _, t := range plan.Targets {
 		if strings.EqualFold(t.Runner.Type, "git-push") || t.Selection.Deploy || (t.Selection.Publish && t.Delivery == nil) {
 			return &Error{Code: "delivery_mixed_execution", Message: "本次交付包含其他远程执行方式，请按构建方式分别发起任务"}
@@ -165,6 +168,10 @@ func (s *Service) sealDeliveries(ctx context.Context, run *store.ReleaseRun, pla
 			sources[target.VersionGroup] = append(sources[target.VersionGroup], source)
 		}
 	}
+	groups, sources, err = combineReleaseGroups(plan, groups, sources)
+	if err != nil {
+		return err
+	}
 	for id, batch := range groups {
 		if err = s.delivery.Seal(ctx, batch, sources[id]); err != nil {
 			return err
@@ -268,15 +275,29 @@ func (s *Service) sealedDeliveryReady(run *store.ReleaseRun, plan *executionPlan
 		}
 	}
 	batches, err := s.delivery.Load(run.ID)
-	if err != nil || len(batches) != len(groups) {
+	if err != nil || len(batches) == 0 {
 		return false
 	}
+	seen := map[string]bool{}
 	for _, b := range batches {
-		if !groups[b.GroupID] || b.AppID != run.AppID || b.Commit != run.CommitSHA {
+		if b.AppID != run.AppID || b.Commit != run.CommitSHA {
 			return false
 		}
+		ids := []string{b.GroupID}
+		if len(b.Components) > 0 {
+			ids = nil
+			for _, c := range b.Components {
+				ids = append(ids, c.GroupID)
+			}
+		}
+		for _, id := range ids {
+			if !groups[id] || seen[id] {
+				return false
+			}
+			seen[id] = true
+		}
 	}
-	return true
+	return len(seen) == len(groups)
 }
 
 func (s *Service) failDelivery(run *store.ReleaseRun, stage string, err error) {

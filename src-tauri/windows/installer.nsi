@@ -204,6 +204,50 @@ Function RunDockChooseInPlaceUpgrade
   ${EndIf}
 FunctionEnd
 ; RUNDOCK END policy
+; RUNDOCK BEGIN silent-msi-guard
+; Silent installs skip PageReinstall entirely. Check both registry hives from
+; .onInit before any install section or file staging can run.
+!macro RunDockCheckMsiHive HIVE
+  StrCpy $R0 0
+  ${Do}
+    EnumRegKey $R1 ${HIVE} "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" $R0
+    ${If} $R1 == ""
+      ${ExitDo}
+    ${EndIf}
+    IntOp $R0 $R0 + 1
+    ReadRegStr $R2 ${HIVE} "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$R1" "DisplayName"
+    ReadRegStr $R3 ${HIVE} "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$R1" "Publisher"
+    ${If} "$R2$R3" == "${PRODUCTNAME}${MANUFACTURER}"
+      ReadRegDWORD $R2 ${HIVE} "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$R1" "WindowsInstaller"
+      ReadRegStr $R3 ${HIVE} "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$R1" "UninstallString"
+      ${StrCase} $R3 $R3 "L"
+      ${StrLoc} $R3 $R3 "msiexec" ">"
+      ${If} $R2 == 1
+      ${OrIf} $R3 != ""
+        SetErrorLevel 1
+        MessageBox MB_OK|MB_ICONSTOP "$(RunDockMsiMigrationBlocked)" /SD IDOK
+        Abort
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+!macroend
+Function RunDockCheckUnattendedMsi
+  ${If} ${Silent}
+  ${OrIf} $UpdateMode = 1
+  ${OrIf} $PassiveMode = 1
+    Push $R0
+    Push $R1
+    Push $R2
+    Push $R3
+    !insertmacro RunDockCheckMsiHive HKLM
+    !insertmacro RunDockCheckMsiHive HKCU
+    Pop $R3
+    Pop $R2
+    Pop $R1
+    Pop $R0
+  ${EndIf}
+FunctionEnd
+; RUNDOCK END silent-msi-guard
 Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
@@ -340,6 +384,15 @@ Function PageLeaveReinstall
 
   ; If migrating from Wix, always uninstall
   ${If} $WixMode = 1
+; RUNDOCK BEGIN msi-leave-guard
+    ${If} ${Silent}
+    ${OrIf} $UpdateMode = 1
+    ${OrIf} $PassiveMode = 1
+      SetErrorLevel 1
+      MessageBox MB_OK|MB_ICONSTOP "$(RunDockMsiMigrationBlocked)" /SD IDOK
+      Abort
+    ${EndIf}
+; RUNDOCK END msi-leave-guard
     Goto reinst_uninstall
   ${EndIf}
 
@@ -530,6 +583,9 @@ Function .onInit
 
   !insertmacro SetContext
 
+; RUNDOCK BEGIN init-msi-guard
+  Call RunDockCheckUnattendedMsi
+; RUNDOCK END init-msi-guard
   ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
     ; Set default install location
     !if "${INSTALLMODE}" == "perMachine"
@@ -682,7 +738,14 @@ Section Install
 ; RUNDOCK END preserve-running-install
 
   ; Copy main executable
+; RUNDOCK BEGIN main-extraction-prepare
+  AllowSkipFiles off
+  ClearErrors
+; RUNDOCK END main-extraction-prepare
   File "${MAINBINARYSRCPATH}"
+; RUNDOCK BEGIN main-extraction-check
+  !insertmacro RunDockCheckExtraction
+; RUNDOCK END main-extraction-check
 
   ; Copy resources
   {{#each resources_dirs}}
@@ -694,7 +757,13 @@ Section Install
 
   ; Copy external binaries
   {{#each binaries}}
+; RUNDOCK BEGIN binary-extraction-prepare
+    ClearErrors
+; RUNDOCK END binary-extraction-prepare
     File /a "/oname={{this}}" "{{no-escape @key}}"
+; RUNDOCK BEGIN binary-extraction-check
+    !insertmacro RunDockCheckExtraction
+; RUNDOCK END binary-extraction-check
   {{/each}}
 
   ; Create file associations

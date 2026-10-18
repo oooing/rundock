@@ -137,9 +137,9 @@ async function createGroup() {
     </nav>
 
     <div class="footer">
-      <button v-if="isTauri && appUpdate.info && ['downloading', 'ready', 'available', 'installed', 'scheduled', 'confirming', 'planning', 'installing', 'restoring', 'finished'].includes(appUpdate.phase)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' || appUpdate.phase === 'installed' }" @click="openAppUpdate">
+      <button v-if="isTauri && (appUpdate.info || appUpdate.error)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' || appUpdate.phase === 'installed', failed: !!appUpdate.error }" @click="openAppUpdate">
         <UiIcon :name="appUpdate.phase === 'ready' ? 'check-circle' : 'refresh'" :size="16" />
-        <span><strong>{{ appUpdate.phase === 'scheduled' ? tr('下次启动安装') : appUpdate.phase === 'restoring' ? tr('正在恢复项目') : appUpdate.phase === 'finished' ? tr('更新结果，点击查看') : appUpdate.phase === 'installing' ? tr('正在安装…') : appUpdate.phase === 'installed' ? tr('新版已安装，点击查看') : appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small>v{{ appUpdate.info.version }}<template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
+        <span><strong>{{ appUpdate.error ? tr('更新未完成，点击查看') : appUpdate.phase === 'staging' ? tr('正在静默安装') : appUpdate.phase === 'scheduled' ? tr('下次启动安装') : appUpdate.phase === 'restoring' ? tr('正在恢复项目') : appUpdate.phase === 'finished' ? tr('更新结果，点击查看') : appUpdate.phase === 'installing' ? tr('正在安装…') : appUpdate.phase === 'installed' ? tr('新版已安装，点击查看') : appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small v-if="appUpdate.info">v{{ appUpdate.info.version }}<template v-if="appUpdate.phase === 'installed'"> · {{ tr('下次启动生效') }}</template><template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
       </button>
       <div class="footer-row">
         <button class="ghost settings-link" @click="emit('settings')"><UiIcon name="settings" :size="16" />{{ tr('设置') }}</button>
@@ -286,6 +286,7 @@ async function createGroup() {
 }
 .footer .update-link { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px; margin-bottom: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); border-radius: 8px; }
 .footer .update-link.ready { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.footer .update-link.failed { color: var(--red); border-color: var(--red); }
 .update-link strong { display: block; font-size: 12px; font-weight: 500; line-height: 1.5; }.update-link small { display: block; font-size: 11px; margin-top: 3px; color: var(--text-faint); }
 .update-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .footer .github-link { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; border: 0; background: transparent; padding: 6px 4px; border-radius: 6px; color: var(--text-dim); text-decoration: none; white-space: nowrap; }

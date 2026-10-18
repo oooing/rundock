@@ -65,3 +65,31 @@ func TestDesktopUpdateGuardsSnapshotAndBusy(t *testing.T) {
 		t.Fatal("did not shut down")
 	}
 }
+
+func TestDesktopRestoreDoesNotClaimDegradedOrStoppingIsStarting(t *testing.T) {
+	s := restartTestServer(t)
+	for _, state := range []string{app.StatusDegraded, app.StatusStopping, app.StatusStarting, app.StatusRunning} {
+		t.Run(state, func(t *testing.T) {
+			rt := &app.Runtime{AppID: "retained", Status: state}
+			s.Manager.Registry.Set(rt.AppID, rt)
+			defer s.Manager.Registry.Remove(rt.AppID)
+			r := httptest.NewRequest("POST", "/api/desktop/update-restore", strings.NewReader(`{"id":"retained"}`))
+			r.RemoteAddr = "127.0.0.1:9876"
+			w := httptest.NewRecorder()
+			s.Router().ServeHTTP(w, r)
+			want := 200
+			if state == app.StatusDegraded || state == app.StatusStopping {
+				want = 409
+			}
+			if w.Code != want {
+				t.Fatalf("%d: %s", w.Code, w.Body.String())
+			}
+			if rt.GetStatus() != state {
+				t.Fatal("recovery altered an existing run")
+			}
+			if state == app.StatusDegraded && !strings.Contains(w.Body.String(), "重启") {
+				t.Fatal(w.Body.String())
+			}
+		})
+	}
+}

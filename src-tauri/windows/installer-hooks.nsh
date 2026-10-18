@@ -18,6 +18,8 @@ LangString RunDockInstallFailed 1033 "Installation could not finish. Check file 
 LangString RunDockInstallFailed 2052 "安装未完成。请检查文件权限，或以管理员身份重试。从 RunDock 发起更新时，请返回窗口查看项目恢复结果。"
 LangString RunDockLegacyMigration 1033 "Launcher is now RunDock. Please uninstall the old Launcher first, keeping its application data, then run this installer again."
 LangString RunDockLegacyMigration 2052 "Launcher 已更名为 RunDock。请先卸载旧版 Launcher，保留应用数据，然后重新运行此安装程序。"
+LangString RunDockMsiMigrationBlocked 1033 "An MSI installation of RunDock exists. Silent EXE migration is not supported. No installed files or running projects have been changed. Use an explicit MSI upgrade after closing RunDock."
+LangString RunDockMsiMigrationBlocked 2052 "检测到 MSI 安装的 RunDock，不支持静默迁移为 EXE。安装文件和运行项目均未更改。请完整退出 RunDock 后主动执行 MSI 升级。"
 
 !macro RunDockStopInstalledApp
   Push $R0
@@ -51,6 +53,7 @@ LangString RunDockLegacyMigration 2052 "Launcher 已更名为 RunDock。请先�
   Pop $R1
   ${If} $R0 != 0
     DetailPrint "$R1"
+    Call RunDockRollbackInstall
     MessageBox MB_OK|MB_ICONSTOP "$(RunDockInstallFailed)$\r$\n$\r$\n$R1" /SD IDOK
     SetErrorLevel 1
     Abort
@@ -61,8 +64,32 @@ LangString RunDockLegacyMigration 2052 "Launcher 已更名为 RunDock。请先�
 
 Function .onInstFailed
   ; Roll back file staging only. Never stop the running application or projects.
-  nsExec::ExecToLog '"$PLUGINSDIR\rundock-install-helper.exe" rollback "$INSTDIR\." "$RunDockInstallOwner"'
+  Call RunDockRollbackInstall
 FunctionEnd
+
+Function RunDockRollbackInstall
+  Push $R0
+  Push $R1
+  ${If} $RunDockInstallOwner != ""
+    nsExec::ExecToStack /TIMEOUT=30000 '"$PLUGINSDIR\rundock-install-helper.exe" rollback "$INSTDIR\." "$RunDockInstallOwner"'
+    Pop $R0
+    Pop $R1
+    ${If} $R0 != 0
+      DetailPrint "Recovery files preserved: $R1"
+      SetErrorLevel 1
+    ${EndIf}
+  ${EndIf}
+  Pop $R1
+  Pop $R0
+FunctionEnd
+
+!macro RunDockCheckExtraction
+  ${If} ${Errors}
+    Call RunDockRollbackInstall
+    SetErrorLevel 1
+    Abort "$(RunDockInstallFailed)"
+  ${EndIf}
+!macroend
 
 !macro NSIS_HOOK_PREINSTALL
   ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Launcher" "UninstallString"

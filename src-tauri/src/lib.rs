@@ -28,6 +28,7 @@ mod desktop_restart;
 mod project_picker;
 mod app_update;
 mod update_transaction;
+mod installer_process;
 mod system_locale;
 
 #[cfg(not(debug_assertions))]
@@ -198,9 +199,17 @@ fn sidecar_base() -> Option<String> {
 /// Exit only after the chosen action succeeds; errors leave the window usable.
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle, keep_projects: bool) -> Result<(), String> {
+    // Closing only the shell must remain available when a recovery record or
+    // backend is unhealthy. Persistent recovery resumes on a later full start;
+    // dropping Child never terminates the backend or its projects.
+    if keep_projects {
+        if let Ok(mut child) = app.state::<SidecarState>().0.lock() { child.take(); }
+        app.exit(0);
+        return Ok(());
+    }
     if let Some(directory) = sidecar_data_dir() {
         if let Some(pending) = update_transaction::load(&directory)? {
-            if matches!(pending.phase.as_str(), "installing" | "restoring") {
+            if matches!(pending.phase.as_str(), "installing" | "restoring" | "staging") {
                 return Err("正在安装或恢复项目，请完成后再退出".into());
             }
         }
@@ -384,7 +393,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_shell::init())
         .manage(app_update::UpdateState::default())
-        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, system_locale, set_ui_language, project_picker::select_project_path, app_update::check_app_update, app_update::download_app_update, app_update::install_app_update, app_update::update_install_plan, app_update::schedule_app_update, app_update::app_update_status, app_update::cancel_scheduled_update, app_update::retry_update_restore])
+        .invoke_handler(tauri::generate_handler![sidecar_base, quit_app, system_locale, set_ui_language, project_picker::select_project_path, app_update::check_app_update, app_update::download_app_update, app_update::stage_app_update, app_update::install_app_update, app_update::update_install_plan, app_update::schedule_app_update, app_update::app_update_status, app_update::cancel_scheduled_update, app_update::retry_update_restore])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

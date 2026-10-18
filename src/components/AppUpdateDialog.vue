@@ -2,15 +2,14 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { tr } from '@/i18n'
 import { getAppVersion, openProjectReleases } from '@/tauri/window'
-import { appUpdate as update, dismissAppUpdate, downloadAppUpdate, installAppUpdate, scheduleAppUpdate, planAppUpdate, cancelScheduledUpdate, retryUpdateRestore, recheckAppUpdate } from '@/stores/appUpdate'
+import { appUpdate as update, dismissAppUpdate, downloadAppUpdate, stageAppUpdate, installAppUpdate, planAppUpdate, cancelAppUpdatePlan, cancelScheduledUpdate, retryUpdateRestore, recheckAppUpdate, checkAppUpdate } from '@/stores/appUpdate'
 
 const currentVersion = ref('')
 const dialog = ref<HTMLElement | null>(null)
 const percent = computed(() => update.total ? Math.min(100, Math.floor(update.downloaded / update.total * 100)) : 0)
-const installed = computed(() => update.phase === 'installed' || update.info?.installedLocally === true)
 const installing = computed(() => update.phase === 'installing')
 const busy = computed(() => installing.value || update.phase === 'planning')
-const title = computed(() => update.phase === 'installed' ? tr('新版已安装') : update.phase === 'confirming' ? tr(installed.value ? '确认重启' : '确认安装') : update.phase === 'scheduled' ? tr('已安排安装') : update.phase === 'restoring' ? tr('正在恢复项目') : update.phase === 'installing' ? tr('正在更新') : update.phase === 'planning' ? tr('正在读取项目') : update.phase === 'downloading' ? tr('正在下载') : update.phase === 'finished' ? tr(update.error ? '更新未完成' : update.report?.remaining.length ? '部分项目待恢复' : '更新完成') : tr('新版可用'))
+const title = computed(() => update.phase === 'installed' ? tr('新版已安装') : update.phase === 'staging' ? tr('正在静默安装') : update.phase === 'confirming' ? tr('确认立即生效') : update.phase === 'scheduled' ? tr('已安排安装') : update.phase === 'restoring' ? tr('正在恢复项目') : update.phase === 'installing' ? tr('正在更新') : update.phase === 'planning' ? tr('正在读取项目') : update.phase === 'downloading' ? tr('正在下载') : update.phase === 'finished' ? tr(update.error ? '更新未完成' : update.report?.remaining.length ? '部分项目待恢复' : '更新完成') : update.info ? tr('新版可用') : tr('应用更新'))
 let previousFocus: HTMLElement | null = null
 const linkError = ref('')
 async function openReleases() {
@@ -44,21 +43,26 @@ onUnmounted(() => {
         <h2 id="update-title">{{ title }}</h2>
         <button class="ghost icon" :aria-label="tr('关闭')" :disabled="busy" @click="dismissAppUpdate">✕</button>
       </header>
-      <p class="version"><span v-if="currentVersion && currentVersion !== update.info?.version">v{{ currentVersion }} <span aria-hidden="true">→</span> </span><strong>v{{ update.info?.version }}</strong></p>
+      <p v-if="update.info" class="version"><span v-if="currentVersion && currentVersion !== update.info.version">v{{ currentVersion }} <span aria-hidden="true">→</span> </span><strong>v{{ update.info.version }}</strong></p>
       <div class="update-body">
         <div v-if="update.phase === 'downloading'" class="download-status" role="status">
           <div><span>{{ tr('正在后台下载更新') }}</span><span>{{ percent }}%</span></div>
           <progress :value="update.downloaded" :max="update.total || 1" :aria-label="tr('下载进度')"></progress>
         </div>
-        <p v-else-if="update.phase === 'ready'" role="status">{{ tr('安装会暂停项目，完成后自动恢复。') }}</p>
-        <p v-else-if="update.phase === 'installed'" role="status">{{ tr('重启后生效。运行中的项目将暂停并恢复。') }}</p>
-        <p v-else-if="installing" role="status">{{ tr('完成后自动恢复项目，请稍候。') }}</p>
+        <p v-else-if="update.phase === 'ready'" role="status">{{ tr('静默安装后，下次启动生效。项目保持运行。') }}</p>
+        <p v-else-if="update.phase === 'staging'" role="status">{{ tr('正在后台静默安装，可关闭此窗口。项目保持运行。') }}</p>
+        <template v-else-if="update.phase === 'installed'">
+          <p role="status">{{ tr('新版已安装，下次启动生效。项目保持运行。') }}</p>
+          <p class="hint">{{ tr('需完整退出后再打开；收起到托盘不算退出。') }}</p>
+        </template>
+        <p v-else-if="installing" role="status">{{ tr('正在启用新版，完成后尝试重新启动项目。') }}</p>
         <template v-else-if="update.phase === 'confirming'">
-          <p>{{ tr('以下项目将暂停，更新后恢复。请先保存工作。') }}</p>
+          <p>{{ tr('将停止以下项目，超时会结束其进程。请先保存工作，调试会话不会保留。') }}</p>
           <ul class="project-list"><li v-for="project in update.plan?.projects" :key="project.id">{{ project.name }}</li></ul>
           <p v-if="!update.plan?.projects.length">{{ tr('没有运行中的项目。') }}</p>
+          <p class="hint">{{ tr('完成后尝试重新启动；失败会列出原因。') }}</p>
         </template>
-        <p v-else-if="update.phase === 'scheduled'" role="status">{{ tr('退出后再次启动时安装；托盘打开不触发。') }}</p>
+        <p v-else-if="update.phase === 'scheduled'" role="status">{{ tr('已安排下次启动安装，也可现在静默安装。项目保持运行。') }}</p>
         <template v-else-if="update.phase === 'finished'">
           <p v-if="!update.error && !update.report?.remaining.length" class="ready">{{ tr('项目已恢复，可以继续使用。') }}</p>
           <ul v-if="update.report?.failures.length" class="project-list error"><li v-for="failure in update.report.failures" :key="failure">{{ failure }}</li></ul>
@@ -71,17 +75,21 @@ onUnmounted(() => {
         </div>
       </div>
       <footer>
-        <template v-if="['ready','installed'].includes(update.phase)">
-          <button @click="planAppUpdate">{{ tr(installed ? '立即重启' : '立即安装') }}</button>
-          <button class="primary" @click="scheduleAppUpdate">{{ tr(installed ? '下次启动生效' : '下次启动安装') }}</button>
+        <template v-if="update.phase === 'installed'">
+          <button @click="planAppUpdate">{{ tr('立即生效') }}</button>
+          <button class="primary" @click="dismissAppUpdate">{{ tr('知道了') }}</button>
+        </template>
+        <template v-else-if="update.phase === 'ready'">
+          <button class="primary" @click="stageAppUpdate">{{ update.error ? tr('重试静默安装') : tr('静默安装') }}</button>
         </template>
         <template v-else-if="update.phase === 'confirming'">
-          <button @click="scheduleAppUpdate">{{ tr(installed ? '下次启动生效' : '下次启动安装') }}</button>
-          <button class="danger" @click="installAppUpdate">{{ tr(installed ? '重启并恢复' : '停止项目并安装') }}</button>
+          <button @click="cancelAppUpdatePlan">{{ tr('返回') }}</button>
+          <button class="danger" @click="installAppUpdate">{{ tr('停止项目并重启') }}</button>
         </template>
         <template v-else-if="update.phase === 'scheduled'">
-          <button class="link" @click="cancelScheduledUpdate">{{ tr('取消安排') }}</button>
-          <button @click="planAppUpdate">{{ tr(installed ? '立即重启' : '立即安装') }}</button>
+          <button class="primary" @click="stageAppUpdate">{{ update.error ? tr('重试静默安装') : tr('静默安装') }}</button>
+        </template>
+        <template v-else-if="update.phase === 'staging'">
           <button class="primary" @click="dismissAppUpdate">{{ tr('知道了') }}</button>
         </template>
         <template v-else-if="update.phase === 'finished'">
@@ -92,7 +100,8 @@ onUnmounted(() => {
         <template v-else>
           <button :disabled="busy" @click="dismissAppUpdate">{{ tr('稍后') }}</button>
           <button v-if="update.phase === 'available'" class="primary" @click="downloadAppUpdate">{{ update.error ? tr('重试下载') : tr('下载更新') }}</button>
-          <button v-else class="primary" disabled>{{ installing ? tr('正在安装…') : update.phase === 'planning' ? tr('正在读取…') : update.phase === 'restoring' ? tr('正在恢复…') : tr('正在下载…') }}</button>
+          <button v-else-if="['idle','current'].includes(update.phase)" class="primary" @click="checkAppUpdate()">{{ tr('重新检查') }}</button>
+          <button v-else class="primary" disabled>{{ installing ? tr('正在安装…') : update.phase === 'planning' ? tr('正在读取…') : update.phase === 'restoring' ? tr('正在恢复…') : update.phase === 'checking' ? tr('正在检查…') : tr('正在下载…') }}</button>
         </template>
       </footer>
     </section>
@@ -115,6 +124,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflo
 .download-status div { display: flex; justify-content: space-between; color: var(--text-dim); }
 progress { width: 100%; height: 6px; accent-color: var(--accent); }
 .ready { color: var(--green); }
+.hint { color: var(--text-faint); font-size: 12px; }
 .error { color: var(--red); margin-top: 12px; overflow-wrap: anywhere; }
 .link { display: block; border: 0; background: transparent; color: var(--accent-hover); padding: 6px 0 0; }
 .project-list { max-height: 180px; overflow: auto; padding-left: 20px; }

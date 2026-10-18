@@ -79,13 +79,18 @@ func (l *Launcher) watchExit(appID string, rt *app.Runtime, handle *proc.Handle,
 
 // Stop 停止一个 app。分级：Ctrl-Break -> grace -> Terminate(taskkill /t /f) -> 端口确认。
 func (l *Launcher) Stop(appID string) (err error) {
-	return l.stop(appID, true)
+	return l.stop(appID, true, false)
 }
 
 // StopForUpdate never escalates to killing a live process after the grace period.
-func (l *Launcher) StopForUpdate(appID string) error { return l.stop(appID, false) }
+func (l *Launcher) StopForUpdate(appID string) error { return l.stop(appID, false, false) }
 
-func (l *Launcher) stop(appID string, force bool) (err error) {
+// StopForConfirmedUpdate is only for an explicitly confirmed activation. It may
+// finish stopping a dedicated, owned process group after the grace period. Never
+// fall back to killing a PID tree or a port owner for this operation.
+func (l *Launcher) StopForConfirmedUpdate(appID string) error { return l.stop(appID, true, true) }
+
+func (l *Launcher) stop(appID string, force, requireOwnedGroup bool) (err error) {
 	started := time.Now()
 	defer func() {
 		if l.Diagnostics == nil {
@@ -106,17 +111,23 @@ func (l *Launcher) stop(appID string, force bool) (err error) {
 	l.mu.Unlock()
 	if !ok {
 		if rt, ok := l.Manager.Registry.Get(appID); ok {
+			if requireOwnedGroup {
+				return fmt.Errorf("无法确认项目的托管进程组，未停止项目；请手动停止后重试")
+			}
 			l.finishStopped(appID, rt, 0)
 			return nil
 		}
 		return nil // 幂等：应用已停止，直接返回成功
 	}
 	gracePeriod := durationFromSetting(l.Store, "grace_period_seconds", 8)
-	if !force && gracePeriod > 15*time.Second {
+	if (!force || requireOwnedGroup) && gracePeriod > 15*time.Second {
 		gracePeriod = 15 * time.Second
 	}
 	col := rs.collector
 	rt, _ := l.Manager.Registry.Get(appID)
+	if requireOwnedGroup && rt == nil {
+		return fmt.Errorf("项目运行记录已变化，未停止项目；请重新确认")
+	}
 	if rt != nil {
 		if col != nil {
 			col.Info(fmt.Sprintf("[停止] 开始停止 pid=%d grace=%ds", rs.rootPID, int(gracePeriod/time.Second)))
@@ -128,7 +139,11 @@ func (l *Launcher) stop(appID string, force bool) (err error) {
 	owned := map[int]uint64{}
 	if rt != nil {
 		var queryErr error
-		owned, _, queryErr = ownedRunProcesses(rt)
+		var supported bool
+		owned, supported, queryErr = ownedRunProcesses(rt)
+		if requireOwnedGroup && !supported && queryErr == nil {
+			queryErr = fmt.Errorf("没有独立的托管进程组，请手动停止项目")
+		}
 		if queryErr != nil {
 			l.Manager.Transition(rt, app.StatusDegraded, nil)
 			return fmt.Errorf("无法确认本次启动的进程组，未按端口关闭任何程序：%w", queryErr)
@@ -205,7 +220,11 @@ func (l *Launcher) stop(appID string, force bool) (err error) {
 	}
 
 	if col != nil {
-		col.Warn("[停止] grace 超时，强制终止进程树")
+		if requireOwnedGroup {
+			col.Warn("[停止] 正常退出超时，按用户确认结束本次托管进程组；不会按端口关闭其他程序")
+		} else {
+			col.Warn("[停止] grace 超时，强制终止进程树")
+		}
 	}
 	select {
 	case <-rs.exitDone: // Root already reaped; do not taskkill a potentially reused PID.

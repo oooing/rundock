@@ -83,6 +83,31 @@ async function onFileTabKeydown(event:KeyboardEvent){
   fileTabs.value?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus({preventScroll:true})
 }
 const visibleFiles = computed(()=>groups.value.find(group=>group.id===activeCategory.value)?.files ?? [])
+// Keep local material collapsed. Only mount one page of files when requested.
+const localDirectory=ref<string|null>(null),localPage=ref(0)
+const localPageSize=50
+const localDirectories=computed(()=>{
+  const directories=new Map<string,ReleaseFileClassification[]>()
+  for(const file of visibleFiles.value){
+    const parts=file.path.split('/');parts.pop()
+    const directory=parts.slice(0,3).join('/') || '.'
+    const files=directories.get(directory) ?? []
+    files.push(file);directories.set(directory,files)
+  }
+  return [...directories].map(([path,files])=>({path,files,selected:files.filter(file=>props.selected[file.path]).length}))
+    .sort((a,b)=>a.path.localeCompare(b.path))
+})
+const openedDirectory=computed(()=>localDirectories.value.find(group=>group.path===localDirectory.value))
+const localPageCount=computed(()=>Math.max(1,Math.ceil((openedDirectory.value?.files.length ?? 0)/localPageSize)))
+const displayedFiles=computed(()=>activeCategory.value!=='local'?visibleFiles.value:
+  (openedDirectory.value?.files ?? []).slice(localPage.value*localPageSize,(localPage.value+1)*localPageSize))
+watch(activeCategory,()=>{localDirectory.value=null;localPage.value=0})
+watch(localPageCount,count=>{localPage.value=Math.min(localPage.value,count-1)})
+watch(localPage,()=>{previewPath.value=null;if(fileList.value)fileList.value.scrollTop=0})
+function openLocalDirectory(path:string|null){
+  localDirectory.value=path;localPage.value=0;previewPath.value=null
+  if(fileList.value)fileList.value.scrollTop=0
+}
 const reviewFiles=computed(()=>props.files.filter(file=>file.category==='review'))
 const canBulkIgnore=computed(()=>!!props.ignoreFiles && reviewFiles.value.length>0 && reviewFiles.value.every(file=>!file.tracked))
 const bulkDecision=computed(()=>{
@@ -160,7 +185,18 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
       </template>
     </div>
     <div :id="`${fileTabsId}-panel`" ref="fileList" class="file-groups" role="tabpanel" :aria-labelledby="`${fileTabsId}-tab-${activeCategory}`" tabindex="0">
-        <div v-for="file in visibleFiles" :key="file.path" class="scope-file">
+        <template v-if="activeCategory==='local'">
+          <p class="local-help">{{tr('默认不提交，也未加入忽略；文件仍保留。')}}</p>
+          <template v-if="!openedDirectory">
+            <button v-for="directory in localDirectories" :key="directory.path" type="button" class="directory-row" @click="openLocalDirectory(directory.path)">
+              <code>{{directory.path}}/</code><span v-if="directory.selected">{{tr('已选 {0}',[directory.selected])}}</span><span>{{tr('{0} 个文件',[directory.files.length])}}</span><span aria-hidden="true">›</span>
+            </button>
+          </template>
+          <div v-else class="directory-navigation">
+            <button type="button" @click="openLocalDirectory(null)">‹ {{tr('返回目录')}}</button><code>{{openedDirectory.path}}/</code>
+          </div>
+        </template>
+        <div v-for="file in displayedFiles" :key="file.path" class="scope-file">
           <div class="file-row" :class="{'review-row':file.category==='review'}">
             <input v-if="file.category!=='review'" type="checkbox" :aria-label="tr('选择文件：{0}',[file.path])" :checked="!!selected[file.path]" :disabled="busy || locked || ignoring || (file.category==='sensitive' && !selected[file.path])" @change="emit('choose',file,($event.target as HTMLInputElement).checked)" />
             <button type="button" class="file-name" :title="tr('点击预览：{0}',[file.path])" :aria-expanded="previewPath===file.path" @click="previewPath=previewPath===file.path?null:file.path"><code>{{file.path}}</code></button>
@@ -176,6 +212,11 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
         </div>
         <p v-if="!visibleFiles.length" class="empty-files">{{tr(activeCategory==='review'?'暂无待确认的文件。':activeCategory==='recommend'?'暂无建议保存的改动。':'没有匹配的文件')}}</p>
     </div>
+    <div v-if="activeCategory==='local' && openedDirectory && localPageCount>1" class="directory-pagination">
+      <button type="button" :disabled="localPage===0" @click="localPage--">{{tr('上一页')}}</button>
+      <span>{{localPage+1}} / {{localPageCount}}</span>
+      <button type="button" :disabled="localPage+1>=localPageCount" @click="localPage++">{{tr('下一页')}}</button>
+    </div>
     <p v-if="ignoreNotice" class="ignore-notice" role="status">{{ignoreNotice}}</p>
     <slot name="after-files" />
     <div class="candidate-result" aria-live="polite" tabindex="-1">
@@ -188,6 +229,12 @@ function chooseReview(file:ReleaseFileClassification,event:Event){
   </div>
 </template>
 <style scoped>
+.local-help{margin:0;padding:10px 12px;font-size:11px;color:var(--text-faint);line-height:1.6}
+.directory-row{display:flex;align-items:center;gap:12px;width:100%;min-height:40px;padding:8px 12px;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent;text-align:left;color:var(--text);font-size:12px}
+.directory-row code,.directory-navigation code{flex:1;min-width:0;overflow-wrap:anywhere;white-space:normal}.directory-row span{flex-shrink:0;color:var(--text-faint);font-variant-numeric:tabular-nums}
+.directory-navigation{display:flex;align-items:center;gap:12px;padding:8px 12px;font-size:12px}.directory-navigation button,.directory-pagination button{border:0;background:transparent;padding:6px;color:var(--accent);font-size:12px}.directory-pagination{display:flex;justify-content:flex-end;align-items:center;gap:12px;font-size:12px;color:var(--text-faint)}.directory-pagination button:disabled{opacity:.4;cursor:default}
+.directory-row:focus-visible,.directory-navigation button:focus-visible,.directory-pagination button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+@media(hover:hover){.directory-row:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}}
 .ignore-status details{max-height:140px;overflow:auto}.ignore-status details code{display:block;margin-top:6px}
 .ignore-status{margin:8px 0;font-size:12px;overflow-wrap:anywhere}.ignore-status p{margin:8px 0;color:var(--text-faint);line-height:1.6}.ignore-status button{margin:4px 8px 0 0;min-height:34px;font-size:12px}.ignore-status [role=alert]{color:var(--red)}.ignore-notice{font-size:12px;color:var(--green);line-height:1.6}
 .candidate-result .review{color:var(--amber)}

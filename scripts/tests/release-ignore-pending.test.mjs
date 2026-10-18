@@ -13,7 +13,9 @@ function fixture(ignoreFile, ignoreFiles = async () => { throw Error('Unexpected
   const files = ['one.png', 'two.png'].map(path => ({ path, category: 'review', contentFingerprint: path, tracked: false }))
   const props = vue.reactive({ files, selected: {}, decisions: [], candidate: null, busy: false, locked: false, ignoreFile, ignoreFiles })
   const events = [], unmount = [], scope = vue.effectScope()
-  const deps = { ...vue, window: { removeEventListener() {} }, useId: () => 'fixture', onMounted() {}, onBeforeUnmount: fn => unmount.push(fn),
+  // Node 24 exposes a non-identifier `module.exports` namespace entry.
+  const vueBindings = Object.fromEntries(Object.entries(vue).filter(([name]) => /^[A-Za-z_$][\w$]*$/.test(name)))
+  const deps = { ...vueBindings, window: { removeEventListener() {} }, useId: () => 'fixture', onMounted() {}, onBeforeUnmount: fn => unmount.push(fn),
     defineProps: () => props, withDefaults: p => p, defineEmits: () => (...args) => events.push(args),
     tr: text => text, hasOnlyFileReviewBlock: () => false }
   const panel = scope.run(() => new Function(...Object.keys(deps), `${code};return {chooseBulk,chooseReview,applyIgnores,skipFailedIgnores,pendingIgnores,ignoreError,ignoring}`)(...Object.values(deps)))

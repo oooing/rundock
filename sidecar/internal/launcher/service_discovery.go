@@ -49,8 +49,13 @@ func (l *Launcher) watchServices(appID string, rt *app.Runtime, before []probe.P
 		select {
 		case <-ticker.C:
 			cur := rt.GetStatus()
-			if cur == app.StatusStopped || cur == app.StatusFailed || cur == app.StatusStopping {
+			if cur == app.StatusStopped || cur == app.StatusFailed {
 				return
+			}
+			// An update may cancel a graceful stop. Pause probing while stopping,
+			// but keep this run's monitor alive so degraded/running can recover.
+			if cur == app.StatusStopping {
+				continue
 			}
 			scanRound++
 			// 扫描新增端口，登记为 service

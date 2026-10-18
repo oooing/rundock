@@ -99,7 +99,8 @@ func (s *Server) handleDesktopUpdateStop(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var input struct {
-		Fingerprint string `json:"fingerprint"`
+		Fingerprint   string `json:"fingerprint"`
+		ConfirmedStop bool   `json:"confirmedStop"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil {
 		writeError(w, 400, "更新确认无效")
@@ -142,7 +143,11 @@ func (s *Server) handleDesktopUpdateStop(w http.ResponseWriter, r *http.Request)
 		wg.Add(1)
 		go func(p updateProject) {
 			defer wg.Done()
-			if err := s.Launcher.StopForUpdate(p.ID); err != nil {
+			stop := s.Launcher.StopForUpdate
+			if input.ConfirmedStop {
+				stop = s.Launcher.StopForConfirmedUpdate
+			}
+			if err := stop(p.ID); err != nil {
 				mu.Lock()
 				errors = append(errors, p.Name+"："+err.Error())
 				mu.Unlock()
@@ -182,6 +187,14 @@ func (s *Server) handleDesktopUpdateRestore(w http.ResponseWriter, r *http.Reque
 	}
 	defer s.startupMu.Unlock()
 	if rt, ok := s.Manager.Registry.Get(p.ID); ok && s.Manager.Registry.IsRunning(p.ID) {
+		if rt.GetStatus() == app.StatusDegraded {
+			writeError(w, 409, "项目仍在运行，但服务状态异常；没有重复启动。请查看项目记录，必要时点击“重启”后再恢复。")
+			return
+		}
+		if rt.GetStatus() == app.StatusStopping {
+			writeError(w, 409, "项目尚未停止，暂不能恢复；请等待停止完成后重试。")
+			return
+		}
 		writeJSON(w, 200, map[string]any{"status": rt.GetStatus()})
 		return
 	}

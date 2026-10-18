@@ -266,7 +266,7 @@ export const labelCopy: Record<string, CopyPair> = {
   '重播启动过程': ['重播预览', 'Replay preview'],
   '关闭动效': ['关闭动画', 'Turn off animation'],
   '推荐提交': ['建议保存', 'Suggested files'],
-  '本地资料': ['仅留本机', 'Keep on this computer'],
+  '本地资料': ['默认不提交', 'Excluded by default'],
   '敏感阻断': ['含私密信息', 'Private data found'],
   '候选版本检查': ['待发版本检查', 'Check planned version'],
   '候选标识': ['检查编号', 'Check ID'],

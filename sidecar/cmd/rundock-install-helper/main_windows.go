@@ -4,13 +4,16 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -21,12 +24,17 @@ var names = []string{"launcher-platform.exe", "launcher-sidecar.exe"}
 const journalName = ".rundock-install-backup.json"
 
 type backup struct {
-	Name  string
-	Saved string
+	Name   string
+	Saved  string
+	Size   int64
+	SHA256 string
 }
 type recovery struct {
-	Owner string
-	Files []backup
+	Version int
+	Owner   string
+	PID     uint32
+	Created uint64
+	Files   []backup
 }
 
 var savedName = regexp.MustCompile(`^launcher-(platform|sidecar)\.rundock-running-[0-9a-f]{32}\.exe$`)
@@ -54,9 +62,9 @@ func move(from, to string, replace bool) error {
 	if err != nil {
 		return err
 	}
-	var flags uint32
+	flags := uint32(windows.MOVEFILE_WRITE_THROUGH)
 	if replace {
-		flags = windows.MOVEFILE_REPLACE_EXISTING
+		flags |= windows.MOVEFILE_REPLACE_EXISTING
 	}
 	return windows.MoveFileEx(src, dst, flags)
 }
@@ -86,7 +94,7 @@ func cleanup(root string) {
 	}
 }
 
-func readJournal(root, owner string) ([]backup, error) {
+func readJournal(root string) (*recovery, error) {
 	path := filepath.Join(root, journalName)
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -100,8 +108,11 @@ func readJournal(root, owner string) ([]backup, error) {
 		return nil, err
 	}
 	var data recovery
-	if err = json.Unmarshal(raw, &data); err != nil || data.Owner != owner || len(data.Files) > len(names) {
+	if err = json.Unmarshal(raw, &data); err != nil || data.Version != 1 || data.Owner == "" || data.PID == 0 || data.Created == 0 || len(data.Files) > len(names) {
 		return nil, errors.New("invalid installer recovery record")
+	}
+	if pid, err := strconv.ParseUint(data.Owner, 10, 32); err == nil && uint32(pid) != data.PID {
+		return nil, errors.New("installer recovery identity does not match owner")
 	}
 	records := data.Files
 	seen := map[string]bool{}
@@ -109,100 +120,144 @@ func readJournal(root, owner string) ([]backup, error) {
 		if (record.Name != names[0] && record.Name != names[1]) || seen[record.Name] || !savedName.MatchString(record.Saved) || !strings.HasPrefix(record.Saved, strings.TrimSuffix(record.Name, ".exe")+".") {
 			return nil, errors.New("invalid installer recovery path")
 		}
+		if hash, err := hex.DecodeString(record.SHA256); err != nil || len(hash) != sha256.Size || record.Size < 0 {
+			return nil, errors.New("invalid installer recovery checksum")
+		}
 		seen[record.Name] = true
 	}
-	return records, nil
+	return &data, nil
 }
 
-func rollback(root, owner string) error {
-	records, err := readJournal(root, owner)
-	if os.IsNotExist(err) {
-		return nil
+func fileDigest(path string) (int64, string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, "", err
 	}
+	if !info.Mode().IsRegular() {
+		return 0, "", errors.New("installation file is not a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	return n, hex.EncodeToString(h.Sum(nil)), err
+}
+
+func matchesBackup(path string, record backup) error {
+	size, hash, err := fileDigest(path)
 	if err != nil {
 		return err
 	}
-	for i := len(records) - 1; i >= 0; i-- {
-		record := records[i]
+	if size != record.Size || hash != record.SHA256 {
+		return fmt.Errorf("recovery checksum mismatch: %s", record.Name)
+	}
+	return nil
+}
+
+// The journal describes every planned move before the first rename. Missing
+// backups are safe only when the original bytes are already at the target.
+func rollback(root string, data *recovery) error {
+	for i := len(data.Files) - 1; i >= 0; i-- {
+		record := data.Files[i]
 		saved := filepath.Join(root, record.Saved)
+		target := filepath.Join(root, record.Name)
 		if _, err := os.Lstat(saved); os.IsNotExist(err) {
+			if err := matchesBackup(target, record); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := move(saved, filepath.Join(root, record.Name), true); err != nil {
+		if err := matchesBackup(saved, record); err != nil {
+			return err
+		}
+		if info, err := os.Lstat(target); err == nil && !info.Mode().IsRegular() {
+			return errors.New("recovery target is not a regular file")
+		}
+		if err := move(saved, target, true); err != nil {
 			return err
 		}
 	}
 	return os.Remove(filepath.Join(root, journalName))
 }
 
-func prepare(root, owner string) error {
-	if _, err := os.Stat(root); os.IsNotExist(err) {
-		return nil
-	}
-	// Exclusive journal also prevents overlapping installers for this directory.
-	journal, err := os.OpenFile(filepath.Join(root, journalName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+func saveJournal(root string, data *recovery) error {
+	raw, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("cannot prepare installation (another setup or recovery may be pending): %w", err)
+		return err
 	}
-	defer journal.Close()
-	cleanup(root)
+	f, err := os.CreateTemp(root, journalName+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return move(f.Name(), filepath.Join(root, journalName), true)
+}
+
+func prepare(root, owner string) error {
+	identity, err := identifyOwner(owner)
+	if err != nil {
+		return err
+	}
+	if previous, err := readJournal(root); err == nil {
+		// Opaque MSI owners and legacy/invalid records cannot establish that a
+		// previous installation is gone. Never discard their recovery files.
+		if _, err := strconv.ParseUint(previous.Owner, 10, 32); err != nil {
+			return errors.New("MSI recovery requires the original installer; backups have been preserved")
+		}
+		alive, err := ownerAlive(previous)
+		if err != nil {
+			return err
+		}
+		if alive {
+			return errors.New("another installer is still active; backups have been preserved")
+		}
+		if err := rollback(root, previous); err != nil {
+			return fmt.Errorf("unfinished installation could not be restored: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
-		_ = journal.Close()
-		_ = os.Remove(journal.Name())
 		return err
-	}
-	var records []backup
-	save := func() error {
-		raw, _ := json.Marshal(recovery{Owner: owner, Files: records})
-		if err := journal.Truncate(0); err != nil {
-			return err
-		}
-		if _, err := journal.Seek(0, 0); err != nil {
-			return err
-		}
-		if _, err := journal.Write(raw); err != nil {
-			return err
-		}
-		return journal.Sync()
-	}
-	if err := save(); err != nil {
-		_ = journal.Close()
-		_ = os.Remove(journal.Name())
-		return err
-	}
-	fail := func(cause error) error {
-		_ = journal.Close()
-		restoreErr := rollback(root, owner)
-		return errors.Join(cause, restoreErr)
 	}
 	for _, name := range names {
 		path := filepath.Join(root, name)
-		info, err := os.Lstat(path)
+		size, hash, err := fileDigest(path)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return fail(err)
+			return err
 		}
-		if !info.Mode().IsRegular() {
-			return fail(errors.New("installation executable is not a regular file"))
-		}
-		record := backup{Name: name, Saved: strings.TrimSuffix(name, ".exe") + ".rundock-running-" + hex.EncodeToString(token[:]) + ".exe"}
-		records = append(records, record)
-		// Persist recovery paths before moving any file.
-		if err := save(); err != nil {
-			return fail(err)
-		}
-		if err := move(path, filepath.Join(root, record.Saved), false); err != nil {
-			return fail(fmt.Errorf("cannot prepare %s without closing it; check file permissions or run setup as administrator: %w", name, err))
+		identity.Files = append(identity.Files, backup{Name: name, Saved: strings.TrimSuffix(name, ".exe") + ".rundock-running-" + hex.EncodeToString(token[:]) + ".exe", Size: size, SHA256: hash})
+	}
+	if err := saveJournal(root, identity); err != nil {
+		return err
+	}
+	for _, record := range identity.Files {
+		if err := move(filepath.Join(root, record.Name), filepath.Join(root, record.Saved), false); err != nil {
+			return errors.Join(fmt.Errorf("cannot prepare %s without closing it: %w", record.Name, err), rollback(root, identity))
 		}
 	}
 	return nil
 }
 
 func run(mode, path string, owners ...string) error {
-	owner := "test"
+	owner := strconv.Itoa(os.Getpid())
 	if len(owners) > 0 {
 		owner = owners[0]
 	}
@@ -213,15 +268,39 @@ func run(mode, path string, owners ...string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(root); os.IsNotExist(err) && mode == "prepare" {
+		return nil
+	}
+	unlock, err := lockDirectory(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	switch mode {
 	case "prepare":
 		return prepare(root, owner)
-	case "rollback":
-		return rollback(root, owner)
-	case "commit":
-		if _, err := readJournal(root, owner); os.IsNotExist(err) {
+	case "rollback", "commit":
+		data, err := readJournal(root)
+		if os.IsNotExist(err) {
+			if mode == "commit" {
+				return validatePayload(root)
+			}
 			return nil
-		} else if err != nil {
+		}
+		if err != nil {
+			return err
+		}
+		identity, err := identifyOwner(owner)
+		if err != nil {
+			return err
+		}
+		if data.Owner != owner || data.PID != identity.PID || data.Created != identity.Created {
+			return errors.New("installer does not own this recovery record")
+		}
+		if mode == "rollback" {
+			return rollback(root, data)
+		}
+		if err := validatePayload(root); err != nil {
 			return err
 		}
 		if err := os.Remove(filepath.Join(root, journalName)); err != nil {

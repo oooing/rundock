@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -54,6 +55,53 @@ function readPlan(dir) {
   return JSON.parse(readFileSync(path.join(dir, 'plan/release-plan.json'), 'utf8'))
 }
 
+test('local installer storage requires the manifest as well as both installers and checksums', () => {
+  const config = JSON.parse(readFileSync(path.join(root, '.launcher/release.yaml'), 'utf8'))
+  const target = config.targets.find(target => target.id === 'local-windows')
+  assert.ok(target)
+  for (const artifact of target.artifacts) {
+    assert.ok(target.artifactRules.some(rule => rule.pattern === artifact && rule.min === 1 && rule.max === 1),
+      `Local artifact vault would omit or not require ${artifact}`)
+  }
+})
+
+test('release SHA256 works without Get-FileHash and releases file handles on errors', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const dir = path.join(runRoot, 'hash-without-module')
+  mkdirSync(dir)
+  const contents = [Buffer.alloc(0), Buffer.from('abc'), Buffer.from(Array.from({ length: 65537 }, (_, i) => i % 256))]
+  contents.forEach((bytes, i) => writeFileSync(path.join(dir, `hash [${i}].bin`), bytes))
+  copyFileSync(path.join(root, 'scripts/release-hash.ps1'), path.join(dir, 'release-hash.ps1'))
+  writeFileSync(path.join(dir, 'probe.ps1'), `
+$ErrorActionPreference = 'Stop'
+. ./release-hash.ps1
+function Get-FileHash { throw 'Get-FileHash must not be used' }
+$PSModuleAutoLoadingPreference = 'None'
+foreach ($i in 0..2) {
+  $file = [IO.Path]::Combine($PWD.Path, "hash [$i].bin")
+  [Console]::WriteLine((Get-ReleaseFileHash -LiteralPath $file))
+  $exclusive = [IO.File]::Open($file, 'Open', 'ReadWrite', 'None')
+  $failed = $false
+  try { $null = Get-ReleaseFileHash -LiteralPath $file } catch { $failed = $true }
+  finally { $exclusive.Dispose() }
+  if (-not $failed) { throw 'A locked file must fail, not produce a checksum' }
+  $null = Get-ReleaseFileHash -LiteralPath $file
+  [IO.File]::Move($file, "$file.done")
+}
+$failed = $false
+try { $null = Get-ReleaseFileHash -LiteralPath ([IO.Path]::Combine($PWD.Path, 'missing')) } catch { $failed = $true }
+if (-not $failed) { throw 'A missing file must fail' }
+`)
+  for (const shell of [pwsh, path.join(process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')]) {
+    contents.forEach((bytes, i) => writeFileSync(path.join(dir, `hash [${i}].bin`), bytes))
+    // Remove prior destination files through the script's literal file API.
+    const result = exec(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "[IO.Directory]::GetFiles($PWD.Path, '*.done') | ForEach-Object { [IO.File]::Delete($_) }; & ./probe.ps1"], dir)
+    assert.equal(result.status, 0, result.output)
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/), contents.map(bytes => createHash('sha256').update(bytes).digest('hex')))
+  }
+})
+
 test('Windows and source-only dry-runs cannot publish and need no real tag', () => {
   // This smoke test validates the real checkout, so its tag must track the app version.
   const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
@@ -87,6 +135,7 @@ function versionFixture(name, version, overrides = {}) {
   // the fixture so regression cases never rewrite the user's working checkout.
   copyFileSync(path.join(root, 'scripts/release-plan.ps1'), path.join(dir, 'scripts/release-plan.ps1'))
   copyFileSync(path.join(root, 'scripts/release-build.ps1'), path.join(dir, 'scripts/release-build.ps1'))
+  copyFileSync(path.join(root, 'scripts/release-hash.ps1'), path.join(dir, 'scripts/release-hash.ps1'))
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
     version: versions['package.json'], description: 'RunDock 启动坞，发布与构建测试。',
   }))

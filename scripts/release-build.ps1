@@ -12,6 +12,7 @@ param(
 # Keep this script UTF-8 with BOM: Windows PowerShell 5.1 parses -File as ANSI otherwise.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'release-hash.ps1')
 
 # Windows PowerShell 5.1 otherwise uses the legacy code page for redirected logs.
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -136,6 +137,14 @@ if (-not (Test-Path -LiteralPath $cargoLock -PathType Leaf)) {
 }
 
 Write-Host "[release] 版本校验通过：$TagName"
+# Check the verification tools before spending time compiling installers.
+$null = Get-ReleaseFileHash -LiteralPath $PSCommandPath
+try {
+    Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+    $null = Get-Command Get-AuthenticodeSignature -CommandType Cmdlet -ErrorAction Stop
+} catch {
+    throw '[RUNDOCK_SIGNATURE_TOOL_MISSING] Windows signature verification is unavailable. Run the build with Windows PowerShell and repair its Security module.'
+}
 if ($ValidateOnly) {
     return
 }
@@ -247,7 +256,7 @@ try {
 
     Write-Host '[release] 构建 Tauri NSIS + MSI'
     Invoke-Npm @('run', 'tauri', '--', 'build', '--ci', '--bundles', 'nsis,msi', '--', '--locked')
-    if ((Get-FileHash -LiteralPath $tauriBinary -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $temporarySidecar -Algorithm SHA256).Hash) {
+    if ((Get-ReleaseFileHash -LiteralPath $tauriBinary) -cne (Get-ReleaseFileHash -LiteralPath $temporarySidecar)) {
         throw 'The bundler changed the freshly built sidecar; refusing to publish.'
     }
 
@@ -278,7 +287,7 @@ try {
     $assets = @()
     foreach ($path in ($assetPaths | Sort-Object)) {
         $file = Get-Item -LiteralPath $path
-        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $hash = Get-ReleaseFileHash -LiteralPath $path
         $signature = Get-AuthenticodeSignature -LiteralPath $path
         if ($RequireSigned -and $signature.Status -ne 'Valid') {
             throw "安装包未通过 Windows 代码签名校验：$($file.Name)（$($signature.Status)）"

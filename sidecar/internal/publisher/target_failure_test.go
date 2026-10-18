@@ -37,6 +37,22 @@ func TestTargetCommandFailureExplainsDiskFull(t *testing.T) {
 
 type diskFullTargetRunner struct{}
 
+func TestTargetCommandFailureExplainsVerificationTools(t *testing.T) {
+	for _, output := range []string{
+		"无法将 Get-F\r\nileHash 项识别为命令\n(Get-FileHash:String) CommandNotFoundException\nsecret-must-not-appear",
+		"[RUNDOCK_SIGNATURE_TOOL_MISSING] secret-must-not-appear",
+	} {
+		code, message := targetCommandFailure("Windows 安装包", "build", output, errors.New("exit status 1"))
+		if code != "build_verification_tool_missing" || !strings.Contains(message, "重新构建") || strings.Contains(message, "secret-must-not-appear") {
+			t.Fatalf("unhelpful or unsafe verification error: %s %s", code, message)
+		}
+	}
+	code, _ := targetCommandFailure("Windows", "build", "Get-FileHash completed; later compilation failed", errors.New("exit status 1"))
+	if code != "target_step_failed" {
+		t.Fatalf("successful hash command misclassified: %s", code)
+	}
+}
+
 func (diskFullTargetRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
 	if args[len(args)-1] == "build-web" {
 		return "error: failed to write metadata (os error 112)", errors.New("exit status 1")

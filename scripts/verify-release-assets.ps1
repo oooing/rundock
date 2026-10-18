@@ -8,6 +8,8 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release-hash.ps1')
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 if ($Version -notmatch '^\d+\.\d+\.\d+$' -or $Commit -notmatch '^[a-f0-9]{40,64}$') {
     throw 'Expected a frozen version and commit.'
 }
@@ -20,7 +22,7 @@ foreach ($name in $expected) {
     $path = Join-Path $root $name
     $file = Get-Item -LiteralPath $path
     if ($file.Length -eq 0 -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Invalid installer: $name" }
-    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = Get-ReleaseFileHash -LiteralPath $path
     $entry = @($manifest.assets | Where-Object { $_.name -ceq $name })
     if ($entry.Count -ne 1 -or $entry[0].sha256 -cne $hash -or $entry[0].bytes -ne $file.Length) { throw "Installer hash mismatch: $name" }
     $signature = Get-AuthenticodeSignature -LiteralPath $path

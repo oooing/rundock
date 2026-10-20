@@ -17,6 +17,9 @@ func targetCommandFailure(targetName, step, output string, err error) (string, s
 		return "target_step_timeout", prefix + "超时，请查看执行记录并调整该步骤的时限后重试"
 	}
 	text := strings.ToLower(output)
+	if strings.Contains(text, "[rundock_required_asset_missing]") {
+		return "build_required_asset_missing", prefix + "图标或启动图缺失或无效。请补齐并纳入发布，移除对应忽略规则后重试。"
+	}
 	if strings.Contains(text, "[rundock_signature_tool_missing]") {
 		return "build_verification_tool_missing", prefix + "缺少 Windows 签名检查工具。请使用 Windows PowerShell，并修复其 Security 模块后重新构建。"
 	}

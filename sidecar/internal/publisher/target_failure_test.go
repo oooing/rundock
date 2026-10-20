@@ -3,11 +3,130 @@ package publisher
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/launcher-sidecar/internal/store"
 )
+
+func TestTargetCommandFailureExplainsRequiredAssets(t *testing.T) {
+	output := "[RUNDOCK_REQUIRED_ASSET_MISSING] assets/brand-mark.png assets/splash.png\nsecret-value-must-not-appear"
+	for _, step := range []string{"check", "build"} {
+		t.Run(step, func(t *testing.T) {
+			code, message := targetCommandFailure("Android", step, output, errors.New("exit status 1"))
+			want := "Android 的“" + stepLabel(step) + "”图标或启动图缺失或无效。请补齐并纳入发布，移除对应忽略规则后重试。"
+			if code != "build_required_asset_missing" || message != want {
+				t.Fatalf("required asset error is not safe and actionable: %s %q", code, message)
+			}
+		})
+	}
+}
+
+func TestTargetCommandFailureRequiredAssetMarkerIsExplicit(t *testing.T) {
+	for _, output := range []string{
+		"[android.dangerous]: withAndroidDangerousBaseMod: ENOENT: no such file or directory, open 'assets/brand-mark.png'",
+		"androiddangerous ENOENT assets/splash.png",
+		"Missing required app icon: assets/brand-mark.png (ignored by .gitignore)",
+		"RUNDOCK_REQUIRED_ASSET_MISSING assets/brand-mark.png",
+		"[RUNDOCK_REQUIRED_ASSET_MISSING_EXTRA] assets/brand-mark.png",
+	} {
+		code, _ := targetCommandFailure("Android", "build", output, errors.New("exit status 1"))
+		if code != "target_step_failed" {
+			t.Fatalf("output without the stable marker was misclassified: %q => %s", output, code)
+		}
+	}
+}
+
+func TestTargetCommandFailureRequiredAssetPreservesContextErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"cancelled", context.Canceled, "target_step_cancelled"},
+		{"timeout", context.DeadlineExceeded, "target_step_timeout"},
+		{"wrapped cancellation", fmt.Errorf("command: %w", context.Canceled), "target_step_cancelled"},
+		{"wrapped timeout", fmt.Errorf("command: %w", context.DeadlineExceeded), "target_step_timeout"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			code, message := targetCommandFailure("Android", "build", "[RUNDOCK_REQUIRED_ASSET_MISSING] secret-value-must-not-appear", test.err)
+			_, want := targetCommandFailure("Android", "build", "", test.err)
+			if code != test.code || message != want {
+				t.Fatalf("context error lost precedence: %s %q", code, message)
+			}
+		})
+	}
+}
+
+type requiredAssetTargetRunner struct {
+	err   error
+	calls int
+}
+
+func (r *requiredAssetTargetRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
+	if len(args) > 0 && args[len(args)-1] == "build-web" {
+		r.calls++
+		return "[RUNDOCK_REQUIRED_ASSET_MISSING] assets/brand-mark.png\nsecret-value-must-not-appear", r.err
+	}
+	return "ok", nil
+}
+
+func TestTargetRequiredAssetMarkerOnlyFailsFailedCommands(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"failed", errors.New("exit status 1")},
+		{"succeeded", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// An empty disposable repository is sufficient; no commit, remote or push.
+			repo := t.TempDir()
+			runGit(t, repo, "init", "-b", "main")
+			db, err := store.Open(filepath.Join(t.TempDir(), "launcher.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if err := db.CreateApp(&store.App{ID: "app1", Name: "fixture", EntryScript: filepath.Join(repo, "start.bat"), Cwd: repo, AdapterType: "batch", LastStatus: "stopped"}); err != nil {
+				t.Fatal(err)
+			}
+			svc := New(db)
+			t.Cleanup(svc.Close)
+			runner := &requiredAssetTargetRunner{err: test.err}
+			svc.targetRunner = runner
+			selection := store.ReleaseTargetSelection{TargetID: "web", Build: true}
+			run := createTargetExecutionRun(t, svc, repo, "required-asset", selection)
+			err = svc.executeTargetPhase(context.Background(), run, executorPlan(validExecutorTarget(), selection), false)
+			if runner.calls != 1 {
+				t.Fatalf("build command ran %d times, want 1", runner.calls)
+			}
+			targets, readErr := db.ReleaseTargetRuns(run.ID)
+			if readErr != nil || len(targets) != 1 {
+				t.Fatalf("target state: %+v, %v", targets, readErr)
+			}
+			state := targets[0]
+			if test.err == nil {
+				if err != nil || state.Status != "succeeded" || !state.BuildDone || state.ErrorCode != "" || state.ErrorMessage != "" {
+					t.Fatalf("successful command was treated as failed: %+v, %v", state, err)
+				}
+				return
+			}
+			var failure *targetExecutionError
+			if !errors.As(err, &failure) || failure.Code != "build_required_asset_missing" {
+				t.Fatalf("failure = %#v", err)
+			}
+			if state.Status != "failed" || state.BuildDone || state.ErrorCode != failure.Code || state.ErrorMessage != failure.Message {
+				t.Fatalf("asset failure not persisted: %+v", state)
+			}
+			if strings.Contains(state.ErrorMessage, "brand-mark.png") || strings.Contains(state.ErrorMessage, "secret-value") {
+				t.Fatalf("raw command output leaked into primary message: %q", state.ErrorMessage)
+			}
+		})
+	}
+}
 
 func TestTargetCommandFailureExplainsDiskFull(t *testing.T) {
 	for _, output := range []string{

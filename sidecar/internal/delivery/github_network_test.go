@@ -14,7 +14,8 @@ func TestCLIChildDoesNotInheritTokenOverrides(t *testing.T) {
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
 		t.Setenv(name, "synthetic-token")
 	}
-	cmd, err := cliCommand(context.Background(), "auth", "status")
+	// Environment filtering is independent of proxy/network availability.
+	cmd, err := cliCommand(context.Background(), "--version")
 	if err != nil {
 		t.Skip("GitHub CLI not installed")
 	}
@@ -34,8 +35,11 @@ func TestLiveGitHubAPIReadOnly(t *testing.T) {
 	if os.Getenv("RUNDOCK_PROXY_LIVE_REPO") == "" {
 		t.Skip("opt-in current GitHub connection")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
+	if login, err := (CLI{}).Identity(ctx); err != nil || login == "" {
+		t.Fatalf("read-only GitHub identity check: %v", err)
+	}
 	var who struct {
 		Login string `json:"login"`
 	}

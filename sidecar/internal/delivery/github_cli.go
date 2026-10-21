@@ -48,13 +48,17 @@ func cliCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
 		cmd.Env = append(cmd.Env, v)
 	}
 	cmd.Env = append(cmd.Env, "GH_PROMPT_DISABLED=1", "GH_PAGER=cat", "NO_COLOR=1")
-	if len(args) > 0 && args[0] == "api" {
+	if githubNetworkCommand(args) {
 		cmd.Env, err = netproxy.PrepareEnvironment(ctx, cmd.Env, apiDestination(args))
 		if err != nil {
 			return nil, err
 		}
 	}
 	return cmd, nil
+}
+
+func githubNetworkCommand(args []string) bool {
+	return len(args) > 0 && (args[0] == "api" || len(args) > 1 && args[0] == "auth" && args[1] == "status")
 }
 
 func apiDestination(args []string) string {
@@ -70,27 +74,78 @@ func apiDestination(args []string) string {
 func (c CLI) Identity(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if err := readRetry(ctx, "GET", func() error { return githubAuthAttempt(ctx) }, githubRetryDelay); err != nil {
+		return "", err
+	}
+	var who struct {
+		Login string `json:"login"`
+	}
+	if err := c.JSON(ctx, "GET", "user", nil, &who); err != nil {
+		return "", err
+	}
+	if who.Login == "" {
+		return "", failure("github_response_invalid", "GitHub 返回的账号信息不完整，请稍后重试")
+	}
+	return who.Login, nil
+}
+
+func githubAuthAttempt(ctx context.Context) error {
+	// Leave time for one bounded retry and the authenticated /user read.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	cmd, err := cliCommand(ctx, "auth", "status", "--active", "--hostname", "github.com")
 	if err != nil {
-		return "", err
+		return err
 	}
 	var out cappedWriter
 	out.max = 64 << 10
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	if err = cmd.Run(); err != nil {
-		return "", failure("github_auth_required", "GitHub 登录不可用，请重新登录指定账号")
+	err = cmd.Run()
+	return decodeGitHubAuthStatus(ctx, err, &out)
+}
+
+// auth status performs network I/O too. Nonzero exit alone does NOT prove an
+// expired credential. Never return its raw output, which may contain secrets.
+func decodeGitHubAuthStatus(ctx context.Context, runErr error, out *cappedWriter) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return githubTransportError("timeout")
+	}
+	if runErr != nil {
+		transport := githubTransportError(out.String())
+		code, _ := ErrorInfo(transport)
+		if code != "github_request_unconfirmed" {
+			return transport
+		}
+		text := strings.ToLower(out.String())
+		if strings.Contains(text, "not logged into") || strings.Contains(text, "not logged in to") ||
+			strings.Contains(text, "token") && strings.Contains(text, "is invalid") ||
+			strings.Contains(text, "http 401") || strings.Contains(text, "bad credentials") {
+			return failure("github_auth_required", "GitHub 未登录或凭证已失效，请重新登录发布账号")
+		}
+		return transport
+	}
+	if out.overflow {
+		return failure("github_response_invalid", "GitHub 返回的账号信息不完整，请稍后重试")
 	}
 	if !strings.Contains(out.String(), "(keyring)") {
-		return "", failure("credential_store_required", "GitHub 凭证必须保存在系统密钥环；当前登录来源未通过检查")
+		return failure("credential_store_required", "GitHub 凭证必须保存在系统密钥环；当前登录来源未通过检查")
 	}
-	var who struct {
-		Login string `json:"login"`
+	return nil
+}
+
+func githubRetryDelay(ctx context.Context) error {
+	timer := time.NewTimer(300 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
-	if err = c.JSON(ctx, "GET", "user", nil, &who); err != nil {
-		return "", err
-	}
-	return who.Login, nil
 }
 
 func (c CLI) JSON(ctx context.Context, method, path string, body any, out any) error {
@@ -111,16 +166,7 @@ func (c CLI) JSON(ctx context.Context, method, path string, body any, out any) e
 	}
 	err = readRetry(ctx, method, func() error {
 		return githubJSONAttempt(ctx, args, input, out)
-	}, func(ctx context.Context) error {
-		timer := time.NewTimer(300 * time.Millisecond)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			return nil
-		}
-	})
+	}, githubRetryDelay)
 	if err != nil {
 		return fmt.Errorf("%s：%w", githubOperation(method, path), err)
 	}

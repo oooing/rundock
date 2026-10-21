@@ -169,6 +169,17 @@
 #release-panel-publish .release-notes { padding: 0; border: 0; border-radius: 0; background: transparent; }
 #release-panel-publish .file-picker { padding: 0; background: transparent; border: 0; }
 .m-body { overscroll-behavior: contain; scrollbar-gutter: stable; }
+.run-actions { gap: 12px; padding: 14px 20px; background: var(--bg-elev); border-top: 1px solid var(--border); }
+.run-action-hint,.run-action-error { flex: 0 0 100%; margin: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: var(--text-dim); }
+.run-action-error { color: var(--red, #ffaaaa); max-height: 4.5em; overflow: auto; overscroll-behavior: contain; }
+.run-primary-actions { display: flex; gap: 10px; margin-left: auto; min-width: 0; }
+.run-actions button { min-height: 44px; padding: 10px 18px; border-radius: 8px; }.run-actions .retry-submit { min-width: 132px; font-weight: 600; }.run-actions .return-check { color: var(--text-dim); padding-inline: 8px; }
+.run-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.progress-block .execution-details > summary,.progress-block .artifacts > summary { cursor: pointer; padding: 10px 0; }
+.progress-block .execution-details code { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: no-preference) { .run-actions button { transition: transform 150ms ease-out; }.run-actions button:not(:disabled):active { transform: scale(.96); } }
+@media (max-width: 600px) { .run-actions { padding: 12px 14px; gap: 8px; }.run-actions button { padding: 9px 12px; }.run-actions .retry-submit { min-width: 112px; }.run-primary-actions { gap: 8px; } }
+@media (max-width: 360px) { .run-actions .return-check { flex-basis: 100%; text-align: left; }.run-primary-actions { width: 100%; }.run-primary-actions > button { flex: 1; } }
 #release-panel-publish > .file-picker { padding: 0; background: transparent; border: 0; }
 #release-panel-publish .unpushed-files { margin: 0; padding: 0; border: 0; }
 #release-panel-publish .summary-card { padding: 0; background: transparent; border: 0; border-radius: 0; }

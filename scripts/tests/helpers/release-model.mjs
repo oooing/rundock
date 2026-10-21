@@ -12,7 +12,7 @@ export function load(file, dependencies) {
 }
 const pure = { ...load('utils/releaseContent', {}), ...load('utils/releasePresentation', {}), ...load('utils/releaseSafety', {}),
   ...load('utils/releasePreferences', { localStorage: { getItem: () => null, setItem() {} } }) }
-export function fixture({ local = false, single = false, api = {}, preferences = {} } = {}) {
+export function fixture({ local = false, single = false, api = {}, preferences = {}, realVersionSync = false } = {}) {
   const requests = []
   const deps = {
     ref: vue.ref, computed: vue.computed, watch: vue.watch, nextTick: vue.nextTick,
@@ -31,7 +31,7 @@ export function fixture({ local = false, single = false, api = {}, preferences =
       load(`components/release/${file}`, deps)[installer](ctx)
     }
     ctx.scheduleReleaseNotesDraft = () => {}
-    ctx.syncVersionInputs = () => {}
+    if (!realVersionSync) ctx.syncVersionInputs = () => {}
     ctx.showRun = () => {}
     ctx.savePreparation = async () => {}
     ctx.buildMode.value = local ? 'local' : 'github'

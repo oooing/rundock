@@ -40,7 +40,8 @@ const currentName = computed(() => {
     </div>
     <slot name="actions"></slot>
     </div>
-    <p v-if="failureAdvice || progress.error" class="progress-error" role="alert"><template v-if="failureAdvice"><strong>{{ tr(failureAdvice.reason, failureAdvice.values) }}</strong><span class="failure-action">{{ tr(failureAdvice.action) }}</span></template><template v-else>{{ tr(progress.error) }}</template></p>
+    <p v-if="!pendingResult && !connectionLost && (failureAdvice || progress.error)" class="progress-error" role="alert"><template v-if="failureAdvice"><strong>{{ tr(failureAdvice.reason, failureAdvice.values) }}</strong><span class="failure-action">{{ tr(failureAdvice.action) }}</span></template><template v-else>{{ tr(progress.error) }}<span v-if="progress.recovery" class="failure-action">{{ tr(progress.recovery) }}</span></template></p>
+    <details class="progress-flow" :open="progress.state === 'running'"><summary>{{ tr('流程详情') }}<span>{{ tr(progress.phaseLabel) }}</span></summary>
     <ol class="release-step-list" :style="{ '--step-count': progress.steps.length }" :aria-label="tr('本次流程')">
       <li v-for="(step, index) in progress.steps" :key="step.id" :class="step.state" :aria-current="step.state === 'running' ? 'step' : undefined">
         <span class="step-mark" aria-hidden="true">{{ step.state === 'succeeded' ? '✓' : step.state === 'failed' ? '!' : step.state === 'cancelled' || step.state === 'skipped' ? '−' : index + 1 }}</span>
@@ -51,10 +52,11 @@ const currentName = computed(() => {
         </span>
       </li>
     </ol>
+    </details>
     <div class="progress-meta">
       <span v-if="progress.next">{{ tr('接下来：{0}', [tr(progress.next)]) }}</span>
       <span v-if="deliveries.length">{{ tr('Release 已发布 {0}/{1}', [progress.published, deliveries.length]) }}</span>
-      <span v-if="artifacts.length" class="artifact-total">{{ tr('产物 {0} 个 · {1}', [artifacts.length, size.size]) }}<template v-if="size.missing"> · {{ tr('{0} 个大小未知', [size.missing]) }}</template></span>
+      <span v-if="artifacts.length" class="artifact-total">{{ tr(deliveries.some(item => item.localArtifactsState === 'cleaned' || item.localArtifactsState === 'cleaning') ? '发布文件 {0} 个 · 原始大小 {1}' : '产物 {0} 个 · {1}', [artifacts.length, size.size]) }}<template v-if="size.missing"> · {{ tr('{0} 个大小未知', [size.missing]) }}</template></span>
     </div>
     <p v-if="progress.syncPending" class="sync-pending">{{ tr('GitHub 发布已完成；服务器同步尚未确认，请查看下方状态。') }}</p>
   </section>
@@ -65,12 +67,14 @@ const currentName = computed(() => {
 .release-progress-overview.succeeded { --status-color: #7ce6b9; --status-tint: #1c4035; background: #172720; border-bottom-color: #345749; }
 .release-progress-overview.failed { --status-color: #ffaaaa; --status-tint: #542f37; background: #2c1e25; border-bottom-color: #73424c; }
 .failure-action { display: block; margin-top: 4px; }
+.progress-flow { margin-top: 14px; }.progress-flow > summary { cursor: pointer; font-size: 12px; color: var(--text-dim, #acb5c4); }.progress-flow > summary > span { margin-left: 12px; }.progress-flow > summary:focus-visible { outline: 2px solid var(--status-color); outline-offset: 4px; }.progress-flow:not([open]) { margin-bottom: 12px; }
 .release-progress-overview.cancelled { --status-color: #f3cf8c; --status-tint: #443922; }
 .progress-topline { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .progress-headline { display: flex; align-items: center; gap: 14px; color: var(--status-color); min-width: 0; }
 .status-symbol { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 14px; background: var(--status-tint); color: inherit; }
 .headline-copy { display: grid; gap: 4px; min-width: 0; }.headline-copy strong { font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }.headline-copy > span { font-size: 12px; color: var(--text-dim, #acb5c4); }.headline-copy .progress-eyebrow { font-size: 11px; color: var(--status-color); }.result-symbol { font-size: 28px; font-weight: 700; }
-.release-spinner { appearance: none; width: 22px; height: 22px; flex-shrink: 0; border: 3px solid #85b7ff30; border-top-color: currentColor; border-radius: 50%; background: transparent; animation: release-spin .9s linear infinite; }
+.release-spinner { appearance: none; width: 22px; height: 22px; flex-shrink: 0; border: 3px solid #85b7ff30; border-top-color: currentColor; border-radius: 50%; background: transparent; }
+@media (prefers-reduced-motion: no-preference) { .release-spinner { animation: release-spin .9s linear infinite; } }
 .release-spinner::-webkit-progress-bar { display: none; }.release-spinner::-moz-progress-bar { background: transparent; }
 @keyframes release-spin { to { transform: rotate(360deg); } }
 .release-step-list { list-style: none; padding: 0; margin: 22px 0 16px; display: grid; grid-template-columns: repeat(var(--step-count), minmax(0, 1fr)); gap: 6px; }
@@ -87,7 +91,7 @@ const currentName = computed(() => {
 @media (prefers-reduced-motion: no-preference) { .step-retry { transition: transform 150ms ease-out, background-color 150ms ease-out, border-color 150ms ease-out; }.step-retry:not(:disabled):active { transform: scale(.96); } }
 .release-step-list .cancelled { color: #f3cf8c; }.release-step-list .skipped { color: #929cab; }
 .progress-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-top: 12px; border-top: 1px solid #ffffff0d; font-size: 11px; color: var(--text-dim, #acb5c4); }.progress-meta:empty { display: none; }.artifact-total { margin-left: auto; }
-.progress-error { margin: 16px 0 0; padding: 12px 14px; border: 1px solid #94535f; border-radius: 8px; background: #482932; font-size: 13px; line-height: 1.6; color: #ffe0e0; overflow-wrap: anywhere; max-height: 7em; overflow: auto; }.sync-pending { margin: 12px 0 0; color: #f3cf8c; font-size: 12px; }
+.progress-error { margin: 12px 0 0; font-size: 13px; line-height: 1.6; color: #ffe0e0; overflow-wrap: anywhere; max-height: 7em; overflow: auto; overscroll-behavior: contain; }.sync-pending { margin: 12px 0 0; color: #f3cf8c; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .release-spinner { animation: none; } }
 @media (max-width: 600px) { .release-progress-overview { padding: 14px; }.headline-copy strong { font-size: 17px; }.progress-topline { flex-wrap: wrap; gap: 12px; }.progress-topline :deep(.release-cancel) { flex: 1 0 100%; }.release-step-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; margin: 16px 0 12px; }.release-step-list li { flex-direction: row; text-align: left; align-items: flex-start; gap: 6px; font-size: 10px; }.release-step-list li::after { display: none; }.step-mark { flex-shrink: 0; width: 20px; height: 20px; font-size: 10px; }.step-copy { padding: 0; }.release-step-list small { display: none; }.artifact-total { margin-left: 0; }.status-symbol { width: 40px; height: 40px; } }
 @media (max-width: 600px) { .release-step-list li { font-size: 11px; }.step-copy { min-width: 0; }.step-label { min-height: 0; text-wrap: wrap; }.step-retry { min-height: 36px; padding: 5px 4px; gap: 4px; }.release-step-list small { display: block; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } }

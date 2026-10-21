@@ -33,11 +33,14 @@ export function installLifecycle(ctx: ReleaseContext) {
         }
     });
     watch(ctx.plannedTagNames, (tags) => {
-        if (ctx.profileReady.value && ctx.createTag.value && ctx.versionMode.value === 'auto' && tags.length) {
-            ctx.syncVersionInputs();
+        if (ctx.profileReady.value && ctx.createTag.value && tags.length) {
+            if (ctx.versionMode.value === 'auto')
+                ctx.syncVersionInputs();
+            // Manual versions also change generated metadata. Synchronize before
+            // submit captures its plan; user-written messages remain untouched.
             ctx.setDefaultCommitMessage();
         }
-    });
+    }, { flush: 'sync' });
     onMounted(() => {
         ctx.disposed = false;
         void ctx.load();

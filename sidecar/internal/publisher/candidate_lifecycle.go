@@ -50,6 +50,9 @@ func (s *Service) sweepScratch(ctx context.Context) {
 		}
 		s.diagnostics.Record(event)
 	}
+	if err := s.pruneSavedArtifacts(ctx, time.Now()); err != nil && ctx.Err() == nil && s.diagnostics != nil {
+		s.diagnostics.Record(diagnostics.Event{Kind: "maintenance", Severity: "warning", Source: "release", Operation: "release.artifact_retention", Status: "pending", Message: "部分旧安装包暂未清理，发布记录仍保留，下次维护时重试"})
+	}
 }
 
 // Running workers retain their leases and clean on exit; abandoned leases are

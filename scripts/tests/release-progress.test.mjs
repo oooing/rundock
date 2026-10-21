@@ -5,10 +5,28 @@ import ts from 'typescript'
 const source = readFileSync(new URL('../../src/utils/releaseProgress.ts', import.meta.url), 'utf8')
 const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 const exports = {}; new Function('exports', code)(exports)
-const { releaseProgress, targetProgress, formatArtifactSize, artifactSizeSummary } = exports
+const { releaseProgress, targetProgress, targetBuildProgress, targetUploadProgress, savedDeliveryReady, formatArtifactSize, artifactSizeSummary } = exports
 const target = { targetId: 'android-local', build: true, package: false, publish: true, deploy: false, status: 'waiting', stage: 'waiting_publish', buildDone: true }
 const run = { selectedTargets: [target], status: 'running', stage: 'delivery_publish', pushRemote: true, createTag: true, errorCode: '', errorMessage: '' }
 const deliveries = [{ groupId: 'android', state: 'uploading', syncState: 'unconfigured' }, { groupId: 'desktop', state: 'sealed', syncState: 'unconfigured' }]
+
+test('cleaned or cleaning copies are not advertised as ready to resume', () => {
+  const saved = { ...run, commitSha: 'saved' }
+  for (const state of [undefined, 'retained', 'cleaning', 'cleaned']) {
+    assert.equal(savedDeliveryReady(saved, [{ manifestSha256: 'checked', localArtifactsState: state }], [target]),
+      state === undefined || state === 'retained')
+  }
+})
+
+test('unconfirmed connectivity and proxy failures never advise logging out', () => {
+  for (const errorCode of ['github_request_unconfirmed', 'github_proxy_unavailable', 'github_connection_timeout']) {
+    const view = releaseProgress({ run: { ...run, status: 'failed', stage: 'delivery_preflight', errorCode, commitSha: 'saved' },
+      deliveries: [{ manifestSha256: 'checked', state: 'sealed' }], targets: [target] })
+    assert.equal(view.title, 'GitHub 连接失败')
+    assert.match(view.recovery, /无需重新生成/)
+    assert.doesNotMatch(view.error, /重新登录|退出登录/)
+  }
+})
 test('sizes distinguish zero, missing, bytes, KB, MB and GB', () => {
   for (const missing of [null, undefined, NaN, Infinity, -1, '10']) assert.equal(formatArtifactSize(missing), '—')
   for (const [size, expected] of [[0, '0 B'], [428, '428 B'], [1024, '1 KB'], [1048576, '1 MB'], [1073741824, '1 GB'], [88430720, '84.3 MB']]) assert.equal(formatArtifactSize(size), expected)
@@ -36,6 +54,59 @@ test('targets use actual uploading delivery instead of stale waiting_publish', (
   const view = targetProgress(target, deliveries, [{ id: target.targetId, versionGroup: 'android' }])
   assert.equal(view.state, 'running'); assert.equal(view.label, '正在上传 GitHub Release')
   assert.equal(targetProgress({ ...target, publish: false }, deliveries, [{ id: target.targetId, versionGroup: 'android' }]).state, 'waiting')
+})
+
+test('completed generation remains successful while waiting, uploading or failed to upload', () => {
+  for (const state of ['sealed', 'uploading', 'published', 'failed']) {
+    const row = { ...target, versionGroup: 'android' }
+    assert.deepEqual(targetBuildProgress(row), { state: 'succeeded', label: '生成成功' })
+    assert.equal(targetProgress(row, [{ groupId: 'android', state }], []).state,
+      { sealed: 'waiting', uploading: 'running', published: 'succeeded', failed: 'failed' }[state])
+  }
+  assert.equal(targetBuildProgress({ ...target, package: true, packageDone: false }).state, 'waiting')
+  assert.equal(targetBuildProgress({ ...target, package: true, packageDone: true }).state, 'succeeded')
+  assert.equal(targetBuildProgress({ ...target, buildDone: false, status: 'failed' }).state, 'failed')
+  assert.equal(targetBuildProgress({ ...target, buildDone: false, status: 'running' }).state, 'running')
+  assert.equal(targetBuildProgress({ ...target, build: false }).state, 'skipped')
+  for (const status of ['waiting', 'running', 'failed']) {
+    const upload = targetUploadProgress({ ...target, buildDone: false, status, stage: 'build' }, [], [])
+    assert.equal(upload.state, 'waiting')
+    assert.equal(upload.label, '等待生成完成')
+  }
+  assert.equal(targetUploadProgress({ ...target, versionGroup: 'android' }, deliveries, []).state, 'running')
+})
+
+test('a known post-build GitHub error fails connection, not saved files, and offers reuse', () => {
+  const failedRun = { ...run, commitSha: 'saved', stage: 'delivery_preflight', status: 'failed', errorCode: 'github_connection_interrupted' }
+  const sealed = [{ groupId: 'android', state: 'sealed', manifestSha256: 'verified' }]
+  const view = releaseProgress({ run: failedRun, targets: [target], deliveries: sealed })
+  assert.equal(view.steps.find(step => step.id === 'verify').state, 'succeeded')
+  assert.equal(view.steps.find(step => step.id === 'connect').state, 'failed')
+  assert.equal(view.steps.find(step => step.id === 'upload').state, 'waiting')
+  assert.equal(view.published, 0)
+  assert.match(view.error, /连接中断，不代表发布配置失效/)
+  assert.match(view.recovery, /无需重新生成/)
+  for (const errorCode of ['github_connection_timeout', 'github_dns_failed', 'github_connection_failed']) {
+    const result = releaseProgress({ run: { ...failedRun, errorCode }, targets: [target], deliveries: sealed })
+    assert.match(result.title, /连接失败/)
+    assert.match(result.recovery, /无需重新生成/)
+  }
+  assert.equal(savedDeliveryReady(failedRun, sealed, []), false)
+  assert.equal(savedDeliveryReady(failedRun, [{ ...sealed[0], manifestSha256: '' }], [target]), false)
+  assert.equal(savedDeliveryReady(failedRun, sealed, [{ ...target, buildDone: false }]), false)
+  const early = releaseProgress({ run: { ...failedRun, commitSha: '' }, deliveries: [], targets: [] })
+  assert.doesNotMatch(early.recovery, /无需重新生成/)
+  const fileFailure = releaseProgress({ run: { ...failedRun, errorCode: 'artifact_hash_mismatch', errorMessage: 'hash mismatch' }, deliveries: sealed })
+  assert.equal(fileFailure.steps.find(step => step.id === 'verify').state, 'failed')
+  assert.equal(fileFailure.error, 'hash mismatch')
+  assert.equal(fileFailure.recovery, '')
+})
+
+test('combined Release groups resolve upload progress without overriding saved group identity', () => {
+  const row = { ...target, targetId: 'pc', versionGroup: 'desktop' }
+  const groups = [{ groupId: 'shared', state: 'uploading' }]
+  assert.equal(targetProgress(row, groups, [{ id: 'pc', versionGroup: 'desktop', delivery: { releaseGroup: 'shared' } }]).state, 'running')
+  assert.equal(targetProgress(row, groups, [{ id: 'pc', versionGroup: 'other', delivery: { releaseGroup: 'shared' } }]).state, 'waiting')
 })
 test('failure identifies the failed step and error, without completing later stages', () => {
   const view = releaseProgress({ run: { ...run, status: 'failed', errorMessage: '网络连接中断' }, deliveries: [{ ...deliveries[0], state: 'failed', errorMessage: '上传失败：网络超时' }] })

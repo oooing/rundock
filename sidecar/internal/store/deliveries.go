@@ -27,18 +27,20 @@ func (s *Store) ReleaseForCandidate(appID, candidateID string) (*ReleaseRun, err
 }
 
 type ReleaseDelivery struct {
-	RunID          string          `json:"runId"`
-	GroupID        string          `json:"groupId"`
-	Manifest       json.RawMessage `json:"-"`
-	ManifestSHA256 string          `json:"manifestSha256"`
-	State          string          `json:"state"`
-	ReleaseID      int64           `json:"releaseId"`
-	URL            string          `json:"url"`
-	ErrorCode      string          `json:"errorCode"`
-	ErrorMessage   string          `json:"errorMessage"`
-	SyncState      string          `json:"syncState"`
-	SyncMessage    string          `json:"syncMessage"`
-	UpdatedAt      string          `json:"updatedAt"`
+	RunID                   string          `json:"runId"`
+	GroupID                 string          `json:"groupId"`
+	Manifest                json.RawMessage `json:"-"`
+	ManifestSHA256          string          `json:"manifestSha256"`
+	State                   string          `json:"state"`
+	ReleaseID               int64           `json:"releaseId"`
+	URL                     string          `json:"url"`
+	ErrorCode               string          `json:"errorCode"`
+	ErrorMessage            string          `json:"errorMessage"`
+	SyncState               string          `json:"syncState"`
+	SyncMessage             string          `json:"syncMessage"`
+	UpdatedAt               string          `json:"updatedAt"`
+	LocalArtifactsState     string          `json:"localArtifactsState"`
+	LocalArtifactsCleanedAt string          `json:"localArtifactsCleanedAt,omitempty"`
 }
 
 func (s *Store) ReleaseDataDir() string { return filepath.Join(s.dataDir, "releases") }
@@ -62,7 +64,8 @@ func (s *Store) SealReleaseDelivery(runID, groupID string, manifest []byte) erro
 }
 
 func (s *Store) ReleaseDeliveries(runID string) ([]*ReleaseDelivery, error) {
-	rows, err := s.db.Query(`SELECT release_run_id,group_id,manifest_json,manifest_sha256,state,release_id,url,error_code,error_message,sync_state,sync_message,updated_at FROM release_deliveries WHERE release_run_id=? ORDER BY group_id`, runID)
+	rows, err := s.db.Query(`SELECT d.release_run_id,d.group_id,d.manifest_json,d.manifest_sha256,d.state,d.release_id,d.url,d.error_code,d.error_message,d.sync_state,d.sync_message,d.updated_at,COALESCE(s.state,'retained'),COALESCE(s.cleaned_at,'')
+	 FROM release_deliveries d LEFT JOIN release_delivery_storage s ON s.release_run_id=d.release_run_id AND s.group_id=d.group_id WHERE d.release_run_id=? ORDER BY d.group_id`, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -71,13 +74,38 @@ func (s *Store) ReleaseDeliveries(runID string) ([]*ReleaseDelivery, error) {
 	for rows.Next() {
 		d := &ReleaseDelivery{}
 		var raw string
-		if err = rows.Scan(&d.RunID, &d.GroupID, &raw, &d.ManifestSHA256, &d.State, &d.ReleaseID, &d.URL, &d.ErrorCode, &d.ErrorMessage, &d.SyncState, &d.SyncMessage, &d.UpdatedAt); err != nil {
+		if err = rows.Scan(&d.RunID, &d.GroupID, &raw, &d.ManifestSHA256, &d.State, &d.ReleaseID, &d.URL, &d.ErrorCode, &d.ErrorMessage, &d.SyncState, &d.SyncMessage, &d.UpdatedAt, &d.LocalArtifactsState, &d.LocalArtifactsCleanedAt); err != nil {
 			return nil, err
 		}
 		d.Manifest = json.RawMessage(raw)
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) SuccessfulDeliveryRunIDs() ([]string, error) {
+	rows, err := s.db.Query(`SELECT r.id FROM release_runs r WHERE r.status='succeeded' AND r.finished_at IS NOT NULL
+	 AND EXISTS(SELECT 1 FROM release_deliveries d WHERE d.release_run_id=r.id)
+	 ORDER BY datetime(r.finished_at) DESC,r.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *Store) SetDeliveryStorageState(runID, groupID, state, cleanedAt string) error {
+	_, err := s.db.Exec(`INSERT INTO release_delivery_storage(release_run_id,group_id,state,cleaned_at) VALUES(?,?,?,?)
+	 ON CONFLICT(release_run_id,group_id) DO UPDATE SET state=excluded.state,cleaned_at=excluded.cleaned_at`, runID, groupID, state, cleanedAt)
+	return err
 }
 
 func (s *Store) UpdateReleaseDelivery(runID, groupID, state string, id int64, url, code, message string) error {

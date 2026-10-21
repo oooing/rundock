@@ -5,6 +5,8 @@ import { tr } from '@/i18n'
 import { isTauri } from '@/tauri/window'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from './UiIcon.vue'
+import StartupEntryPanel from './StartupEntryPanel.vue'
+import './projectImport.css'
 import type { ImportCandidate, StartupDiscovery } from '@/types'
 
 const props = defineProps<{ initialPath?: string; groupId?: string; nativeDragOver?: boolean }>()
@@ -24,6 +26,7 @@ const loadingEntry = ref(false)
 const saving = ref(false)
 const error = ref('')
 const help = ref(false)
+const detailsOpen = ref(false)
 const composing = ref(false)
 const errorPhase = ref<'discovery' | 'entry' | 'save'>('discovery')
 let disposed = false
@@ -43,8 +46,7 @@ const cleanPath = computed(() => path.value.trim().replace(/^["']|["']$/g, ''))
 const completePath = computed(() => /^(?:[a-z]:[\\/]|\/|\\\\)/i.test(cleanPath.value))
 const normalize = (p: string) => p.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
 const existing = computed(() => candidate.value && apps.apps.find(app => normalize(app.entryScript) === normalize(candidate.value!.entryScript)))
-const selectedOption = computed(() => result.value?.options.find(option => option.path === selected.value))
-const entrySummary = computed(() => selectedOption.value?.command || selectedOption.value?.relativePath || '')
+const multipleEntries = computed(() => (result.value?.options.length || 0) > 1)
 const recognizing = computed(() => busy.value || loadingEntry.value)
 // Browsers can retarget click to the backdrop when an input selection ends outside.
 // Dismiss only when both ends of the same primary gesture occur on the backdrop.
@@ -71,7 +73,7 @@ function invalidateSource() {
   discoveryAbort = null; entryAbort = null
   pendingSource = ''; detectedSource = ''
   selected.value = ''; candidate.value = null; result.value = null
-  busy.value = false; loadingEntry.value = false; error.value = ''; help.value = false
+  busy.value = false; loadingEntry.value = false; error.value = ''; help.value = false; detailsOpen.value = false
 }
 function scheduleRecognition() {
   clearTimeout(debounceTimer)
@@ -142,6 +144,7 @@ async function inspect(force = false) {
     const value = await api.discoverStartup(source, controller.signal)
     if (disposed || request !== discoveryRequest || cleanPath.value !== source) return
     result.value = value
+    detailsOpen.value = value.options.length > 1
     detectedSource = source
     selected.value = value.options.find(item => item.recommended)?.path || (value.options.length === 1 ? value.options[0].path : '')
   } catch (cause: unknown) {
@@ -194,77 +197,85 @@ onUnmounted(() => { disposed = true; invalidateSource(); if (previousFocus?.isCo
 </script>
 
 <template>
-  <div class="add-overlay" @pointerdown="beginBackdropGesture" @pointerup="endBackdropGesture" @pointercancel="resetBackdropGesture" @click.self="closeFromBackdrop" @dragover.prevent @drop.prevent.stop="handleDrop">
-    <section ref="modal" class="add-modal" tabindex="-1" role="dialog" aria-modal="true" :aria-label="tr('添加项目')" @keydown="trapFocus" @keydown.esc="!saving && emit('close')">
-      <header><h2>{{ tr('添加项目') }}</h2><button :aria-label="tr('关闭')" :disabled="saving" @click="emit('close')"><UiIcon name="close" /></button></header>
+  <div class="add-overlay project-import-layer" @pointerdown="beginBackdropGesture" @pointerup="endBackdropGesture" @pointercancel="resetBackdropGesture" @click.self="closeFromBackdrop" @dragover.prevent @drop.prevent.stop="handleDrop">
+    <section ref="modal" class="add-modal project-import-panel" tabindex="-1" role="dialog" aria-modal="true" :aria-label="tr('添加项目')" @keydown="trapFocus" @keydown.esc="!saving && emit('close')">
+      <header>
+        <span class="header-icon"><UiIcon :name="result?.options.length ? 'log' : 'plus'" :size="24" /></span>
+        <div><h2>{{ tr('添加项目') }}</h2><p>{{ result?.options.length ? tr('确认名称，即可添加。') : tr('拖入启动文件或项目文件夹。') }}</p></div>
+        <button :aria-label="tr('关闭')" :disabled="saving" @click="emit('close')"><UiIcon name="close" /></button>
+      </header>
       <div class="add-body">
-        <section class="drop-zone" :class="{ dragging: dragging || nativeDragOver, busy: saving, compact: !!result }" :aria-label="tr('拖入项目文件或文件夹')" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop.prevent.stop="handleDrop">
-          <UiIcon name="folder" :size="32" />
-          <h3>{{ tr('拖入项目文件或文件夹') }}</h3>
-          <p>{{ tr('启动脚本或整个项目文件夹，拖到这里即可识别。') }}</p>
+        <section v-if="!path && !result" class="drop-zone" :class="{ dragging: dragging || nativeDragOver }" :aria-label="tr('拖入项目文件或文件夹')" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop.prevent.stop="handleDrop">
+          <UiIcon name="folder" :size="24" /><span>{{ tr('拖入项目文件或文件夹') }}</span>
           <small>{{ isTauri ? '.bat · .cmd · .ps1' : tr('Web 版无法获取完整路径时，请使用下方输入框。') }}</small>
         </section>
         <p v-if="dropHint" class="drop-hint" role="status">{{ dropHint }}</p>
-        <div class="input-divider"><span>{{ tr('或直接输入路径') }}</span></div>
         <form class="path-form" @submit.prevent="inspect()">
           <label for="project-source-path">{{ tr('文件或文件夹完整路径') }}</label>
           <input id="project-source-path" ref="pathInput" v-model="path" :disabled="saving" placeholder="D:\Projects\my-app" autocomplete="off" spellcheck="false" @keydown.enter="onEnter" @compositionstart="composing = true" @compositionend="endComposition" />
         </form>
-        <p class="recognition-status" role="status" aria-live="polite">
-          <template v-if="recognizing">{{ tr('正在识别…') }}</template>
-          <template v-else-if="candidate">{{ tr('已识别：{0}', [entrySummary]) }}</template>
-          <template v-else-if="result?.options.length && !selected">{{ tr('有多个启动入口，请拖入具体脚本，或在高级设置中选择。') }}</template>
-          <template v-else-if="!result && !error">{{ tr('粘贴完整路径后自动识别。') }}</template>
-        </p>
-        <div v-if="error" class="import-error" role="alert"><span>{{ error }}</span><button v-if="errorPhase !== 'save'" :disabled="recognizing || saving || !completePath" @click="retry">{{ tr('重试') }}</button></div>
+        <p v-if="busy || (!result && !error)" class="recognition-status" role="status">{{ busy ? tr('正在识别…') : tr('粘贴完整路径后自动识别。') }}</p>
+        <div v-if="error && errorPhase !== 'entry'" class="import-error" role="alert"><span>{{ error }}</span><button v-if="errorPhase === 'discovery'" :disabled="recognizing || saving || !completePath" @click="retry">{{ tr('重试') }}</button></div>
         <section v-if="result && (!result.options.length || result.truncated)" class="startup-results">
-          <div v-if="!result.options.length" class="not-found"><UiIcon name="folder" :size="28" /><h3>{{ tr('暂未识别到启动方式') }}</h3><p>{{ tr('可以换一个文件或文件夹，或查看如何准备启动入口。') }}</p><div><button :disabled="recognizing || saving" @click="inspect(true)">{{ tr('重新识别') }}</button><button @click="enterPath">{{ tr('重新输入路径') }}</button><button @click="help = !help" :aria-expanded="help">{{ tr('查看准备方法') }}</button></div></div>
+          <div v-if="!result.options.length" class="not-found"><h3>{{ tr('暂未识别到启动方式') }}</h3><p>{{ tr('可以换一个文件或文件夹，或查看如何准备启动入口。') }}</p><div><button :disabled="recognizing || saving" @click="inspect(true)">{{ tr('重新识别') }}</button><button @click="enterPath">{{ tr('重新输入路径') }}</button><button @click="help = !help" :aria-expanded="help">{{ tr('查看准备方法') }}</button></div></div>
           <p v-if="result.truncated" class="muted">{{ tr('文件较多或部分目录无法读取，仅展示部分结果。可选择更具体的子文件夹继续识别。') }}</p>
         </section>
+        <section v-if="result?.options.length === 1" class="entry-scope" :data-entry="result.options[0].path">
+          <div class="entry-heading"><UiIcon name="log" :size="18" /><strong>{{ result.options[0].command || result.options[0].relativePath }}</strong><span v-if="candidate && !candidate.findings?.length" class="recognized"><UiIcon name="check" :size="14" />{{ tr('已识别') }}</span></div>
+          <StartupEntryPanel :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" collapsible @retry="retry" />
+        </section>
+        <details v-else-if="multipleEntries" class="startup-details" :open="detailsOpen" @toggle="detailsOpen = ($event.target as HTMLDetailsElement).open">
+          <summary>{{ tr('启动详情') }}<span>{{ tr('选择一个启动方式') }}</span></summary>
+          <fieldset class="startup-options" :disabled="saving">
+            <legend class="sr-only">{{ tr('启动方式') }}</legend>
+            <section v-for="option in result!.options" :key="option.path" class="entry-scope" :class="{ selected: selected === option.path }" :data-entry="option.path">
+              <label class="entry-heading"><input v-model="selected" type="radio" name="startup-option" :value="option.path" /><span><strong>{{ option.command || option.relativePath }}</strong><small v-if="option.command">{{ option.relativePath }}</small></span><em v-if="option.recommended">{{ tr('推荐') }}</em></label>
+              <StartupEntryPanel v-if="selected === option.path" :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" @retry="retry" />
+            </section>
+          </fieldset>
+        </details>
         <section v-if="candidate" class="import-details">
           <label for="import-app-name">{{ tr('应用名称') }}</label>
           <input id="import-app-name" v-model="candidate.name" :disabled="saving" />
-          <div v-if="candidate.findings?.length" class="findings">
-            <h3>{{ tr('风险扫描结果') }}</h3>
-            <p v-for="(finding, index) in candidate.findings" :key="index" :class="finding.level">{{ finding.message }}<code v-if="finding.snippet">{{ finding.snippet }}</code></p>
-          </div>
-          <p v-if="existing" class="import-error" role="alert">{{ tr('这个启动入口已经添加，可直接使用现有项目卡片。') }}</p>
         </section>
-        <details v-if="result?.options.length" class="advanced" :key="result.root">
-          <summary>{{ tr('高级设置') }}</summary>
-          <fieldset v-if="result.options.length > 1" class="startup-options" :disabled="saving">
-            <legend>{{ tr('启动方式') }}</legend>
-            <label v-for="option in result.options" :key="option.path" :class="{ selected: selected === option.path }"><input v-model="selected" type="radio" name="startup-option" :value="option.path" /><span><strong>{{ option.command || option.relativePath }} <em v-if="option.recommended">{{ tr('推荐') }}</em></strong><small>{{ option.kind === 'package' ? option.relativePath : tr('运行这个启动脚本') }}</small></span></label>
-          </fieldset>
-          <dl v-if="candidate">
-            <dt>{{ tr('入口脚本') }}</dt><dd>{{ candidate.entryScript }}</dd>
-            <dt>{{ tr('工作目录') }}</dt><dd>{{ candidate.cwd }}</dd>
-            <dt>{{ tr('适配器') }}</dt><dd>{{ candidate.adapterType }}</dd>
-            <dt>{{ tr('启动命令') }}</dt><dd>{{ candidate.cmd }} {{ candidate.args.join(' ') }}</dd>
-            <dt>{{ tr('端口提示') }}</dt><dd>{{ candidate.portHints.join(', ') || tr('无') }}</dd>
-            <template v-if="candidate.markers?.length"><dt>{{ tr('项目标志') }}</dt><dd>{{ candidate.markers.join(', ') }}</dd></template>
-            <template v-for="(value, key) in candidate.env" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template>
-          </dl>
-        </details>
         <section v-if="help" class="preparation"><h3>{{ tr('如何准备启动入口') }}</h3><p>{{ tr('先查看项目说明中的“本地运行”或“快速开始”。') }}</p><p>{{ tr('Windows 项目可提供 .bat、.cmd 或 .ps1 启动脚本；Node 项目可在 package.json 中提供 dev、start 或 serve 命令。') }}</p><p>{{ tr('如果项目由 AI 或开发者提供，请让对方提供一个能够启动完整项目的脚本，再把脚本导入这里。') }}</p></section>
       </div>
-      <footer><span>{{ tr('添加后生成项目卡片，点击“启动”才会运行。') }}</span><button :disabled="saving" @click="emit('close')">{{ tr('取消') }}</button><button class="primary" :disabled="recognizing || saving || !candidate?.name.trim() || !!existing" @click="save">{{ saving ? tr('正在添加…') : hasDanger ? tr('我已知晓风险，确认导入') : tr('确认添加') }}</button></footer>
+      <footer><span>{{ tr('添加后不会自动启动') }}</span><button class="cancel" :disabled="saving" @click="emit('close')">{{ tr('取消') }}</button><button class="primary" :disabled="recognizing || saving || !candidate?.name.trim() || !!existing" @click="save">{{ saving ? tr('正在添加…') : hasDanger ? tr('我已知晓风险，确认导入') : tr('确认添加') }}</button></footer>
     </section>
   </div>
 </template>
 
 <style scoped>
-.add-overlay { position: fixed; inset: 0; z-index: 100; background: #0009; display: grid; place-items: center; padding: 20px; }
-.add-modal { width: min(720px,100%); max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 20px 60px #0006; }
-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 22px 24px; border-bottom: 1px solid var(--border); gap: 16px; }h2 { font-size: 20px; margin: 0; }header p { margin: 6px 0 0; color: var(--text-dim); font-size: 13px; }header>button { border: 0; background: transparent; padding: 4px; }
-.add-body { overflow: auto; padding: 20px 24px; display: grid; gap: 20px; }
-.startup-options label { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); cursor: pointer; }.startup-options label.selected { border-color: var(--accent); background: color-mix(in srgb,var(--accent) 9%,var(--bg)); }input[type=radio] { flex: 0 0 auto; accent-color: var(--accent); }label span { min-width: 0; }label strong { display: block; font-size: 14px; overflow-wrap: anywhere; }label small { display: block; margin-top: 5px; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
-.path-form>label { display: block; font-size: 13px; margin-bottom: 8px; }.path-form>input { width: 100%; }.muted { color: var(--text-dim); font-size: 12px; line-height: 1.6; margin: 8px 0 0; }h3 { margin: 0; font-size: 15px; }.startup-options { border: 0; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; max-height: 270px; overflow: auto; }.startup-options legend { margin-bottom: 8px; color: var(--text-dim); font-size: 12px; }em { display: inline-block; color: var(--accent); font-size: 11px; font-weight: 500; font-style: normal; margin-left: 6px; }.import-error { color: var(--red); background: color-mix(in srgb,var(--red) 8%,var(--bg)); padding: 12px; border-radius: 8px; font-size: 13px; }.import-error>button { margin: 8px 0 0; display: block; }.not-found { text-align: center; border: 1px dashed var(--border); padding: 24px; border-radius: 12px; }.not-found h3 { margin-top: 10px; }.not-found p,.preparation p { font-size: 13px; color: var(--text-dim); line-height: 1.65; }.not-found button+button { margin-left: 8px; }.preparation { padding: 16px; background: var(--bg); border-radius: 10px; }
-footer { display: flex; align-items: center; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--border); }footer span { margin-right: auto; font-size: 12px; color: var(--text-dim); }button:focus-visible,input:focus-visible,summary:focus-visible,.add-modal:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-@media(max-width:600px) { header,.add-body,footer { padding: 16px; }footer { flex-wrap: wrap; }footer span { flex-basis: 100%; } }
-.recognition-status { margin: -10px 0 0; font-size: 13px; color: var(--text-dim); line-height: 1.6; overflow-wrap: anywhere; }.recognition-status:empty { display: none; }
-.drop-zone { display: flex; align-items: center; flex-direction: column; justify-content: center; gap: 12px; min-height: 190px; padding: 28px 20px; text-align: center; border: 1px dashed var(--border); border-radius: 12px; background: var(--bg); transition: border-color .15s, background .15s; }
-.drop-zone.compact { min-height: 0; padding: 14px; gap: 6px; }.drop-zone.compact>.ui-icon,.drop-zone.compact>small { display: none; }.drop-zone.compact h3 { font-size: 14px; }
-.import-details { display: grid; gap: 10px; }.import-details>label { font-size: 14px; font-weight: 600; }.advanced { margin-top: 4px; }.advanced summary { font-size: 13px; cursor: pointer; color: var(--text-dim); }.advanced dl { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 8px 12px; font-size: 12px; padding: 12px; background: var(--bg); border-radius: 8px; }.advanced dt { color: var(--text-dim); overflow-wrap: anywhere; }.advanced dd { margin: 0; overflow-wrap: anywhere; font-family: monospace; }.findings p { font-size: 12px; line-height: 1.6; padding: 10px; background: var(--bg); border-radius: 8px; overflow-wrap: anywhere; }.findings code { display: block; }.findings .danger { color: var(--red); }.findings .warn { color: var(--amber); }
-.drop-zone>.ui-icon { color: var(--accent); }.drop-zone h3 { font-size: 18px; }.drop-zone p { color: var(--text-dim); font-size: 13px; margin: 0; }.drop-zone small { color: var(--text-faint); font-size: 12px; }.drop-zone.dragging { border-color: var(--accent); background: color-mix(in srgb,var(--accent) 12%,var(--bg)); }.drop-zone>* { pointer-events: none; }.drop-zone.busy { opacity: .65; }.drop-hint { margin: 0; color: var(--accent); font-size: 13px; line-height: 1.6; }.input-divider { display: flex; align-items: center; gap: 14px; color: var(--text-dim); font-size: 12px; }.input-divider::before,.input-divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
+.add-overlay { background: #0008; }
+.add-modal { display: flex; flex-direction: column; }
+header { display: flex; align-items: center; padding: 24px 24px 18px; gap: 12px; }
+.header-icon { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 12px; color: var(--accent); background: color-mix(in srgb,var(--accent) 12%,var(--bg-elev)); }
+h2 { font-size: 20px; margin: 0; letter-spacing: -.3px; }header p { margin: 5px 0 0; color: var(--text-dim); font-size: 12px; }
+header>button { margin-left: auto; align-self: flex-start; border: 0; background: transparent; padding: 6px; color: var(--text-dim); }
+.add-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 24px 24px; display: grid; gap: 16px; }
+.path-form>label,.import-details>label { display: block; color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
+.path-form>input,.import-details>input { width: 100%; height: 42px; }
+.path-form>input { font-size: 12px; }.import-details>input { font-size: 15px; }
+.entry-scope { min-width: 0; padding: 14px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border); }
+.entry-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.entry-heading>.ui-icon { color: var(--text-dim); flex-shrink: 0; }.entry-heading strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }.entry-heading>span { min-width: 0; }
+.recognized { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-dim); }
+.startup-details>summary { font-size: 13px; cursor: pointer; padding: 4px 0; }.startup-details>summary>span { margin-left: 10px; font-size: 12px; color: var(--text-dim); }
+.startup-options { border: 0; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; min-width: 0; }
+.startup-options .entry-heading { cursor: pointer; }.entry-scope.selected { border-color: color-mix(in srgb,var(--accent) 55%,var(--border)); }
+input[type=radio] { flex: 0 0 auto; accent-color: var(--accent); }.entry-heading small { display: block; margin-top: 5px; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+em { color: var(--accent); font-size: 11px; font-style: normal; margin-left: auto; flex-shrink: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.muted,.recognition-status { color: var(--text-dim); font-size: 12px; line-height: 1.6; margin: 0; }
+.import-error { color: var(--red); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }.import-error>button { margin-left: 8px; }
+h3 { font-size: 14px; margin: 0; }.not-found p,.preparation p { font-size: 12px; color: var(--text-dim); line-height: 1.65; }.not-found button { margin: 4px 8px 4px 0; }
+footer { display: flex; align-items: center; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--border); }
+footer span { margin-right: auto; font-size: 11px; color: var(--text-dim); }footer button { min-height: 38px; }footer .primary { min-width: 112px; }footer .cancel { background: transparent; border-color: transparent; color: var(--text-dim); }
+button:focus-visible,input:focus-visible,summary:focus-visible,.add-modal:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.drop-zone { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 100px; padding: 18px; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg); font-size: 13px; }
+.drop-zone small { flex-basis: 100%; font-size: 11px; color: var(--text-dim); }.drop-zone>.ui-icon { color: var(--accent); }.drop-zone>* { pointer-events: none; }.drop-zone.dragging { border-color: var(--accent); }
+.drop-hint { margin: 0; color: var(--accent); font-size: 12px; line-height: 1.6; }
+@media(hover:hover) { footer .cancel:hover,header>button:hover { background: var(--bg-elev-2); color: var(--text); } }
+@media(prefers-reduced-motion:no-preference) { button { transition: transform 150ms ease-out; }button:active:not(:disabled) { transform: scale(.96); } }
+@media(max-width:600px) { header { padding: 20px 18px 16px; }.add-body { padding: 0 18px 20px; }footer { padding: 14px 18px; flex-wrap: wrap; }footer span { flex-basis: 100%; }footer .cancel { margin-left: auto; } }
 </style>

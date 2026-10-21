@@ -43,4 +43,6 @@ export interface ReleaseDelivery {
   runId: string; groupId: string; manifestSha256: string; state: string
   releaseId: number; url: string; errorCode: string; errorMessage: string
   syncState: string; syncMessage: string; updatedAt: string
+  localArtifactsState?: 'retained' | 'cleaning' | 'cleaned'
+  localArtifactsCleanedAt?: string
 }

@@ -11,6 +11,7 @@ import UiIcon from '@/components/UiIcon.vue'
 import Dashboard from '@/views/Dashboard.vue'
 import ConfirmCard from '@/components/ConfirmCard.vue'
 import AddProjectWizard from '@/components/AddProjectWizard.vue'
+import ProjectDropPreview from '@/components/ProjectDropPreview.vue'
 import LogDrawer from '@/components/LogDrawer.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
 import AppUpdateDialog from '@/components/AppUpdateDialog.vue'
@@ -60,10 +61,15 @@ watch(releaseAppId, (appId) => {
   rememberReleaseSession(appId ? (saved?.appId === appId ? saved : { appId }) : null)
 }, { flush: 'sync' })
 const dragOver = ref(false)
+const projectContent = ref<HTMLElement | null>(null)
 const importPanelOpen = ref(false)
 const importWizard = ref<InstanceType<typeof AddProjectWizard> | null>(null)
 function openImport(path = '') { initialImportPath.value = path; importPanelOpen.value = true }
-function imported(name: string) { importPanelOpen.value = false; showToast(tr('「{0}」已导入', [name]), 2500, 'success') }
+function imported(name: string) {
+  importPanelOpen.value = false
+  void nextTick(() => { if (projectContent.value) projectContent.value.scrollTop = 0 })
+  showToast(tr('「{0}」已导入', [name]), 2500, 'success')
+}
 let unlistenFileDragDrop: (() => void) | null = null
 
 // 启动/重启时脚本风险变化需确认：记下待执行的 op + appId + 最新候选。
@@ -106,7 +112,14 @@ function onContentDrop(e: DragEvent) {
 }
 function onContentDragOver(e: DragEvent) {
   if (e.dataTransfer?.types.includes('application/x-projects-start-manager-card')) return
+  if (!e.dataTransfer?.types.includes('Files')) return
   dragOver.value = true
+}
+function onContentDragLeave(e: DragEvent) {
+  if (e.relatedTarget instanceof Node && projectContent.value?.contains(e.relatedTarget)) return
+  const rect = projectContent.value?.getBoundingClientRect()
+  if (rect && e.clientX > rect.left && e.clientX < rect.right && e.clientY > rect.top && e.clientY < rect.bottom) return
+  dragOver.value = false
 }
 
 async function handleReorder(order: string[]) {
@@ -362,6 +375,7 @@ onMounted(async () => {
     }
     if (e.key === 'Escape') {
       showHelp.value = false
+      dragOver.value = false
     }
   })
 })
@@ -394,10 +408,11 @@ onUnmounted(() => {
         </div>
       </header>
       <section
+        ref="projectContent"
         class="content"
-        :class="{ dragover: dragOver }"
         @dragover.prevent="onContentDragOver"
-        @dragleave.prevent="dragOver = false"
+        @dragleave.prevent="onContentDragLeave"
+        @dragend="dragOver = false"
         @drop.prevent="onContentDrop"
       >
         <Dashboard
@@ -434,6 +449,7 @@ onUnmounted(() => {
       </section>
     </main>
 
+    <ProjectDropPreview v-if="dragOver && !importPanelOpen && !releaseApp && !showSettings" />
     <AddProjectWizard v-if="importPanelOpen" ref="importWizard" :initial-path="initialImportPath" :native-drag-over="dragOver" :group-id="selectedGroupId || undefined" @close="importPanelOpen = false" @added="imported" />
     <ConfirmCard
       v-if="pending"
@@ -490,6 +506,7 @@ onUnmounted(() => {
 
 <style scoped>
 .layout {
+  --import-sidebar-width: 208px;
   --workspace-header-top: 28px;
   --workspace-header-bottom: 20px;
   --workspace-title-line: 32px;
@@ -562,11 +579,8 @@ onUnmounted(() => {
   position: relative;
   transition: background 0.15s;
 }
-.content.dragover {
-  background: rgba(79, 140, 255, 0.06);
-  outline: 2px dashed var(--accent);
-  outline-offset: -10px;
-}
+@media (max-width: 1000px) { .layout { --import-sidebar-width: 180px; } }
+@media (max-width: 600px) { .layout { --import-sidebar-width: 144px; } }
 @media (max-width: 1100px) { .content { padding-inline: 20px; padding-bottom: 24px; } }
 @media (max-width: 600px) { .content { padding-inline: 14px; padding-bottom: 20px; } }
 .quitting-overlay {

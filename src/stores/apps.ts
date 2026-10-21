@@ -66,10 +66,10 @@ export const useAppsStore = defineStore('apps', () => {
       healthUrl: '',
       scriptHash: c.scriptHash,
       cardColor: pickNextCardColor(apps.value.map((a) => a.cardColor)),
-      sortOrder: apps.value.reduce((max, a) => Math.max(max, a.sortOrder), -1) + 1,
+      sortOrder: apps.value.reduce((min, a) => Math.min(min, a.sortOrder), 0) - 1,
     }
     const created = await api.createApp(body)
-    apps.value.push(created)
+    apps.value.unshift(created)
     return created
   }
 

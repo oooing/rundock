@@ -273,6 +273,8 @@ export function installSelection(ctx: ReleaseContext) {
         ? tr("已提交到 {0}", [ctx.automationHandedOff.value ? 'GitHub' : ctx.remoteDestination.value])
         : tr("本地操作已完成"));
     ctx.completionDescription = computed(() => {
+        if (ctx.runDeliveries.value.some(item => item.localArtifactsState === 'cleaned' || item.localArtifactsState === 'cleaning'))
+            return tr('发布已完成；旧本地副本按规则清理，GitHub 文件保留。');
         if (ctx.runDeliveries.value.length)
             return tr('安装包已保存；发布结果和服务器同步状态分别显示。');
         if (ctx.cloudBuild.value?.summary)

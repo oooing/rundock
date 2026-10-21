@@ -5,9 +5,12 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-const root = process.cwd(), version = '2.0.47'
+const root = process.cwd(), version = process.argv[2] || '2.0.48'
+assert.match(version, /^\d+\.\d+\.\d+$/)
 const evidence = path.join(root, 'outputs/acceptance', `silent-update-build-${Date.now()}`)
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-update-'))
+const snapshotRoot = path.join(root, '.tmp')
+fs.mkdirSync(snapshotRoot, {recursive:true})
+const work = fs.mkdtempSync(path.join(snapshotRoot, 'rd-update-'))
 const project = path.join(work, 'code')
 fs.mkdirSync(project); fs.mkdirSync(evidence, {recursive:true})
 const env = {...process.env, GOPATH: path.join(os.homedir(),'gopath'), CARGO_BUILD_JOBS:'2', GH_TOKEN:'',GITHUB_TOKEN:'',GIT_TERMINAL_PROMPT:'0'}

@@ -13,7 +13,7 @@ const percent = computed(() => update.total ? Math.min(100, Math.floor(update.do
       <div class="update-copy">
         <h3>{{ tr('应用更新') }} <span>v{{ currentVersion }}</span></h3>
         <p v-if="isTauri && update.info" class="available" role="status">
-          {{ tr('新版本 v{0}', [update.info.version]) }}
+          {{ update.phase === 'finished' ? tr(update.report?.remaining.length ? '项目待恢复' : '更新结果') : tr('新版本 v{0}', [update.info.version]) }}
           <span v-if="update.phase === 'downloading'"> · {{ tr('下载中 {0}%', [percent]) }}</span>
           <span v-else-if="update.phase === 'ready'"> · {{ tr('可安装') }}</span>
           <span v-else-if="update.phase === 'staging'"> · {{ tr('正在静默安装') }}</span>

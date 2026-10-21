@@ -339,7 +339,12 @@ pub async fn check_app_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo
                 &std::env::current_exe().map_err(|e| e.to_string())?,
             )?;
             let installed = crate::desktop_restart::file_version(&target)?;
-            if Version::parse(&installed).map_err(|e| e.to_string())? > current {
+            let disk_version = Version::parse(&installed).map_err(|e| e.to_string())?;
+            let backend_older = crate::update_transaction::request(
+                crate::SIDECAR_PORT.parse().unwrap(), "/api/health", None,
+            ).ok().and_then(|h| h["version"].as_str().and_then(|v| Version::parse(v).ok()))
+                .is_some_and(|v| v < disk_version);
+            if disk_version > current || (disk_version == current && backend_older) {
                 verify_installed_version(&installed)?;
                 session.installed = Some((installed.clone(), false));
                 return Ok(Some(UpdateInfo {
@@ -467,7 +472,7 @@ fn update_input(session: &Session) -> Result<(String, Option<Ready>), String> {
 #[tauri::command]
 pub async fn app_update_status(
     app: tauri::AppHandle,
-) -> Result<Option<crate::update_transaction::Pending>, String> {
+) -> Result<Option<crate::update_transaction::Status>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<UpdateState>();
         let directory = update_dir()?;
@@ -481,8 +486,14 @@ pub async fn app_update_status(
                     session.ready = None;
                 }
             }
+            // Keep the session lock through reconciliation: otherwise an
+            // activation can replace the record while this read is in flight.
+            return crate::update_transaction::status(&directory, crate::SIDECAR_PORT.parse().unwrap(), env!("CARGO_PKG_VERSION"));
         }
-        crate::update_transaction::load(&directory)
+        Ok(crate::update_transaction::load(&directory)?.map(|pending| crate::update_transaction::Status {
+            pending, current_version: env!("CARGO_PKG_VERSION").into(),
+            backend_version: None, version_active: false, status_error: String::new(),
+        }))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -698,27 +709,17 @@ pub async fn stage_app_update(app: tauri::AppHandle) -> Result<(), String> {
     }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn cancel_scheduled_update() -> Result<(), String> {
-    let d = update_dir()?;
-    if let Some(p) = crate::update_transaction::load(&d)? {
-        if p.phase != "scheduled" && p.phase != "finished" {
-            return Err("更新正在执行，请稍后重试".into());
-        }
-        fs::remove_file(crate::update_transaction::path(&d)).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+pub async fn cancel_scheduled_update(keep_current_state: Option<bool>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::update_transaction::acknowledge(&update_dir()?, keep_current_state == Some(true))
+    }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn retry_update_restore() -> Result<(), String> {
     production_only()?;
     let d = update_dir()?;
-    let mut p = crate::update_transaction::load(&d)?.ok_or("没有待恢复的项目")?;
-    if p.phase != "finished" {
-        return Err("正在恢复项目，请稍候".into());
-    }
-    p.phase = "restoring".into();
-    crate::update_transaction::save(&d, &p)?;
     tauri::async_runtime::spawn_blocking(move || {
+        crate::update_transaction::begin_restore(&d)?;
         crate::update_transaction::restore(&d, crate::SIDECAR_PORT.parse().unwrap())
     })
     .await

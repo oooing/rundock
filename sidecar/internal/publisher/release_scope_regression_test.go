@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/launcher-sidecar/internal/releaseconfig"
@@ -42,7 +43,9 @@ func TestRealPartialBackupScopeProbe(t *testing.T) {
 
 func TestVerificationMaterialsDefaultLocalWithExplicitOverrides(t *testing.T) {
 	root := t.TempDir()
-	for _, rel := range []string{"artifacts/desktop-ui-sync/before-src/App.jsx", "outputs/ui/entry.ts", "reports/snapshot/main.py"} {
+	for _, rel := range []string{"artifacts/desktop-ui-sync/before-src/App.jsx", "outputs/ui/entry.ts", "reports/snapshot/main.py",
+		"demos/localplay-ui-static/打开Netflix.cmd", "demos/localplay-ui-static-verification/复制到中文目录/localplay-ui-static/打开方案库.cmd",
+		"demos/localplay-ui-static-verification/完整总目录解压检查/localplay-ui-static/index.html", "demo/start.ps1", "Demos/README.md"} {
 		writeTestFile(t, filepath.Join(root, rel), "source\n")
 		change := FileChange{Path: rel, Status: "??"}
 		item := classifyOne(root, change, nil)
@@ -51,22 +54,76 @@ func TestVerificationMaterialsDefaultLocalWithExplicitOverrides(t *testing.T) {
 		}
 		tracked := change
 		tracked.Tracked, tracked.Status = true, " M"
-		if got := classifyOne(root, tracked, nil); got.Category != CategoryRecommend || !got.SelectedDefault {
-			t.Fatalf("tracked content silently excluded: %+v", got)
+		if got := classifyOne(root, tracked, nil); got.Category != CategoryLocal || got.SelectedDefault || !got.BaselineKept {
+			t.Fatalf("tracked material must be opt-in with baseline warning: %+v", got)
 		}
 		rule := releaseconfig.FileRule{ID: "official", Pattern: rel, Kind: releaseconfig.RuleRecommend}
 		if got := classifyOne(root, change, []releaseconfig.FileRule{rule}); got.Category != CategoryRecommend || !got.SelectedDefault {
 			t.Fatalf("explicit project rule lost: %+v", got)
 		}
 		decision := ManualDecision{Path: rel, Decision: DecisionInclude, ContentFingerprint: item.ContentFingerprint}
-		if got := classifyChanges(root, []FileChange{change}, nil, []ManualDecision{decision})[0]; !got.SelectedDefault {
+		if got := classifyChanges(root, []FileChange{change}, nil, []ManualDecision{decision})[0]; !got.SelectedDefault || got.Category != CategoryRecommend {
 			t.Fatalf("manual inclusion lost: %+v", got)
 		}
+		trackedItem := classifyOne(root, tracked, nil)
+		decision.ContentFingerprint = trackedItem.ContentFingerprint
+		if got := classifyChanges(root, []FileChange{tracked}, nil, []ManualDecision{decision})[0]; !got.SelectedDefault || got.Category != CategoryRecommend {
+			t.Fatalf("tracked manual inclusion lost: %+v", got)
+		}
+		if got := defaultSelectedPaths([]FileClassification{item, trackedItem}); len(got) != 0 {
+			t.Fatalf("material leaked into default selection: %v", got)
+		}
+		sensitive := releaseconfig.FileRule{ID: "secret", Pattern: rel, Kind: releaseconfig.RuleSensitive}
+		if got := classifyChanges(root, []FileChange{tracked}, []releaseconfig.FileRule{sensitive}, []ManualDecision{decision})[0]; got.SelectedDefault || got.Category != CategorySensitive {
+			t.Fatalf("manual selection bypassed sensitive rule: %+v", got)
+		}
 	}
-	for _, rel := range []string{"src/artifacts/module.ts", "artifacts-old/module.ts", "packages/outputs/module.ts"} {
+	for _, rel := range []string{"src/artifacts/module.ts", "artifacts-old/module.ts", "packages/outputs/module.ts",
+		"src/demo/module.ts", "packages/demos/index.ts", "demos-old/start.cmd", "demonstration/main.ts", "scripts/verify.cmd", "src/demo.ts"} {
 		if got := classifyOne(root, FileChange{Path: rel, Status: "??"}, nil); !got.SelectedDefault {
 			t.Fatalf("source outside root evidence folder excluded: %+v", got)
 		}
+	}
+}
+
+func TestDemoCandidateDefaultsLocalAndAllowsExplicitSelection(t *testing.T) {
+	svc, repo, cleanup := newReleaseFixture(t)
+	defer cleanup()
+	demo := "demos/localplay-ui-static/打开Netflix.cmd"
+	copy := "demos/localplay-ui-static-verification/复制到中文目录/localplay-ui-static/打开方案库.cmd"
+	writeTestFile(t, filepath.Join(repo, demo), "@echo old\r\n")
+	runGit(t, repo, "add", demo)
+	runGit(t, repo, "commit", "-m", "existing demo")
+	writeTestFile(t, filepath.Join(repo, demo), "@echo new\r\n")
+	writeTestFile(t, filepath.Join(repo, copy), "@echo copy\r\n")
+	writeTestFile(t, filepath.Join(repo, "src/main.js"), "export const ready = true;\n")
+	pf, err := svc.PreflightLocal(context.Background(), "app1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, explicit := range []bool{false, true} {
+		selected := defaultSelectedPaths(pf.Classifications)
+		if explicit {
+			selected = append(selected, demo, copy)
+		}
+		view, err := svc.PrepareCandidate(context.Background(), "app1", CandidateRequest{
+			StatusFingerprint: pf.StatusFingerprint, SelectedPaths: selected, Intent: IntentSaveProgress,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		work := candidateWork(t, svc, view.ID)
+		want := "@echo old\n"
+		if explicit {
+			want = "@echo new\n"
+		}
+		got, err := os.ReadFile(filepath.Join(work, demo))
+		if err != nil || strings.ReplaceAll(string(got), "\r\n", "\n") != want || fileExists(filepath.Join(work, copy)) != explicit {
+			t.Fatalf("explicit=%v: candidate must respect selection and keep baseline, demo=%q err=%v", explicit, got, err)
+		}
+	}
+	if !fileExists(filepath.Join(repo, copy)) || fileExists(filepath.Join(repo, ".gitignore")) {
+		t.Fatal("selection must not delete local material or add ignore rules")
 	}
 }
 

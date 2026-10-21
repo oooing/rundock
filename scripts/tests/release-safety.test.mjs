@@ -18,3 +18,16 @@ test('recommendations and manual include cannot silently bypass sensitive or loc
  assert.deepEqual(api.recommendedReleaseSelection(files),{'source.ts':true,'report.txt':false,'unknown.txt':false,'.env':false})
  assert.equal(api.reconcileReleaseSelection(files,[{path:'.env',contentFingerprint:'a',decision:'include'}]).selected['.env'],false)
 })
+
+test('demo and verification defaults stay unchecked while manual choices survive refresh',()=>{
+ const paths=['demos/localplay-ui-static/打开Netflix.cmd','demos/localplay-ui-static-verification/复制到中文目录/localplay-ui-static/打开方案库.cmd']
+ const files=paths.map(path=>file(path,'local'))
+ assert.deepEqual(api.recommendedReleaseSelection(files),Object.fromEntries(paths.map(path=>[path,false])))
+ const decisions=[{path:paths[0],contentFingerprint:'a',decision:'include'}]
+ const result=api.reconcileReleaseSelection(files,decisions)
+ assert.equal(result.selected[paths[0]],true)
+ assert.equal(result.selected[paths[1]],false)
+ assert.deepEqual(result.decisions,decisions)
+ files[0].contentFingerprint='changed'
+ assert.equal(api.reconcileReleaseSelection(files,decisions).selected[paths[0]],false)
+})

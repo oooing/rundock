@@ -6,8 +6,12 @@ use std::{
     io::Write,
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, Instant},
 };
+
+// Finished-result reconciliation must never overwrite a concurrent restore.
+static RECOVERY_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +40,145 @@ pub struct Pending {
     pub error: String,
     #[serde(default)]
     pub failures: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    #[serde(flatten)]
+    pub pending: Pending,
+    pub current_version: String,
+    pub backend_version: Option<String>,
+    pub version_active: bool,
+    pub status_error: String,
+}
+
+fn at_least(actual: &str, expected: &str) -> bool {
+    match (semver::Version::parse(actual), semver::Version::parse(expected)) {
+        (Ok(a), Ok(b)) => a >= b,
+        _ => false,
+    }
+}
+
+/// Keep the original evidence before reconciling or acknowledging an attempt.
+/// Content-addressed names make repeated reads idempotent.
+pub fn archive(directory: &Path, p: &Pending) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(p).map_err(|e| e.to_string())?;
+    let history = directory.join("update-history");
+    fs::create_dir_all(&history).map_err(|e| e.to_string())?;
+    let target = history.join(format!("{:x}.json", Sha256::digest(&bytes)));
+    if !target.exists() {
+        fs::write(target, bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn reconcile_finished(p: &mut Pending, active: bool, apps: &[serde_json::Value]) {
+    if active {
+        p.error.clear();
+    }
+    p.failures.clear();
+    p.remaining.retain(|project| {
+        let app = apps.iter().find(|a| a["id"].as_str() == Some(&project.id));
+        let message = match app.and_then(|a| a["status"].as_str()) {
+            Some("running") if app.and_then(|a| a["runId"].as_str()).is_some_and(|id| !id.is_empty()) => return false,
+            Some("running") => "项目由其他方式运行，未接管；请在项目卡片确认。",
+            Some("starting") => "项目正在启动，稍后刷新结果。",
+            Some("stopped") => "项目已停止，可点击“恢复项目”重新启动。",
+            Some("failed") => "项目启动失败，请在项目卡片查看原因后恢复。",
+            Some("degraded") => "项目正在运行，但部分服务异常；请在项目卡片查看原因。",
+            Some("stopping") => "项目正在停止，请等待停止完成后恢复。",
+            None => "项目已删除或无法读取，请检查项目列表。",
+            _ => "无法确认项目状态，请稍后刷新。",
+        };
+        p.failures.push(format!("{}：{message}", project.name));
+        true
+    });
+}
+
+/// A status read never starts or stops projects. Only verified running versions
+/// can retire an old installation error; unresolved recovery remains explicit.
+pub fn status(directory: &Path, port: u16, current: &str) -> Result<Option<Status>, String> {
+    let Some(mut p) = load(directory)? else { return Ok(None) };
+    let snapshot = serde_json::to_vec(&p).map_err(|e| e.to_string())?;
+    let health = request_with_timeout(port, "/api/health", None, Duration::from_secs(3));
+    let backend = health.ok().and_then(|v| v["version"].as_str().map(str::to_owned));
+    let active = backend.as_deref().is_some_and(|v| at_least(v, &p.version))
+        && at_least(current, &p.version);
+    let mut status_error = String::new();
+    if p.phase == "finished" {
+        // Network reads must not hold the recovery lock: acknowledging a result
+        // or retrying recovery must remain available while a status poll waits.
+        let apps = request_with_timeout(port, "/api/apps", None, Duration::from_secs(5));
+        if let Ok(_guard) = RECOVERY_LOCK.try_lock() {
+            let Some(latest) = load(directory)? else { return Ok(None) };
+            if serde_json::to_vec(&latest).map_err(|e| e.to_string())? != snapshot {
+                // A user action won the race. Never resurrect a removed result
+                // or replace a newer restore with this stale observation.
+                let version_active = backend.as_deref().is_some_and(|v| at_least(v, &latest.version))
+                    && at_least(current, &latest.version);
+                return Ok(Some(Status { pending: latest, current_version: current.into(),
+                    backend_version: backend, version_active, status_error }));
+            }
+            match apps {
+            Ok(apps) if apps.is_array() && backend.is_some() => {
+                let before = p.clone();
+                reconcile_finished(&mut p, active, apps.as_array().unwrap());
+                if serde_json::to_vec(&before).ok() != serde_json::to_vec(&p).ok() {
+                    archive(directory, &before)?;
+                    save(directory, &p)?;
+                }
+                // A fully resolved old attempt must not block future checks.
+                if active && p.remaining.is_empty() && p.error.is_empty()
+                    && current != p.version && backend.as_deref() == Some(current)
+                {
+                    archive(directory, &p)?;
+                    fs::remove_file(path(directory)).map_err(|e| e.to_string())?;
+                    return Ok(None);
+                }
+            }
+            _ => status_error = "暂时无法读取后台状态，请稍后刷新；未重新启动项目。".into(),
+            }
+        }
+    }
+    Ok(Some(Status { pending: p, current_version: current.into(),
+        backend_version: backend, version_active: active, status_error }))
+}
+
+fn recovery_write_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match RECOVERY_LOCK.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err("恢复状态不可用，请重新打开 RunDock".into()),
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => return Err("正在处理恢复，请稍候".into()),
+        }
+    }
+}
+
+pub fn begin_restore(directory: &Path) -> Result<(), String> {
+    let _guard = recovery_write_lock()?;
+    let mut p = load(directory)?.ok_or("没有待恢复的项目")?;
+    if p.phase != "finished" || p.remaining.is_empty() {
+        return Err("没有待恢复的项目，或恢复正在进行".into());
+    }
+    p.phase = "restoring".into();
+    p.failures.clear();
+    save(directory, &p)
+}
+
+pub fn acknowledge(directory: &Path, keep_current_state: bool) -> Result<(), String> {
+    let _guard = recovery_write_lock()?;
+    if let Some(p) = load(directory)? {
+        if !matches!(p.phase.as_str(), "scheduled" | "finished") || (!p.remaining.is_empty() && !keep_current_state) {
+            return Err("仍有项目待恢复，请先处理恢复结果".into());
+        }
+        archive(directory, &p)?;
+        fs::remove_file(path(directory)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 pub fn path(directory: &Path) -> PathBuf {
     directory.join("desktop-update.json")
@@ -230,6 +373,7 @@ fn restore_status(status: Option<&str>) -> Result<bool, String> {
     }
 }
 pub fn restore(directory: &Path, port: u16) -> Result<(), String> {
+    let _guard = RECOVERY_LOCK.try_lock().map_err(|_| "正在恢复项目，请稍候")?;
     let Some(mut p) = load(directory)? else {
         return Ok(());
     };
@@ -298,6 +442,151 @@ pub fn restore(directory: &Path, port: u16) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failed_record() -> Pending {
+        Pending { version: "2.0.46".into(), installer: None, phase: "finished".into(),
+            projects: vec![], remaining: vec![Project { id: "localplay".into(), name: "LocalPlay".into(),
+                run_id: "old-run".into(), config_hash: "hash".into(), temporary_port: 0 }],
+            error: "old installation failure".into(), failures: vec!["stale degraded warning".into()] }
+    }
+
+    #[test]
+    fn completed_version_and_project_recovery_are_independent() {
+        let mut p = failed_record();
+        reconcile_finished(&mut p, true, &[serde_json::json!({"id":"localplay","status":"stopped"})]);
+        assert!(p.error.is_empty());
+        assert_eq!(p.remaining.len(), 1);
+        assert!(p.failures[0].contains("已停止"));
+        assert!(!p.failures[0].contains("degraded"));
+        reconcile_finished(&mut p, true, &[serde_json::json!({"id":"localplay","status":"running","runId":"new-run"})]);
+        assert!(p.remaining.is_empty());
+        assert!(p.failures.is_empty());
+    }
+
+    #[test]
+    fn unhealthy_or_external_projects_are_not_reported_as_restored() {
+        for app in [
+            serde_json::json!({"id":"localplay","status":"degraded","runId":"new"}),
+            serde_json::json!({"id":"localplay","status":"running","runId":""}),
+            serde_json::json!({"id":"localplay","status":"starting","runId":"new"}),
+        ] {
+            let mut p = failed_record();
+            reconcile_finished(&mut p, false, &[app]);
+            assert_eq!(p.remaining.len(), 1);
+            assert_eq!(p.error, "old installation failure");
+        }
+        assert!(!at_least("unknown", "2.0.46"));
+        assert!(!at_least("2.0.45", "2.0.46"));
+        assert!(at_least("2.0.47", "2.0.46"));
+    }
+
+    #[test]
+    fn keeping_current_state_requires_explicit_intent_and_preserves_history() {
+        let dir = std::env::temp_dir().join(format!("rundock-ack-{}", std::process::id()));
+        let p = failed_record();
+        save(&dir, &p).unwrap();
+        assert!(acknowledge(&dir, false).is_err());
+        assert!(path(&dir).exists());
+        acknowledge(&dir, true).unwrap();
+        assert!(!path(&dir).exists());
+        let history = fs::read_dir(dir.join("update-history")).unwrap().next().unwrap().unwrap().path();
+        assert_eq!(fs::read(&history).unwrap(), serde_json::to_vec(&p).unwrap());
+        fs::remove_file(history).unwrap();
+        fs::remove_dir(dir.join("update-history")).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn slow_status_poll_cannot_block_acknowledgement_or_overwrite_a_new_restore() {
+        use std::{io::Read, net::TcpListener, sync::mpsc};
+        for acknowledge_result in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let dir = std::env::temp_dir().join(format!("rundock-status-race-{}-{port}", std::process::id()));
+            let mut p = failed_record();
+            if acknowledge_result { p.remaining.clear(); }
+            save(&dir, &p).unwrap();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                for (index, body) in [
+                    r#"{"version":"2.0.47"}"#,
+                    r#"[{"id":"localplay","status":"running","runId":"new"}]"#,
+                ].into_iter().enumerate() {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                    let mut bytes = [0;8192];
+                    stream.read(&mut bytes).unwrap();
+                    if index == 0 {
+                        started_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                    }
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                }
+            });
+            let polling_dir = dir.clone();
+            let poll = std::thread::spawn(move || status(&polling_dir,port,"2.0.47"));
+            started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let start = Instant::now();
+            let action = if acknowledge_result { acknowledge(&dir,false) } else { begin_restore(&dir) };
+            release_tx.send(()).unwrap();
+            action.unwrap();
+            assert!(start.elapsed() < Duration::from_millis(500), "network poll blocked a user action");
+            let observed = poll.join().unwrap().unwrap();
+            if acknowledge_result {
+                assert!(observed.is_none());
+                assert!(!path(&dir).exists(), "stale poll resurrected acknowledged record");
+                for file in fs::read_dir(dir.join("update-history")).unwrap() {
+                    fs::remove_file(file.unwrap().path()).unwrap();
+                }
+                fs::remove_dir(dir.join("update-history")).unwrap();
+            } else {
+                assert_eq!(observed.unwrap().pending.phase,"restoring");
+                assert_eq!(load(&dir).unwrap().unwrap().remaining.len(),1);
+                fs::remove_file(path(&dir)).unwrap();
+            }
+            server.join().unwrap();
+            fs::remove_dir(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn old_record_is_archived_only_after_verified_version_and_recovery() {
+        use std::{io::Read, net::TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = std::env::temp_dir().join(format!("rundock-reconcile-{}-{port}", std::process::id()));
+        let original = failed_record();
+        save(&dir, &original).unwrap();
+        let server = std::thread::spawn(move || {
+            for body in [
+                r#"{"version":"2.0.47"}"#,
+                r#"[{"id":"localplay","status":"stopped","runId":""}]"#,
+                r#"{"version":"2.0.47"}"#,
+                r#"[{"id":"localplay","status":"running","runId":"new"}]"#,
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut buffer = [0; 8192];
+                let n = stream.read(&mut buffer).unwrap();
+                assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("GET "));
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let report = status(&dir, port, "2.0.47").unwrap().unwrap();
+        assert!(report.version_active);
+        assert!(report.pending.error.is_empty());
+        assert_eq!(report.pending.remaining.len(), 1);
+        assert!(acknowledge(&dir, false).is_err(), "cannot discard recovery");
+        assert!(status(&dir, port, "2.0.47").unwrap().is_none());
+        assert!(!path(&dir).exists());
+        let history: Vec<_> = fs::read_dir(dir.join("update-history")).unwrap().map(|e| e.unwrap().path()).collect();
+        assert!(history.iter().any(|file| fs::read(file).unwrap() == serde_json::to_vec(&original).unwrap()));
+        server.join().unwrap();
+        for file in history { fs::remove_file(file).unwrap(); }
+        fs::remove_dir(dir.join("update-history")).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
 
     fn captured_stop_body(confirmed: bool) -> serde_json::Value {
         use std::{io::Read, net::TcpListener};

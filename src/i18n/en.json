@@ -1692,5 +1692,17 @@
   "尚未发现可打开的网页，请稍后重试；扩展或接口服务可能没有网页入口。": "No page is available yet. Try again shortly; extension and API services may not have a web page.",
   "网页暂时无法连接，请确认项目已启动后重试。": "Cannot reach the page. Check that the project is running and try again.",
   "这个地址没有网页页面，可能是扩展或接口服务。请使用项目的其他网页入口。": "This address does not serve a web page. It may be an extension or API service. Use another page for this project.",
-  "正在下载": "Downloading"
+  "正在下载": "Downloading",
+  "项目待恢复": "Projects to restore",
+  "当前已是新版": "Current version is active",
+  "后台版本": "Backend version",
+  "本次目标": "Update target",
+  "后台待更新": "Backend update pending",
+  "窗口已更新，后台仍是旧版。继续更新可启用新版后台。": "The window is updated, but the backend is still on the old version. Continue to apply the new backend.",
+  "继续更新": "Continue update",
+  "版本已生效，以下项目尚未恢复。": "The version is active. These projects still need to be restored.",
+  "保持现状会结束本次恢复，不启动或停止项目。": "Keep current state ends this recovery without starting or stopping projects.",
+  "保持现状": "Keep current state",
+  "恢复项目": "Restore projects",
+  "更新结果": "Update result"
 }

@@ -446,7 +446,7 @@ onUnmounted(() => {
     <LogDrawer v-if="logAppId" :app-id="logAppId" @close="logAppId = null" />
     <ReleaseModal v-if="releaseApp" :app="releaseApp" @close="releaseAppId = null" />
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
-    <AppUpdateDialog v-if="isTauriShell && appUpdate.dialogOpen && appUpdate.info" />
+    <AppUpdateDialog v-if="isTauriShell && appUpdate.dialogOpen" />
     <HelpModal v-if="showHelp" @close="showHelp = false" />
     <CloseDialog
       v-if="showCloseDialog"

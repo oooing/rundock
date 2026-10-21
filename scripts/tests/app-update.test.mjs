@@ -72,6 +72,79 @@ async function renderDialog(s) {
   return renderToString(vue.createSSRApp(exports.default))
 }
 
+test('an older completed attempt shows the running version and current recovery status, never a downgrade arrow', async () => {
+  const s = store(native([], { app_update_status: () => report('finished', {
+    version: '2.0.46', currentVersion: '2.0.47', backendVersion: '2.0.47', versionActive: true,
+    remaining: [project], failures: ['Project A：项目已停止，可点击“恢复项目”重新启动。'],
+  }) }))
+  await s.refreshUpdateStatus()
+  const html = await renderDialog(s)
+  assert.match(html, /项目待恢复/)
+  assert.match(html, /当前版本.*v2\.0\.47/)
+  assert.doesNotMatch(html, /→|更新未完成|v2\.0\.46/)
+  assert.match(html, /恢复项目/)
+})
+
+test('a newer window with an older backend offers continued activation instead of claiming completion', async () => {
+  let value = report('finished', { version: '2.0.46', currentVersion: '2.0.48',
+    backendVersion: '2.0.47', versionActive: true })
+  const calls = [], s = store(native(calls, {
+    app_update_status: () => value,
+    cancel_scheduled_update: () => { value = null },
+    check_app_update: () => ({ ...info, version: '2.0.48', installedLocally: true }),
+  }))
+  await s.refreshUpdateStatus()
+  const html = await renderDialog(s)
+  assert.match(html, /后台待更新/)
+  assert.match(html, /继续更新/)
+  assert.doesNotMatch(html, /更新完成|v2\.0\.46/)
+  await s.recheckAppUpdate()
+  assert.equal(s.appUpdate.phase, 'installed')
+  assert.equal(s.appUpdate.info.version, '2.0.48')
+  assert.ok(!commands(calls).some(c => ['install_app_update', 'retry_update_restore'].includes(c)))
+})
+
+test('finished results refresh on open and poll only while visible; archived results clear cached errors', async () => {
+  let value = report('finished', { remaining: [project], failures: ['old warning'] })
+  const s = store(native([], { app_update_status: () => value }))
+  await s.refreshUpdateStatus({ background: true })
+  assert.equal(s.timers.size, 0)
+  s.openAppUpdate()
+  await setImmediate()
+  assert.equal(s.timers.size, 1)
+  value = null
+  await s.tick()
+  assert.equal(s.appUpdate.phase, 'current')
+  assert.equal(s.appUpdate.report, null)
+  assert.equal(s.appUpdate.info, null)
+  assert.equal(s.appUpdate.error, '')
+  assert.equal(s.timers.size, 0)
+})
+
+test('unavailable live status cannot display stale project failures or offer recovery', async () => {
+  const s = store(native([], { app_update_status: () => report('finished', {
+    remaining: [project], failures: ['stale degraded warning'], statusError: '后台暂不可用',
+  }) }))
+  await s.refreshUpdateStatus()
+  const html = await renderDialog(s)
+  assert.match(html, /状态待确认/)
+  assert.match(html, /后台暂不可用/)
+  assert.doesNotMatch(html, /stale degraded warning/)
+  assert.match(html, /disabled[^>]*>恢复项目/)
+  s.appUpdate.report.remaining = []
+  assert.doesNotMatch(await renderDialog(s), /项目已恢复，可以继续使用/)
+})
+
+test('keeping current project state explicitly acknowledges recovery without starting or stopping', async () => {
+  const calls = [], s = store(native(calls))
+  ready(s, 'finished')
+  s.appUpdate.report = report('finished', { remaining: [project] })
+  await s.cancelScheduledUpdate(true)
+  assert.deepEqual(calls, [{ cmd: 'cancel_scheduled_update', args: { keepCurrentState: true } }])
+  assert.equal(s.appUpdate.report, null)
+  assert.equal(s.appUpdate.phase, 'idle')
+})
+
 test('startup checks, downloads and silently installs once without opening a dialog or stopping projects', async () => {
   const calls = [], s = store(native(calls))
   await Promise.all([s.prepareStartupUpdate(), s.prepareStartupUpdate()])

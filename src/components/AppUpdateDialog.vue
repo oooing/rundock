@@ -9,7 +9,10 @@ const dialog = ref<HTMLElement | null>(null)
 const percent = computed(() => update.total ? Math.min(100, Math.floor(update.downloaded / update.total * 100)) : 0)
 const installing = computed(() => update.phase === 'installing')
 const busy = computed(() => installing.value || update.phase === 'planning')
-const title = computed(() => update.phase === 'installed' ? tr('新版已安装') : update.phase === 'staging' ? tr('正在静默安装') : update.phase === 'confirming' ? tr('确认立即生效') : update.phase === 'scheduled' ? tr('已安排安装') : update.phase === 'restoring' ? tr('正在恢复项目') : update.phase === 'installing' ? tr('正在更新') : update.phase === 'planning' ? tr('正在读取项目') : update.phase === 'downloading' ? tr('正在下载') : update.phase === 'finished' ? tr(update.error ? '更新未完成' : update.report?.remaining.length ? '部分项目待恢复' : '更新完成') : update.info ? tr('新版可用') : tr('应用更新'))
+const backendPending = computed(() => !!update.report?.backendVersion && update.report.backendVersion !== (update.report.currentVersion || currentVersion.value))
+const title = computed(() => update.phase === 'installed' ? tr('新版已安装') : update.phase === 'staging' ? tr('正在静默安装') : update.phase === 'confirming' ? tr('确认立即生效') : update.phase === 'scheduled' ? tr('已安排安装') : update.phase === 'restoring' ? tr('正在恢复项目') : update.phase === 'installing' ? tr('正在更新') : update.phase === 'planning' ? tr('正在读取项目') : update.phase === 'downloading' ? tr('正在下载') : update.phase === 'finished' ? tr(update.report?.statusError ? '状态待确认' : update.report?.versionActive ? (update.report.remaining.length ? '项目待恢复' : '更新完成') : update.error ? '更新未完成' : update.report?.remaining.length ? '部分项目待恢复' : '更新完成') : update.phase === 'current' ? tr('当前已是新版') : update.info ? tr('新版可用') : tr('应用更新'))
+const actualVersion = computed(() => update.report?.currentVersion || currentVersion.value)
+const finished = computed(() => update.phase === 'finished')
 let previousFocus: HTMLElement | null = null
 const linkError = ref('')
 async function openReleases() {
@@ -40,10 +43,15 @@ onUnmounted(() => {
   <div class="update-overlay" @click.self="dismissAppUpdate">
     <section ref="dialog" class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-title" tabindex="-1">
       <header>
-        <h2 id="update-title">{{ title }}</h2>
+        <h2 id="update-title">{{ finished && backendPending && !update.report?.statusError && !update.report?.remaining.length ? tr('后台待更新') : title }}</h2>
         <button class="ghost icon" :aria-label="tr('关闭')" :disabled="busy" @click="dismissAppUpdate">✕</button>
       </header>
-      <p v-if="update.info" class="version"><span v-if="currentVersion && currentVersion !== update.info.version">v{{ currentVersion }} <span aria-hidden="true">→</span> </span><strong>v{{ update.info.version }}</strong></p>
+      <p v-if="finished" class="version">
+        {{ tr('当前版本') }} <strong>v{{ actualVersion }}</strong>
+        <span v-if="update.report?.backendVersion && update.report.backendVersion !== actualVersion"> · {{ tr('后台版本') }} v{{ update.report.backendVersion }}</span>
+        <span v-if="!update.report?.versionActive && update.info"> · {{ tr('本次目标') }} v{{ update.info.version }}</span>
+      </p>
+      <p v-else-if="update.info" class="version"><span v-if="currentVersion && currentVersion !== update.info.version">v{{ currentVersion }} <span aria-hidden="true">→</span> </span><strong>v{{ update.info.version }}</strong></p>
       <div class="update-body">
         <div v-if="update.phase === 'downloading'" class="download-status" role="status">
           <div><span>{{ tr('正在后台下载更新') }}</span><span>{{ percent }}%</span></div>
@@ -64,11 +72,15 @@ onUnmounted(() => {
         </template>
         <p v-else-if="update.phase === 'scheduled'" role="status">{{ tr('已安排下次启动安装，也可现在静默安装。项目保持运行。') }}</p>
         <template v-else-if="update.phase === 'finished'">
-          <p v-if="!update.error && !update.report?.remaining.length" class="ready">{{ tr('项目已恢复，可以继续使用。') }}</p>
-          <ul v-if="update.report?.failures.length" class="project-list error"><li v-for="failure in update.report.failures" :key="failure">{{ failure }}</li></ul>
+          <p v-if="update.report?.statusError" class="error" role="alert">{{ update.report.statusError }}</p>
+          <p v-else-if="backendPending" class="hint">{{ tr('窗口已更新，后台仍是旧版。继续更新可启用新版后台。') }}</p>
+          <p v-else-if="update.report?.versionActive && update.report.remaining.length" class="ready">{{ tr('版本已生效，以下项目尚未恢复。') }}</p>
+          <p v-if="!update.report?.statusError && !update.error && !update.report?.remaining.length" class="ready">{{ tr('项目已恢复，可以继续使用。') }}</p>
+          <ul v-if="!update.report?.statusError && update.report?.failures.length" class="project-list error"><li v-for="failure in update.report.failures" :key="failure">{{ failure }}</li></ul>
+          <p v-if="update.report?.remaining.length" class="hint">{{ tr('保持现状会结束本次恢复，不启动或停止项目。') }}</p>
         </template>
         <details v-if="update.info?.notes"><summary>{{ tr('更新说明') }}</summary><pre>{{ update.info.notes }}</pre></details>
-        <div v-if="update.error" class="error" role="alert">
+        <div v-if="update.error && !update.report?.statusError" class="error" role="alert">
           {{ update.error }}
           <button class="link" @click="openReleases">{{ tr('查看版本下载页') }} ↗</button>
           <p v-if="linkError">{{ linkError }} https://github.com/oooing/rundock/releases</p>
@@ -93,8 +105,9 @@ onUnmounted(() => {
           <button class="primary" @click="dismissAppUpdate">{{ tr('知道了') }}</button>
         </template>
         <template v-else-if="update.phase === 'finished'">
-          <button @click="update.report?.remaining.length ? dismissAppUpdate() : cancelScheduledUpdate()">{{ tr('关闭') }}</button>
-          <button v-if="update.report?.remaining.length" class="primary" @click="retryUpdateRestore">{{ tr('重试恢复') }}</button>
+          <button @click="cancelScheduledUpdate(!!update.report?.remaining.length)">{{ tr(update.report?.remaining.length ? '保持现状' : '关闭') }}</button>
+          <button v-if="update.report?.remaining.length" class="primary" :disabled="!!update.report.statusError" @click="retryUpdateRestore">{{ tr('恢复项目') }}</button>
+          <button v-else-if="backendPending && !update.report?.statusError" class="primary" @click="recheckAppUpdate">{{ tr('继续更新') }}</button>
           <button v-else-if="update.error" class="primary" @click="recheckAppUpdate">{{ tr('重新检查') }}</button>
         </template>
         <template v-else>

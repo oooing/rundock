@@ -154,6 +154,15 @@ func classifyOneWithHash(repo string, change FileChange, rules []releaseconfig.F
 
 func applyHeuristic(item *FileClassification, change FileChange) {
 	item.Sources = append(item.Sources, "heuristic")
+	if isLocalDemoPath(item.Path) || isLocalVerificationPath(item.Path) {
+		item.Category = CategoryLocal
+		item.Reasons = append(item.Reasons, "演示、报告或本地验证资料，默认不提交；需要共享时可手动选入，不会删除本地文件")
+		if change.Tracked {
+			item.BaselineKept = true
+			item.Reasons = append(item.Reasons, "该文件已在当前基线提交中，本次不提交改动不会移除已保存的旧内容")
+		}
+		return
+	}
 	if change.Tracked {
 		item.Category = CategoryRecommend
 		item.Reasons = append(item.Reasons, "已跟踪文件的本次改动默认纳入候选版本")
@@ -162,11 +171,6 @@ func applyHeuristic(item *FileClassification, change FileChange) {
 	if looksLocalOutput(item.Path) {
 		item.Category = CategoryLocal
 		item.Reasons = append(item.Reasons, "未跟踪的构建、缓存或临时输出，默认不提交且不会删除")
-		return
-	}
-	if isLocalVerificationPath(item.Path) {
-		item.Category = CategoryLocal
-		item.Reasons = append(item.Reasons, "未跟踪的报告、快照或本地验证资料，默认留在本地；需要共享时可手动纳入")
 		return
 	}
 	if looksReleaseSource(item.Path) {
@@ -178,8 +182,14 @@ func applyHeuristic(item *FileClassification, change FileChange) {
 	item.Reasons = append(item.Reasons, "用途未知，需要确认后再正式发布")
 }
 
-// Root-level evidence folders are not source roots. Apply only as an untracked
-// fallback: explicit project rules, tracked changes and manual choices take priority.
+// Root-level material folders are opt-in, even when previously tracked.
+// Explicit project rules and content-bound manual decisions still take priority.
+// Match directory boundaries, not substrings in production source paths.
+func isLocalDemoPath(rel string) bool {
+	rel = strings.ToLower(filepath.ToSlash(rel))
+	return strings.HasPrefix(rel, "demo/") || strings.HasPrefix(rel, "demos/")
+}
+
 func isLocalVerificationPath(rel string) bool {
 	rel = strings.ToLower(filepath.ToSlash(rel))
 	for _, prefix := range []string{"artifacts/", "outputs/", "reports/"} {

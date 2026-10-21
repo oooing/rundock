@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 export type AppUpdateInfo = { version: string; notes: string; url: string; size: number; installedLocally?: boolean }
 export type UpdateProject = { id: string; name: string; runId: string; configHash: string; temporaryPort?: number }
 type UpdatePlan = { fingerprint: string; projects: UpdateProject[] }
-type UpdateReport = { version: string; phase: string; projects: UpdateProject[]; remaining: UpdateProject[]; error: string; failures: string[]; installer?: unknown }
+type UpdateReport = { version: string; phase: string; projects: UpdateProject[]; remaining: UpdateProject[]; error: string; failures: string[]; installer?: unknown; currentVersion?: string; backendVersion?: string; versionActive?: boolean; statusError?: string }
 type UpdateOptions = { background?: boolean }
 export const appUpdate = reactive({
   phase: 'idle' as 'idle' | 'checking' | 'available' | 'current' | 'downloading' | 'ready' | 'staging' | 'planning' | 'confirming' | 'scheduled' | 'installing' | 'installed' | 'restoring' | 'finished',
@@ -20,7 +20,7 @@ let reportTimer: ReturnType<typeof setTimeout> | undefined
 let statusRevision = 0
 let statusRequest: { revision: number; promise: Promise<boolean> } | undefined
 const busy = () => stagePending || cancelPending || ['checking', 'downloading', 'staging', 'planning', 'installing', 'restoring'].includes(appUpdate.phase)
-const waitingForStatus = () => ['staging', 'restoring'].includes(appUpdate.phase)
+const waitingForStatus = () => ['staging', 'restoring'].includes(appUpdate.phase) || (appUpdate.phase === 'finished' && appUpdate.dialogOpen)
 function clearReportTimer() {
   if (reportTimer !== undefined) clearTimeout(reportTimer)
   reportTimer = undefined
@@ -33,7 +33,12 @@ function pollStatus() {
     void refreshUpdateStatus({ background: true }).catch(e => { appUpdate.error = String(e) })
   }, 1000)
 }
-export function openAppUpdate() { if (appUpdate.info || appUpdate.error) appUpdate.dialogOpen = true }
+export function openAppUpdate() {
+  if (appUpdate.info || appUpdate.error) appUpdate.dialogOpen = true
+  if (appUpdate.phase === 'finished') {
+    void refreshUpdateStatus({ background: true }).catch(e => { appUpdate.error = String(e) })
+  }
+}
 export function cancelAppUpdatePlan() {
   if (appUpdate.phase !== 'confirming') return
   appUpdate.phase = appUpdate.info?.installedLocally ? 'installed' : confirmationPhase
@@ -43,6 +48,7 @@ export function dismissAppUpdate() {
   if (['installing', 'planning'].includes(appUpdate.phase)) return
   cancelAppUpdatePlan()
   appUpdate.dialogOpen = false
+  if (appUpdate.phase === 'finished') clearReportTimer()
 }
 export function refreshUpdateStatus({ background = false }: UpdateOptions = {}): Promise<boolean> {
   if (statusRequest?.revision === statusRevision) return statusRequest.promise
@@ -51,7 +57,15 @@ export function refreshUpdateStatus({ background = false }: UpdateOptions = {}):
   const promise = (async () => {
     try {
       const report = await invoke<UpdateReport | null>('app_update_status')
-      if (revision !== statusRevision || !report) return false
+      if (revision !== statusRevision) return false
+      if (!report) {
+        // A verified obsolete result can be archived by the native layer.
+        if (appUpdate.phase === 'finished') {
+          appUpdate.report = null; appUpdate.info = null; appUpdate.error = ''
+          appUpdate.phase = 'current'
+        }
+        return false
+      }
       const previousInfo = appUpdate.info?.version === report.version ? appUpdate.info : null
       // Older schedules may already refer to an installed version (no installer).
       const installedLocally = report.phase === 'staged' || (report.phase === 'scheduled' ? report.installer === null : previousInfo?.installedLocally === true)
@@ -157,15 +171,15 @@ export async function installAppUpdate() {
   catch (e) {
     appUpdate.phase = confirmationPhase; appUpdate.plan = null; appUpdate.error = String(e)
     try { await refreshUpdateStatus({ background: true }) } catch { /* retain the installation error */ }
-    if (!appUpdate.error) appUpdate.error = String(e)
+    if (!appUpdate.error && !appUpdate.report?.versionActive) appUpdate.error = String(e)
   }
 }
-export async function cancelScheduledUpdate() {
+export async function cancelScheduledUpdate(keepCurrentState = false) {
   if (busy() || !['scheduled', 'finished'].includes(appUpdate.phase)) return
   cancelPending = true
   invalidateStatus()
   try {
-    await invoke('cancel_scheduled_update')
+    await invoke('cancel_scheduled_update', keepCurrentState === true ? { keepCurrentState: true } : undefined)
     appUpdate.phase = appUpdate.info?.installedLocally ? 'installed' : 'idle'
     if (appUpdate.phase === 'idle') appUpdate.info = null
     appUpdate.report = null; appUpdate.plan = null; appUpdate.error = ''; appUpdate.dialogOpen = false

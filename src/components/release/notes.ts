@@ -3,20 +3,31 @@ import type { ReleasePreflight } from '@/types';
 import type { ReleaseContext } from './context';
 // All values belong to this dialog's view model; external data enters through api.
 export function installNotes(ctx: ReleaseContext) {
-    ctx.scheduleReleaseNotesDraft = function (delay = 80) {
+    ctx.cancelReleaseNotesDraft = function () {
+        if (ctx.releaseNotesTimer)
+            clearTimeout(ctx.releaseNotesTimer);
+        ctx.releaseNotesTimer = null;
+        ctx.releaseNotesRequest += 1;
+        ctx.releaseNotesAbort?.abort();
+        ctx.releaseNotesAbort = null;
+        ctx.releaseNotesLoading.value = false;
+    };
+    ctx.scheduleReleaseNotesDraft = function (delay = 300) {
         if (ctx.targetSelectionMissing.value)
             return;
         if (!ctx.createTag.value || !ctx.preflight.value || ctx.releaseNotesDirty.value || ctx.activeRun.value || ctx.disposed)
             return;
-        if (ctx.releaseNotesTimer)
-            clearTimeout(ctx.releaseNotesTimer);
+        // Coalesce quick selection changes without waiting for an obsolete draft.
+        ctx.cancelReleaseNotesDraft();
+        ctx.releaseNotesLoading.value = true;
+        ctx.releaseNotesError.value = '';
         ctx.releaseNotesTimer = setTimeout(() => { ctx.releaseNotesTimer = null; void ctx.generateReleaseNotesDraft(); }, delay);
     };
     ctx.generateReleaseNotesDraft = async function (force = false, overwriteConfirmed = false) {
         if (ctx.targetSelectionMissing.value)
             return;
         const pf = ctx.preflight.value;
-        if (!pf || !ctx.createTag.value || ctx.releaseNotesLoading.value)
+        if (!pf || !ctx.createTag.value || ctx.activeRun.value || ctx.disposed)
             return;
         // A scheduled draft may start after the user has begun typing.
         if (!force && ctx.releaseNotesDirty.value)
@@ -25,8 +36,12 @@ export function installNotes(ctx: ReleaseContext) {
             ctx.confirmAction.value = 'regenerate-notes';
             return;
         }
+        ctx.cancelReleaseNotesDraft();
         const sourceSignature = ctx.releaseNotesOptionsSignature.value;
+        const sourceText = ctx.releaseNotes.value;
         const requestId = ++ctx.releaseNotesRequest;
+        const controller = new AbortController();
+        ctx.releaseNotesAbort = controller;
         ctx.releaseNotesLoading.value = true;
         ctx.releaseNotesError.value = '';
         try {
@@ -34,8 +49,9 @@ export function installNotes(ctx: ReleaseContext) {
                 statusFingerprint: pf.statusFingerprint,
                 selectedPaths: ctx.selectedPaths.value,
                 selectedTargets: ctx.selectedTargets.value,
-            });
-            if (ctx.disposed || requestId !== ctx.releaseNotesRequest)
+            }, controller.signal);
+            if (ctx.disposed || controller.signal.aborted || requestId !== ctx.releaseNotesRequest
+                || ctx.activeRun.value || !ctx.createTag.value || sourceText !== ctx.releaseNotes.value)
                 return;
             if (sourceSignature !== ctx.releaseNotesOptionsSignature.value) {
                 ctx.releaseNotesStale.value = true;
@@ -49,11 +65,13 @@ export function installNotes(ctx: ReleaseContext) {
             ctx.releaseNotesStale.value = false;
         }
         catch (reason) {
-            if (requestId === ctx.releaseNotesRequest)
+            if (!ctx.disposed && !controller.signal.aborted && requestId === ctx.releaseNotesRequest
+                && sourceSignature === ctx.releaseNotesOptionsSignature.value && sourceText === ctx.releaseNotes.value)
                 ctx.releaseNotesError.value = ctx.messageOf(reason);
         }
         finally {
             if (requestId === ctx.releaseNotesRequest) {
+                ctx.releaseNotesAbort = null;
                 ctx.releaseNotesLoading.value = false;
                 if (sourceSignature !== ctx.releaseNotesOptionsSignature.value)
                     ctx.scheduleReleaseNotesDraft(120);
@@ -61,12 +79,7 @@ export function installNotes(ctx: ReleaseContext) {
         }
     };
     ctx.onReleaseNotesInput = function () {
-        if (ctx.releaseNotesTimer) {
-            clearTimeout(ctx.releaseNotesTimer);
-            ctx.releaseNotesTimer = null;
-        }
-        ctx.releaseNotesRequest += 1;
-        ctx.releaseNotesLoading.value = false;
+        ctx.cancelReleaseNotesDraft();
         if (!ctx.releaseNotesGeneratedFor.value)
             ctx.releaseNotesGeneratedFor.value = ctx.releaseNotesOptionsSignature.value;
         ctx.releaseNotesDirty.value = true;

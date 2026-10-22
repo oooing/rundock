@@ -45,6 +45,12 @@ func (s *Service) preflight(ctx context.Context, appID string, checkRemote, chec
 		CurrentVersions: map[string]string{}, LatestGroupTags: map[string]string{}, SuggestedVersions: map[string]string{},
 		UnpushedChanges: []CommittedFileChange{}, BlockingIssues: []Issue{}, RemoteChecked: checkRemote,
 	}
+	// Reading a snapshot never installs or rewrites ignore rules.
+	if edit, readErr := readIgnoreEdit(root, ".gitignore"); readErr == nil {
+		if policy, _, _, parseErr := parseManagedIgnores(edit.original); parseErr == nil && policy.Managed {
+			pf.ManagedIgnores = policy
+		}
+	}
 	if pf.RemoteName == "" {
 		pf.RemoteName = "origin"
 	}

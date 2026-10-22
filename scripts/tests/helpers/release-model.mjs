@@ -12,7 +12,7 @@ export function load(file, dependencies) {
 }
 const pure = { ...load('utils/releaseContent', {}), ...load('utils/releasePresentation', {}), ...load('utils/releaseSafety', {}),
   ...load('utils/releasePreferences', { localStorage: { getItem: () => null, setItem() {} } }) }
-export function fixture({ local = false, single = false, api = {}, preferences = {}, realVersionSync = false } = {}) {
+export function fixture({ local = false, single = false, api = {}, preferences = {}, realVersionSync = false, realNotes = false } = {}) {
   const requests = []
   const deps = {
     ref: vue.ref, computed: vue.computed, watch: vue.watch, nextTick: vue.nextTick,
@@ -30,7 +30,7 @@ export function fixture({ local = false, single = false, api = {}, preferences =
       ['preferences', 'installPreferences'], ['submission', 'installSubmission'], ['notes', 'installNotes']]) {
       load(`components/release/${file}`, deps)[installer](ctx)
     }
-    ctx.scheduleReleaseNotesDraft = () => {}
+    if (!realNotes) ctx.scheduleReleaseNotesDraft = () => {}
     if (!realVersionSync) ctx.syncVersionInputs = () => {}
     ctx.showRun = () => {}
     ctx.savePreparation = async () => {}
@@ -53,6 +53,6 @@ export function fixture({ local = false, single = false, api = {}, preferences =
     ctx.commitMessage.value = 'Update fixture'
     load('components/release/lifecycle', deps).installLifecycle(ctx)
   })
-  return { ...ctx, requests, close: () => scope.stop() }
+  return { ...ctx, requests, model: ctx, close: () => { ctx.cancelReleaseNotesDraft(); scope.stop() } }
 }
 

@@ -334,7 +334,15 @@ export interface ReleaseCommittedFileChange {
   status: string
 }
 
+export interface ReleaseIgnorePolicy {
+  file: string
+  revision: string
+  managed: boolean
+  groups: Array<{id: 'demos' | 'verification' | 'caches'; patterns: string[]; enabled: boolean}>
+}
+
 export interface ReleasePreflight {
+  managedIgnores?: ReleaseIgnorePolicy
 	classifications?: ReleaseFileClassification[]
   repoRoot: string
   branch: string

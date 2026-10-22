@@ -166,6 +166,8 @@
 #release-panel-publish .release-version-list { gap: 6px; }
 #release-panel-publish .release-notes-head { flex-direction: row; align-items: center; margin-bottom: 8px; }
 #release-panel-publish .release-notes textarea { min-height: 112px; font-size: 13px; }
+.release-notes-status { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-top: 6px; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
+.release-notes-status .release-loading-spinner { width: 14px; height: 14px; border-width: 2px; }
 #release-panel-publish .release-notes { padding: 0; border: 0; border-radius: 0; background: transparent; }
 #release-panel-publish .file-picker { padding: 0; background: transparent; border: 0; }
 .m-body { overscroll-behavior: contain; scrollbar-gutter: stable; }

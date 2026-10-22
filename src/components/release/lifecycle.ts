@@ -18,10 +18,14 @@ export function installLifecycle(ctx: ReleaseContext) {
         }
     });
     watch([() => ctx.activeRun.value?.id, () => ctx.activeRun.value?.status], async () => {
+        if (ctx.activeRun.value)
+            ctx.cancelReleaseNotesDraft();
         await nextTick();
         ctx.bodyRef.value?.scrollTo({ top: 0 });
     });
     watch(ctx.releaseNotesOptionsSignature, (signature) => {
+        ctx.cancelReleaseNotesDraft();
+        ctx.releaseNotesError.value = '';
         if (!ctx.createTag.value)
             return;
         if (ctx.releaseNotesGeneratedFor.value && signature === ctx.releaseNotesGeneratedFor.value)
@@ -31,7 +35,7 @@ export function installLifecycle(ctx: ReleaseContext) {
             if (!ctx.releaseNotesDirty.value)
                 ctx.scheduleReleaseNotesDraft();
         }
-    });
+    }, { flush: 'sync' });
     watch(ctx.plannedTagNames, (tags) => {
         if (ctx.profileReady.value && ctx.createTag.value && tags.length) {
             if (ctx.versionMode.value === 'auto')
@@ -60,8 +64,6 @@ export function installLifecycle(ctx: ReleaseContext) {
             clearTimeout(ctx.preferenceTimer);
             ctx.saveRememberedPreferences();
         }
-        if (ctx.releaseNotesTimer)
-            clearTimeout(ctx.releaseNotesTimer);
-        ctx.releaseNotesRequest += 1;
+        ctx.cancelReleaseNotesDraft();
     });
 }

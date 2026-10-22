@@ -63,6 +63,7 @@ export interface ReleaseContext {
     pendingIgnoreCount: Ref<number>;
     ignoreSafetyFile: (file: ReleaseFileClassification) => Promise<string>;
     ignoreSafetyFiles: (files: ReleaseFileClassification[]) => Promise<string>;
+    updateManagedIgnores: (id: string, enabled: boolean) => Promise<void>;
     checksEnabled: Ref<boolean, boolean>;
     candidateSignature: Ref<string, string>;
     reviewSignature: Ref<string, string>;
@@ -150,6 +151,7 @@ export interface ReleaseContext {
     preferenceTimer: ReturnType<typeof setTimeout> | null;
     releaseNotesTimer: ReturnType<typeof setTimeout> | null;
     releaseNotesRequest: number;
+    releaseNotesAbort: AbortController | null;
     preferenceSave: Promise<void>;
     disposed: boolean;
     isActive: ComputedRef<boolean>;
@@ -317,6 +319,7 @@ export interface ReleaseContext {
     onCommitMessageInput: () => void;
     syncVersionInputs: () => void;
     scheduleReleaseNotesDraft: (delay?: number) => void;
+    cancelReleaseNotesDraft: () => void;
     generateReleaseNotesDraft: (force?: boolean, overwriteConfirmed?: boolean) => Promise<void>;
     onReleaseNotesInput: () => void;
     applyPreflight: (raw: ReleasePreflight, initial?: boolean, resetFiles?: boolean) => void;

@@ -21,6 +21,7 @@ import type {
   ReleaseNotesDraft,
   ReleaseNotesDraftRequest,
   ReleasePreflight,
+  ReleaseIgnorePolicy,
   ReleaseProfile,
   ReleaseRun,
   ReleaseRunView,
@@ -146,8 +147,20 @@ export const api = {
   cloudBuildAlerts: () => req<import('@/types').CloudBuildStatus[]>('/api/cloud-builds'),
   acknowledgeCloudBuild: (runId: string, alertKey: string) =>
     req<{ acknowledged: boolean }>('/api/cloud-builds', { method: 'POST', body: JSON.stringify({ runId, alertKey }) }),
-  releasePreflight: (id: string, checkRemote = false) =>
-    req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, { method: 'POST' }),
+  releasePreflight: async (id: string, checkRemote = false, initializeIgnores = false) => {
+    if (initializeIgnores) {
+      try {
+        await req<ReleaseIgnorePolicy>('/api/apps/'+encodeURIComponent(id)+'/release/ignore-policy', {method:'POST'})
+      } catch (error) {
+        // Allow a hot-reloaded frontend with an older sidecar, and let active
+        // releases remain viewable without changing their files.
+        if (!(error instanceof ApiError) || (error.status !== 404 && error.code !== 'release_in_progress')) throw error
+      }
+    }
+    return req<ReleasePreflight>(`/api/apps/${id}/release/preflight?remote=${checkRemote}`, {method:'POST'})
+  },
+  updateReleaseIgnores: (id: string, group: string, enabled: boolean, revision: string) =>
+    req<{policy:ReleaseIgnorePolicy;preflight:ReleasePreflight}>('/api/apps/'+encodeURIComponent(id)+'/release/ignore-policy', {method:'PATCH',body:JSON.stringify({id:group,enabled,revision})}),
   previewReleaseFile: (id: string, path: string, signal?: AbortSignal) =>
     req<import('@/types').ReleaseFilePreview>(`/api/apps/${encodeURIComponent(id)}/release/file-preview?path=${encodeURIComponent(path)}`, { signal }),
   ignoreReleaseFile: (id: string, path: string, contentFingerprint: string) =>
@@ -165,8 +178,8 @@ export const api = {
   getReleaseCandidate: (id: string, candidateId: string) => req<ReleaseCandidate>(`/api/apps/${id}/release/candidate/${candidateId}`).then(normalizeReleaseCandidate),
   unstageReleaseFiles: (id: string, statusFingerprint: string) =>
     req<ReleasePreflight>(`/api/apps/${id}/release/unstage`, { method: 'POST', body: JSON.stringify({ statusFingerprint }) }),
-  createReleaseNotesDraft: (id: string, body: ReleaseNotesDraftRequest) =>
-    req<ReleaseNotesDraft>(`/api/apps/${id}/release/notes-draft`, { method: 'POST', body: JSON.stringify(body) }),
+  createReleaseNotesDraft: (id: string, body: ReleaseNotesDraftRequest, signal?: AbortSignal) =>
+    req<ReleaseNotesDraft>(`/api/apps/${id}/release/notes-draft`, { method: 'POST', body: JSON.stringify(body), signal }),
   getReleaseProfile: (id: string) => req<ReleaseProfile>(`/api/apps/${id}/release-profile`),
   saveReleaseProfile: async (id: string, body: Omit<ReleaseProfile, 'appId' | 'updatedAt'>) => {
     const saved = await req<ReleaseProfile>(`/api/apps/${id}/release-profile`, { method: 'PATCH', body: JSON.stringify(body) })

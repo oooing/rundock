@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs'
 import test from 'node:test'
 import ts from 'typescript'
 import {computed, ref} from 'vue'
-const names=['inspectCandidate','cancelCandidate','submitRelease','ignoreSafetyFile']
+const names=['inspectCandidate','cancelCandidate','submitRelease','ignoreSafetyFile','ignoreSafetyFiles']
 const functions=[]
 for(const file of ['candidate','submission']){
  const source=readFileSync(new URL('../../src/components/release/'+file+'.ts',import.meta.url),'utf8')
@@ -35,14 +35,14 @@ test('permanent ignore refreshes files without committing or discarding other de
  const f=fixture(),pending=deferred(),file={path:'notes/local.txt',contentFingerprint:'same',tracked:false},calls=[]
  f.candidate.value={id:'old',accepted:true};f.candidateSignature.value='old'
  f.manualDecisions.value=[{path:file.path,decision:'exclude'},{path:'other.txt',decision:'include'}]
- f.api.ignoreReleaseFile=(...args)=>{calls.push(args);return pending.promise}
+ f.api.ignoreReleaseFiles=(...args)=>{calls.push(args);return pending.promise}
  const run=f.ignoreSafetyFile(file)
  assert.equal(f.ignoringFile.value,true)
  await assert.rejects(f.ignoreSafetyFile(file))
  assert.equal(await f.inspectCandidate(),false)
- pending.resolve({ignoreFile:'.gitignore',preflight:{changes:[]}})
+ pending.resolve({ignoreFiles:['.gitignore'],preflight:{changes:[]}})
  assert.equal(await run,'.gitignore')
- assert.deepEqual(calls,[['app',file.path,'same']]);assert.equal(f.ignoringFile.value,false)
+ assert.deepEqual(calls,[['app',[{path:file.path,contentFingerprint:'same'}]]]);assert.equal(f.ignoringFile.value,false)
  assert.equal(f.candidate.value,null);assert.equal(f.candidateSignature.value,'')
  assert.deepEqual(f.manualDecisions.value,[{path:'other.txt',decision:'include'}])
  assert.deepEqual(f.applied,[{changes:[]}]);assert.deepEqual(f.published,[])
@@ -50,7 +50,7 @@ test('permanent ignore refreshes files without committing or discarding other de
 test('failed ignore preserves review and tracked files never invoke the API',async()=>{
  const f=fixture(),calls=[],file={path:'local.txt',contentFingerprint:'same',tracked:false}
  f.candidate.value={id:'old'};f.manualDecisions.value=[{path:'other.txt',decision:'include'}]
- f.api.ignoreReleaseFile=async()=>{calls.push('ignore');throw new Error('file changed')}
+ f.api.ignoreReleaseFiles=async()=>{calls.push('ignore');throw new Error('file changed')}
  await assert.rejects(f.ignoreSafetyFile(file),/file changed/)
  assert.equal(f.ignoringFile.value,false);assert.equal(f.candidate.value.id,'old')
  assert.deepEqual(f.applied,[]);assert.equal(f.manualDecisions.value.length,1)

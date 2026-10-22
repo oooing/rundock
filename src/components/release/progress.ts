@@ -155,6 +155,7 @@ export function installProgress(ctx: ReleaseContext) {
         ctx.candidate.value = null;
         ctx.candidateSignature.value = '';
         ctx.leaveRunView();
+        ctx.cancelReleaseNotesDraft();
         ctx.releaseNotes.value = '';
         ctx.releaseNotesDirty.value = false;
         ctx.releaseNotesStale.value = false;

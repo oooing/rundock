@@ -99,6 +99,7 @@ export function installState(ctx: ReleaseContext) {
     ctx.preferenceTimer = null;
     ctx.releaseNotesTimer = null;
     ctx.releaseNotesRequest = 0;
+    ctx.releaseNotesAbort = null;
     ctx.preferenceSave = Promise.resolve();
     ctx.disposed = false;
     ctx.versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;

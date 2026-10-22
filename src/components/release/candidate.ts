@@ -119,6 +119,31 @@ export function installCandidate(ctx: ReleaseContext) {
     ctx.ignoreSafetyFile = async function (file: ReleaseFileClassification) {
         return ctx.ignoreSafetyFiles([file]);
     };
+    ctx.updateManagedIgnores = async function (id: string, enabled: boolean) {
+        const policy = ctx.preflight.value?.managedIgnores;
+        if (!policy || ctx.ignoringFile.value || ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || ctx.pendingIgnoreCount.value)
+            throw new Error(tr('当前不能修改忽略清单，请稍后重试。'));
+        ctx.ignoringFile.value = true;
+        const oldFiles = new Map(ctx.safetyFiles.value.map(file => [file.path, file.contentFingerprint]));
+        const oldSelection = { ...ctx.selected.value };
+        const oldDecisions = [...ctx.manualDecisions.value];
+        try {
+            const result = await api.updateReleaseIgnores(ctx.props.app.id, id, enabled, policy.revision);
+            if (ctx.disposed) return;
+            ctx.candidate.value = null;
+            ctx.candidateSignature.value = '';
+            ctx.applyPreflight(result.preflight, false, true);
+            // Preserve unrelated choices only when their content is unchanged.
+            const fresh = new Map(ctx.safetyFiles.value.map(file => [file.path, file.contentFingerprint]));
+            for (const [path, fingerprint] of fresh) {
+                if (oldFiles.get(path) === fingerprint && path in oldSelection)
+                    ctx.selected.value[path] = oldSelection[path];
+            }
+            ctx.manualDecisions.value = oldDecisions.filter(item => fresh.get(item.path) === item.contentFingerprint);
+        } finally {
+            ctx.ignoringFile.value = false;
+        }
+    };
     ctx.ignoreSafetyFiles = async function (files: ReleaseFileClassification[]) {
         if (!files.length || ctx.ignoringFile.value || ctx.checkingCandidate.value || ctx.publishing.value || ctx.autoSubmitting.value || files.some(file => file.tracked))
             throw new Error(tr('当前不能修改忽略清单，请稍后重试。'));

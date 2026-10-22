@@ -158,6 +158,7 @@ type CommittedFileChange struct {
 }
 
 type Preflight struct {
+	ManagedIgnores    *ManagedIgnorePolicy `json:"managedIgnores,omitempty"`
 	remoteTags        map[string]string
 	RepoRoot          string                `json:"repoRoot"`
 	Branch            string                `json:"branch"`

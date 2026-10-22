@@ -133,7 +133,7 @@ export function installPreferences(ctx: ReleaseContext) {
         try {
             // Handle rejection immediately while history/config load independently;
             // report the original preflight failure through the dialog below.
-            const localPreflight = Promise.allSettled([api.releasePreflight(appId, false)] as const);
+            const localPreflight = Promise.allSettled([api.releasePreflight(appId, false, true)] as const);
             const [historyResult, configResult, preparationsResult] = await Promise.allSettled([
                 api.listReleases(appId), api.getReleaseConfig(appId), api.listReleasePreparations(appId),
             ] as const);
@@ -225,8 +225,7 @@ export function installPreferences(ctx: ReleaseContext) {
         }
         else {
             ctx.releaseNotesError.value = '';
-            ctx.releaseNotesLoading.value = false;
-            ctx.releaseNotesRequest += 1;
+            ctx.cancelReleaseNotesDraft();
         }
         ctx.setDefaultCommitMessage();
     };

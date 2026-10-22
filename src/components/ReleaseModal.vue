@@ -9,6 +9,7 @@ import type { AppView, ReleaseRun } from '@/types'
 import { useReleaseModel } from './release/useReleaseModel'
 import ReleaseConfigFileEditor from './ReleaseConfigFileEditor.vue'
 import ReleaseSafetyPanel from './ReleaseSafetyPanel.vue'
+import ReleaseIgnoredFolders from './ReleaseIgnoredFolders.vue'
 import ReleaseFormSection from './ReleaseFormSection.vue'
 import ReleaseSafetySettings from './ReleaseSafetySettings.vue'
 import CopyErrorButton from './CopyErrorButton.vue'
@@ -29,7 +30,7 @@ const {
   phaseOptions, loading, savingProfile, publishing, autoSubmitting,
   unstaging, unstageNotice, error, errorCode, versionPlanNotice,
   preflight, history, selected, releaseIntent, manualDecisions,
-  sensitiveExceptions, candidate, checkingCandidate, ignoringFile, pendingIgnoreCount, ignoreSafetyFile, ignoreSafetyFiles, checksEnabled, candidateSignature,
+  sensitiveExceptions, candidate, checkingCandidate, ignoringFile, pendingIgnoreCount, ignoreSafetyFile, ignoreSafetyFiles, updateManagedIgnores, checksEnabled, candidateSignature,
   reviewSignature, findingDecisions, resolvingReview, safetySettingsDirty, candidatePoll,
   candidateEpoch, candidateAbort, safetyFiles, candidateRequest, currentCandidateSignature,
   submissionPlanSignature, candidateStale, reviewStale, pendingFindings, candidateReady,
@@ -313,6 +314,7 @@ async function returnToRelease() {
           <ReleaseFormSection section-id="confirmation" :title="releaseIntent === 'formal' ? tr('文件与发布确认') : tr('文件与提交确认')">
           <ReleaseSafetyPanel @ignore-pending="pendingIgnoreCount=$event" v-model:checks-enabled="checksEnabled" :locked="autoSubmitting || publishing || ignoringFile" :ignore-file="ignoreSafetyFile" :ignore-files="ignoreSafetyFiles" :app-id="app.id" :intent="releaseIntent" :cloud-build="releaseIntent==='formal' && buildMode==='github'" :files="safetyFiles" :selected="selected" :decisions="manualDecisions" :candidate="candidate" :busy="checkingCandidate" :stale="reviewStale" :finding-decisions="findingDecisions" :resolving-review="resolvingReview" @choose="chooseSafetyFile" @recommend="adoptRecommended" @cancel="cancelCandidate" @refresh="refreshSafety" @check="inspectCandidate" @exception="recordSensitiveException">
           <template #after-files>
+          <ReleaseIgnoredFolders v-if="preflight.managedIgnores" :policy="preflight.managedIgnores" :locked="autoSubmitting || publishing || ignoringFile || checkingCandidate || !!pendingIgnoreCount" :update="updateManagedIgnores" />
           <section v-if="preflight.aheadCount" class="file-picker">
             <details v-if="preflight.aheadCount" class="unpushed-files">
               <summary>{{ tr('已提交到本机，等待上传 {0}（{1} 次提交，{2} 个文件）', [remoteDestination, preflight.aheadCount, preflight.unpushedChanges.length]) }}</summary>
@@ -341,10 +343,16 @@ async function returnToRelease() {
               v-model="releaseNotes"
               rows="5"
               maxlength="12000"
-              :placeholder="releaseNotesLoading ? tr('正在自动生成，也可以直接填写…') : tr('请简要填写本次功能、问题修复和性能变化')"
+              :placeholder="releaseNotesLoading ? tr('正在后台生成，也可以直接填写…') : tr('请简要填写本次功能、问题修复和性能变化')"
+              aria-describedby="release-notes-status"
               :aria-label="tr('更新说明')"
               @input="onReleaseNotesInput"
             ></textarea>
+            <div id="release-notes-status" class="release-notes-status" role="status" aria-live="polite">
+              <template v-if="releaseNotesLoading"><span class="release-loading-spinner" aria-hidden="true"></span>{{ tr('后台生成中，可先选择版本和文件。') }}</template>
+              <template v-else-if="releaseNotesDirty">{{ tr('已保留手动修改，不会自动覆盖。') }}</template>
+              <template v-else-if="releaseNotesGeneratedFor && !releaseNotesError">{{ tr('说明已生成，可直接修改。') }}</template>
+            </div>
             <div v-if="releaseNotesStale && releaseNotesDirty" class="alert warn release-notes-alert">{{ tr("文件、构建端或版本已变化。你修改过的说明已保留，可直接修改或重新生成。") }}</div>
             <div v-if="releaseNotesError" class="alert error release-notes-alert">{{ tr("生成失败：") }}{{ releaseNotesError }} <button type="button" @click="generateReleaseNotesDraft(true)">{{ tr("重试") }}</button></div>
             <div v-else-if="!releaseNotesLoading && !releaseNotes.trim()" class="field-error">{{ tr("创建 Tag 前请填写更新说明。") }}</div>

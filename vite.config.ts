@@ -5,6 +5,9 @@ import { resolve } from 'path'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  // Isolated UI fixtures also resolve this package's node_modules. Keep their
+  // default dependency cache from invalidating the running development app.
+  cacheDir: 'node_modules/.vite-rundock',
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),

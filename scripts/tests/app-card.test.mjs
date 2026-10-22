@@ -32,6 +32,8 @@ test('failed card has a direct icon button for this project log, outside collaps
   const { descriptor } = parse(read('src/components/AppCard.vue'))
   const component = compile(compileScript(descriptor, { id: 'app-card-test', inlineTemplate: true }).content, {
     ...common, '@/components/UiIcon.vue': icon,
+    '@/api/base': { getBaseURL: () => 'http://127.0.0.1:17655' },
+    './ProjectLogo.vue': { default: { props: ['src'], setup: props => () => vue.h('span', { class: 'project-logo', 'data-src': props.src }) } },
     '@/composables/useAppStartup': compile(read('src/composables/useAppStartup.ts'), common),
     './AppStartupNotice.vue': { default: noticeComponent },
     './PortResolutionDialog.vue': { default: { setup: () => () => null } },
@@ -39,6 +41,7 @@ test('failed card has a direct icon button for this project log, outside collaps
     '@/utils/cardServices': compile(read('src/utils/cardServices.ts')),
     '@/utils/cardColors': compile(read('src/utils/cardColors.ts')),
     '@/stores/motion': { runningEffect: vue.ref('breathe'), startingEffect: vue.ref('sweep') },
+    '@/stores/cardAppearance': { cardDesign: vue.ref('icon'), cardHandlePosition: vue.ref('top-center') },
     './StartupIndicator.vue': { default: { setup: () => () => vue.h('span') } },
   }).default
   const node = (type, text = '') => ({ type, text, props: {}, children: [], parent: null })
@@ -81,7 +84,8 @@ test('failed card has a direct icon button for this project log, outside collaps
       const rows = rendered.filter(el => el.props.class === 'svc-row')
       assert.equal(rows.length, 3, status + ' counts only current services')
       const heading = rendered.find(el => el.props.class === 'services-heading')
-      assert.ok(all(heading).some(el => el.text === '3'))
+      assert.ok(all(heading).some(el => el.text === '服务与端口'))
+      assert.ok(!all(heading).some(el => el.text === '3'), 'service count is not displayed in the heading')
       const details = rendered.find(el => el.props.class === 'runtime-details')
       const detailNodes = all(details), detailText = detailNodes.map(el => el.text).join(' ')
       assert.match(detailText, /8009/)

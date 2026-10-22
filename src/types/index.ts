@@ -55,6 +55,8 @@ export interface StartupDiscovery {
 
 /** App 视图（GET /api/apps 返回，含运行态） */
 export interface AppView {
+  /** Read-only, local artwork endpoint; absent on older backends. */
+  iconUrl?: string
   temporaryPort?: { originalPort: number; port: number; host: string }
   id: string
   name: string

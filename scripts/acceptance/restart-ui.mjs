@@ -18,6 +18,7 @@ try {
   page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 800 } })
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
+  let structured = null
   let kind = 'external', blocked = false, expired = false, fail = false, plans = 0, confirms = 0, managed = 0, newBackend = false, healthReads = 0
   let observed = true, runtimeState = 'running', appStatus = 'running', planError = false, runtimeReads = 0, portAllowed = false, portError = false, portFail = false, portPlans = 0, portConfirms = 0
   const runtimeMessages = {
@@ -47,7 +48,7 @@ try {
       plans++
       await new Promise(resolve => setTimeout(resolve, 180))
       if (planError) return send({ error: '当前后台尚未更新，请退出并用新版启动器打开 RunDock 一次，再使用重启。' }, 409)
-      return send({ kind, canRestart: !blocked, message: blocked ? '有构建、发布或发布检查正在执行，请等待结束后再重启；未停止任何项目' : kind === 'self' ? '将由独立启动器重启 RunDock 后台，等待新实例连接。' : '已核实这些进程属于此项目。确认后关闭并重新启动；未保存内容可能丢失。', processes: blocked ? [] : [{ pid: 501, name: 'cmd.exe' }, { pid: 502, name: 'node.exe' }], confirmationToken: blocked ? undefined : `token-${plans}`, expiresAt: new Date(Date.now() + (expired ? -1000 : 60000)).toISOString() })
+      return send({ kind, canRestart: !blocked, message: blocked ? '有构建、发布或发布检查正在执行，请等待结束后再重启；未停止任何项目' : kind === 'self' ? '将由独立启动器重启 RunDock 后台，等待新实例连接。' : '已核实这些进程属于此项目。确认后关闭并重新启动；未保存内容可能丢失。', processes: blocked ? [] : [{ pid: 501, name: 'cmd.exe' }, { pid: 502, name: 'node.exe' }], confirmationToken: blocked ? undefined : `token-${plans}`, expiresAt: new Date(Date.now() + (expired ? -1000 : 60000)).toISOString(), ...structured })
     }
     if (url.pathname.endsWith('/restart-confirm')) {
       confirms++
@@ -80,7 +81,7 @@ try {
   await restart.waitFor()
   assert.equal(await card.getByRole('button', { name: '重新检查', exact: true }).count(), 0)
   await restart.click()
-  await dialog.getByText('正在核验进程归属和执行中的任务…').waitFor()
+  await dialog.getByText('正在检查运行情况…').waitFor()
   await dialog.getByRole('button', { name: '确认重启', exact: true }).waitFor()
   assert.equal(await dialog.getByRole('button', { name: '取消', exact: true }).evaluate(el => el === document.activeElement), true)
   await page.keyboard.press('Escape')
@@ -97,13 +98,30 @@ try {
   await page.screenshot({ path: path.join(evidence, 'blocked-reason.png') })
   await dialog.getByRole('button', { name: '关闭' }).click()
   checks.push('Active build/check/release displays the blocker and Close, with no generic recheck or restart')
+  structured = {reasonCode:'active_launcher', message:'服务仍由外部启动器运行，无法确认启动器是否还管理其他任务。', nextSteps:['请先在原终端或开发工具中停止项目，避免它自动拉起服务；随后点击“重新检查”。'], processes:[{pid:502,name:'node.exe',entry:'C:/fixture/preview.js'}]}
+  await restart.click()
+  await dialog.getByText('如何处理',{exact:true}).waitFor()
+  await dialog.getByText('C:/fixture/preview.js',{exact:true}).waitFor()
+  const confirmBeforeCheck=confirms
+  blocked=false
+  structured={mode:'detached_worker',message:'原启动器已退出，独立服务归属已核实。确认后结束下列进程，再按保存的配置启动并接管。',processes:[{pid:502,name:'node.exe',entry:'C:/fixture/preview.js'}],launchCommand:'npm.cmd run dev',launchDirectory:'C:/fixture',nextSteps:['请先保存工作；调试连接和未完成任务会中断。','启动命令可能与当前预览不同，请确认后再继续。']}
+  await dialog.getByRole('button',{name:'重新检查',exact:true}).click()
+  await dialog.getByRole('button',{name:'重启并接管',exact:true}).waitFor()
+  assert.equal(confirms,confirmBeforeCheck)
+  await dialog.getByText('npm.cmd run dev',{exact:true}).waitFor()
+  await page.screenshot({path:path.join(evidence,'external-takeover.png')})
+  await dialog.getByRole('button',{name:'重启并接管',exact:true}).click()
+  await dialog.getByText('项目已重新启动，正在等待服务就绪。').waitFor()
+  await dialog.getByRole('button',{name:'完成',exact:true}).click()
+  structured=null
+  checks.push('Blocked external launch shows matching PID and next steps; recheck never restarts; detached takeover shows the saved command and requires explicit confirmation')
   blocked = false; expired = true
   await restart.click()
-  await dialog.getByText('确认信息已过期。更新后需再次确认，才会执行操作。').waitFor()
+  await dialog.getByText('方案已过期，请更新后重新确认。').waitFor()
   assert.equal(await dialog.getByRole('button', { name: '确认重启', exact: true }).count(), 0)
   const plansBeforeRenew = plans, confirmsBeforeRenew = confirms
   expired = false
-  await dialog.getByRole('button', { name: '更新确认信息', exact: true }).click()
+  await dialog.getByRole('button', { name: '更新方案', exact: true }).click()
   await dialog.getByRole('button', { name: '确认重启', exact: true }).waitFor()
   assert.equal(plans, plansBeforeRenew + 1)
   assert.equal(confirms, confirmsBeforeRenew)
@@ -111,7 +129,7 @@ try {
   checks.push('Expired valid confirmation can be renewed, but renewal never executes a restart')
   planError = true
   await restart.click()
-  await dialog.getByRole('alert').filter({ hasText: '当前后台尚未更新' }).waitFor()
+  await dialog.getByRole('alert').filter({ hasText: '请先退出软件，再用新版启动器打开' }).waitFor()
   assert.deepEqual(await dialog.getByRole('button').allTextContents(), ['关闭'])
   await dialog.getByRole('button', { name: '关闭' }).click()
   planError = false; fail = true
@@ -130,8 +148,8 @@ try {
   checks.push('Unsupported backend and changed identity show the error without stale success claims or fake repair buttons; reopening requires fresh confirmation')
   kind = 'self'
   await restart.click()
-  await dialog.getByRole('button', { name: '重启 RunDock', exact: true }).click()
-  await dialog.getByText('启动器正在重启 RunDock，等待后台重新连接…').waitFor()
+  await dialog.getByRole('button', { name: '重启软件', exact: true }).click()
+  await dialog.getByText('软件正在重启，等待重新连接…').waitFor()
   const before = healthReads
   await page.waitForFunction(() => document.querySelector('dialog[open] .spinner') !== null)
   await page.keyboard.press('Escape')
@@ -142,9 +160,9 @@ try {
   await page.screenshot({ path: path.join(evidence, 'self-reconnecting.png') })
   await new Promise(resolve => setTimeout(resolve, 1100))
   assert.ok(healthReads > before)
-  assert.equal(await dialog.getByText('RunDock 后台已重启并重新连接。').count(), 0)
+  assert.equal(await dialog.getByText('后台已重启，连接已恢复。').count(), 0)
   newBackend = true
-  await dialog.getByText('RunDock 后台已重启并重新连接。').waitFor()
+  await dialog.getByText('后台已重启，连接已恢复。').waitFor()
   await dialog.getByRole('button', { name: '完成' }).click()
   checks.push('Self restart waits for a new backend instance, blocks duplicate submission and honors reduced motion')
   for (const state of ['unknown', 'reserved', 'checking']) {
@@ -156,42 +174,47 @@ try {
     await card.getByLabel('更多操作', { exact: true }).click()
     await noGenericRetry(card)
     if (state === 'unknown') {
-      await card.getByText('暂时无法确认项目状态，尚未启动项目。状态会自动更新。').waitFor()
+      await card.getByText('暂时读不到项目状态，尚未启动。状态会自动更新。').waitFor()
       await page.screenshot({ path: path.join(evidence, 'status-only.png') })
     }
-    if (state === 'reserved') await card.getByText(runtimeMessages.reserved, { exact: true }).waitFor()
+    if (state === 'reserved') await card.getByText('这个端口由系统保留，请在项目中换一个端口。', { exact: true }).waitFor()
   }
   assert.equal(runtimeReads, 0)
   checks.push('Unknown, reserved and checking states show information without fake retry/start buttons, including More; rendering sends no manual check')
   runtimeState = 'conflict'; appStatus = 'failed'
   await page.reload()
-  const portDialog = page.getByRole('dialog', { name: '处理端口占用', exact: true })
-  const portAction = card.getByRole('button', { name: '处理端口占用', exact: true })
+  const portDialog = page.getByRole('dialog', { name: '处理占用', exact: true })
+  const portAction = card.getByRole('button', { name: '处理占用', exact: true })
   await portAction.click()
-  await portDialog.getByText('没有关闭该程序的权限，请从原程序退出', { exact: true }).waitFor()
+  await portDialog.getByText('无法关闭此程序，请在该程序中退出。', { exact: true }).waitFor()
   assert.deepEqual(await portDialog.getByRole('button').allTextContents(), ['关闭'])
-  assert.equal(await portDialog.getByText('端口被其他程序占用，确认关闭后将自动启动项目').count(), 0)
+  assert.equal(await portDialog.getByText('端口被占用。确认关闭占用程序后，会自动启动此项目。').count(), 0)
   await page.screenshot({ path: path.join(evidence, 'port-permission-reason.png') })
   await portDialog.getByRole('button', { name: '关闭', exact: true }).click()
   portError = true
   await portAction.click()
   await portDialog.getByRole('alert').filter({ hasText: '无法读取项目启动脚本' }).waitFor()
-  assert.deepEqual(await portDialog.getByRole('button').allTextContents(), ['关闭'])
+  assert.deepEqual(await portDialog.getByRole('button').allTextContents(), ['关闭', '重新查看'])
+  portError = false
+  const beforePortRefresh = portConfirms
+  await portDialog.getByRole('button', { name: '重新查看', exact: true }).click()
+  await portDialog.getByText('无法关闭此程序，请在该程序中退出。', { exact: true }).waitFor()
+  assert.equal(portConfirms, beforePortRefresh)
   await portDialog.getByRole('button', { name: '关闭', exact: true }).click()
-  checks.push('Unsafe port owner and unreadable entry show specific reasons; no generic retry or unsafe close action')
+  checks.push('Unsafe port owner and unreadable entry show specific reasons; viewing a fresh plan never closes a process')
   portError = false; portAllowed = true; expired = true
   await portAction.click()
-  await portDialog.getByRole('button', { name: '更新确认信息', exact: true }).waitFor()
+  await portDialog.getByRole('button', { name: '更新方案', exact: true }).waitFor()
   assert.equal(await portDialog.getByRole('button', { name: '关闭并启动', exact: true }).count(), 0)
   expired = false
-  await portDialog.getByRole('button', { name: '更新确认信息', exact: true }).click()
+  await portDialog.getByRole('button', { name: '更新方案', exact: true }).click()
   await portDialog.getByRole('button', { name: '关闭并启动', exact: true }).waitFor()
   assert.equal(portConfirms, 0)
   portFail = true
   await portDialog.getByRole('button', { name: '关闭并启动', exact: true }).click()
   await portDialog.getByRole('alert').filter({ hasText: '进程身份已变化' }).waitFor()
-  assert.deepEqual(await portDialog.getByRole('button').allTextContents(), ['关闭'])
-  assert.equal(await portDialog.getByText('端口被其他程序占用，确认关闭后将自动启动项目').count(), 0)
+  assert.deepEqual(await portDialog.getByRole('button').allTextContents(), ['关闭', '重新查看'])
+  assert.equal(await portDialog.getByText('端口被占用。确认关闭占用程序后，会自动启动此项目。').count(), 0)
   await portDialog.getByRole('button', { name: '关闭', exact: true }).click()
   portFail = false
   await portAction.click()
@@ -202,7 +225,7 @@ try {
   observed = false
   await page.reload()
   await card.locator('.startup-error summary').click()
-  await card.locator('.issue-content').getByText('没有关闭该程序的权限，请从原程序退出', { exact: true }).waitFor()
+  await card.locator('.issue-content').getByText('无法关闭此程序，请在该程序中退出。', { exact: true }).waitFor()
   await noGenericRetry(card)
   assert.equal(await card.getByText('查看占用程序后，可关闭并重新启动。').count(), 0)
   checks.push('Startup failure automatically shows the actual diagnostic reason, retains logs and has no check-again shortcut')

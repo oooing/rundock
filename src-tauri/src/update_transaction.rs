@@ -51,6 +51,19 @@ pub struct Status {
     pub backend_version: Option<String>,
     pub version_active: bool,
     pub status_error: String,
+    pub activation_state: &'static str,
+}
+
+pub fn activation_state(p: &Pending, backend: Option<&str>, current: &str) -> &'static str {
+    let (Ok(shell), Ok(target)) = (semver::Version::parse(current), semver::Version::parse(&p.version)) else {
+        return "unconfirmed";
+    };
+    if shell < target { return "restart_required"; }
+    match backend.and_then(|v| semver::Version::parse(v).ok()) {
+        Some(v) if v >= shell => "active",
+        Some(_) => "backend_pending",
+        None => "unconfirmed",
+    }
 }
 
 fn at_least(actual: &str, expected: &str) -> bool {
@@ -101,13 +114,41 @@ fn reconcile_finished(p: &mut Pending, active: bool, apps: &[serde_json::Value])
 /// can retire an old installation error; unresolved recovery remains explicit.
 pub fn status(directory: &Path, port: u16, current: &str) -> Result<Option<Status>, String> {
     let Some(mut p) = load(directory)? else { return Ok(None) };
-    let snapshot = serde_json::to_vec(&p).map_err(|e| e.to_string())?;
+    let mut snapshot = serde_json::to_vec(&p).map_err(|e| e.to_string())?;
     let health = request_with_timeout(port, "/api/health", None, Duration::from_secs(3));
     let backend = health.ok().and_then(|v| v["version"].as_str().map(str::to_owned));
-    let active = backend.as_deref().is_some_and(|v| at_least(v, &p.version))
-        && at_least(current, &p.version);
     let mut status_error = String::new();
+    // A keep-projects exit preserves the backend. Reopening the new shell is
+    // not a full activation, but a subsequent verified full activation must
+    // retire the staged reminder without stopping or restoring any project.
+    if p.phase == "staged" && activation_state(&p, backend.as_deref(), current) == "active" {
+        if let Ok(_guard) = RECOVERY_LOCK.try_lock() {
+            let Some(latest) = load(directory)? else { return Ok(None) };
+            if serde_json::to_vec(&latest).map_err(|e| e.to_string())? == snapshot {
+                archive(directory, &p)?;
+                if p.remaining.is_empty() && p.error.is_empty() {
+                    fs::remove_file(path(directory)).map_err(|e| e.to_string())?;
+                    return Ok(None);
+                }
+                // Preserve outstanding recovery evidence rather than hiding it.
+                p.phase = "finished".into();
+                save(directory, &p)?;
+                snapshot = serde_json::to_vec(&p).map_err(|e| e.to_string())?;
+            } else {
+                let version_active = backend.as_deref().is_some_and(|v| at_least(v, &latest.version))
+                    && at_least(current, &latest.version);
+                let activation_state = activation_state(&latest, backend.as_deref(), current);
+                return Ok(Some(Status { pending: latest, current_version: current.into(), activation_state,
+                    backend_version: backend, version_active, status_error }));
+            }
+        }
+    }
+    if p.phase == "staged" && activation_state(&p, backend.as_deref(), current) == "unconfirmed" {
+        status_error = "暂时无法确认后台版本，项目保持运行。".into();
+    }
     if p.phase == "finished" {
+        let active = backend.as_deref().is_some_and(|v| at_least(v, &p.version))
+            && at_least(current, &p.version);
         // Network reads must not hold the recovery lock: acknowledging a result
         // or retrying recovery must remain available while a status poll waits.
         let apps = request_with_timeout(port, "/api/apps", None, Duration::from_secs(5));
@@ -118,7 +159,9 @@ pub fn status(directory: &Path, port: u16, current: &str) -> Result<Option<Statu
                 // or replace a newer restore with this stale observation.
                 let version_active = backend.as_deref().is_some_and(|v| at_least(v, &latest.version))
                     && at_least(current, &latest.version);
+                let activation_state = activation_state(&latest, backend.as_deref(), current);
                 return Ok(Some(Status { pending: latest, current_version: current.into(),
+                    activation_state,
                     backend_version: backend, version_active, status_error }));
             }
             match apps {
@@ -142,7 +185,9 @@ pub fn status(directory: &Path, port: u16, current: &str) -> Result<Option<Statu
             }
         }
     }
-    Ok(Some(Status { pending: p, current_version: current.into(),
+    let active = backend.as_deref().is_some_and(|v| at_least(v, &p.version)) && at_least(current, &p.version);
+    let activation_state = activation_state(&p, backend.as_deref(), current);
+    Ok(Some(Status { pending: p, current_version: current.into(), activation_state,
         backend_version: backend, version_active: active, status_error }))
 }
 
@@ -448,6 +493,102 @@ mod tests {
             projects: vec![], remaining: vec![Project { id: "localplay".into(), name: "LocalPlay".into(),
                 run_id: "old-run".into(), config_hash: "hash".into(), temporary_port: 0 }],
             error: "old installation failure".into(), failures: vec!["stale degraded warning".into()] }
+    }
+
+    #[test]
+    fn kept_backend_and_new_window_are_not_a_pending_window_restart() {
+        let mut p = failed_record();
+        p.version = "2.1.0".into();
+        assert_eq!(activation_state(&p, Some("2.0.49"), "2.1.0"), "backend_pending");
+        assert_eq!(activation_state(&p, Some("2.1.0"), "2.1.0"), "active");
+        assert_eq!(activation_state(&p, Some("2.1.1"), "2.1.1"), "active");
+        assert_eq!(activation_state(&p, Some("2.1.0"), "2.1.1"), "backend_pending");
+        assert_eq!(activation_state(&p, Some("2.0.49"), "2.0.49"), "restart_required");
+        assert_eq!(activation_state(&p, None, "2.1.0"), "unconfirmed");
+        assert_eq!(activation_state(&p, Some("dev"), "2.1.0"), "unconfirmed");
+        assert_eq!(activation_state(&p, Some("2.1.0-rc.1"), "2.1.0"), "backend_pending");
+    }
+
+    #[test]
+    fn staged_reminder_is_retired_only_after_verified_full_activation_without_project_writes() {
+        use std::{io::Read, net::TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = std::env::temp_dir().join(format!("rundock-kept-update-{}-{port}", std::process::id()));
+        let mut p = failed_record();
+        p.version = "2.1.0".into(); p.phase = "staged".into();
+        p.remaining.clear(); p.error.clear(); p.failures.clear();
+        save(&dir, &p).unwrap();
+        let original = fs::read(path(&dir)).unwrap();
+        let server = std::thread::spawn(move || {
+            for version in ["2.0.49", "dev", "2.1.0"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut buffer = [0;8192];
+                let n = stream.read(&mut buffer).unwrap();
+                assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("GET /api/health "));
+                let body = format!(r#"{{"version":"{version}"}}"#);
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            }
+        });
+        let first = status(&dir, port, "2.1.0").unwrap().unwrap();
+        assert_eq!(first.activation_state, "backend_pending");
+        assert!(!first.version_active);
+        assert_eq!(fs::read(path(&dir)).unwrap(), original);
+        let unknown = status(&dir, port, "2.1.0").unwrap().unwrap();
+        assert_eq!(unknown.activation_state, "unconfirmed");
+        assert!(!unknown.status_error.is_empty());
+        assert_eq!(fs::read(path(&dir)).unwrap(), original);
+        assert!(status(&dir, port, "2.1.0").unwrap().is_none());
+        assert!(status(&dir, port, "2.1.0").unwrap().is_none());
+        assert!(!path(&dir).exists());
+        server.join().unwrap();
+        let history: Vec<_> = fs::read_dir(dir.join("update-history")).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(history.len(), 1);
+        assert_eq!(fs::read(&history[0]).unwrap(), serde_json::to_vec(&p).unwrap());
+        fs::remove_file(&history[0]).unwrap();
+        fs::remove_dir(dir.join("update-history")).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_status_cannot_retire_a_newer_record_written_during_health_read() {
+        use std::{io::Read, net::TcpListener, sync::mpsc};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = std::env::temp_dir().join(format!("rundock-staged-race-{}-{port}", std::process::id()));
+        let mut p = failed_record();
+        p.version = "2.1.0".into(); p.phase = "staged".into();
+        p.remaining.clear(); p.error.clear(); p.failures.clear();
+        save(&dir, &p).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut buffer = [0;8192];
+            let n = stream.read(&mut buffer).unwrap();
+            assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("GET /api/health "));
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let body = r#"{"version":"2.1.0"}"#;
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+        });
+        let polling_dir = dir.clone();
+        let poll = std::thread::spawn(move || status(&polling_dir, port, "2.1.0"));
+        started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        p.version = "2.2.0".into();
+        save(&dir, &p).unwrap();
+        release_tx.send(()).unwrap();
+        let result = poll.join().unwrap().unwrap().unwrap();
+        assert_eq!(result.pending.version, "2.2.0");
+        assert_eq!(result.activation_state, "restart_required");
+        assert!(!result.version_active);
+        assert_eq!(fs::read(path(&dir)).unwrap(), serde_json::to_vec(&p).unwrap());
+        assert!(!dir.join("update-history").exists());
+        server.join().unwrap();
+        fs::remove_file(path(&dir)).unwrap();
+        fs::remove_dir(dir).unwrap();
     }
 
     #[test]

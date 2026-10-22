@@ -7,6 +7,7 @@ import type { ExportSnapshot } from '@/types'
 import { getAppVersion, isTauri } from '@/tauri/window'
 import AppUpdatePanel from './AppUpdatePanel.vue'
 import MotionSettings from './MotionSettings.vue'
+import CardAppearanceSettings from './CardAppearanceSettings.vue'
 import { createAutoSettings, runtimeLimits } from '@/utils/autoSettings'
 import { appUpdate } from '@/stores/appUpdate'
 
@@ -108,6 +109,7 @@ onUnmounted(() => {
           </div>
         </section>
 
+        <CardAppearanceSettings />
         <MotionSettings />
 
         <details class="block advanced">
@@ -185,6 +187,7 @@ onUnmounted(() => {
 .m-body {
   padding: 18px 20px;
   overflow: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 22px;

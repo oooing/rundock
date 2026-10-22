@@ -7,12 +7,15 @@ import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
 import { CARD_COLOR_PALETTE, getCardVisualStyle, normalizeHexColor } from '@/utils/cardColors'
 import { runningEffect, startingEffect } from '@/stores/motion'
+import { cardDesign, cardHandlePosition } from '@/stores/cardAppearance'
 import StartupIndicator from './StartupIndicator.vue'
 import { cardServices, cardServiceDetails, browserEntry, browserEntryLabel } from '@/utils/cardServices'
 import { useAppStartup } from '@/composables/useAppStartup'
 import AppStartupNotice from './AppStartupNotice.vue'
 import PortResolutionDialog from './PortResolutionDialog.vue'
 import RestartDialog from './RestartDialog.vue'
+import ProjectLogo from './ProjectLogo.vue'
+import { getBaseURL } from '@/api/base'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
 const emit = defineEmits<{
@@ -29,6 +32,8 @@ const emit = defineEmits<{
 }>()
 
 const a = computed(() => props.app)
+const logoURL = computed(() => a.value.iconUrl ? `${getBaseURL()}${a.value.iconUrl}` : undefined)
+const handleOnTitle = computed(() => cardHandlePosition.value === 'top-left')
 const appsStore = useAppsStore()
 const { runtimeLocked, startupIssue, checkingIssue, resolvingPorts, operationBusy, portIssue, statusLabel } = useAppStartup(a)
 const portDialog = ref<InstanceType<typeof PortResolutionDialog> | null>(null)
@@ -223,13 +228,15 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 </script>
 
 <template>
-  <article ref="cardElement" class="card card-motion" :class="['s-' + a.status]" :data-motion="a.status === 'running' && !a.restarting ? runningEffect : 'none'" :style="cardStyle" :aria-busy="a.restarting || a.status === 'starting' || undefined" @keydown="onEscape">
+  <article ref="cardElement" class="card card-motion" :class="['s-' + a.status, 'design-' + cardDesign, 'handle-' + cardHandlePosition]" :data-motion="a.status === 'running' && !a.restarting ? runningEffect : 'none'" :style="cardStyle" :aria-busy="a.restarting || a.status === 'starting' || undefined" @keydown="onEscape">
+    <div v-if="cardDesign === 'watermark'" class="project-decoration" aria-hidden="true"><ProjectLogo :src="logoURL" variant="watermark" /></div>
     <span v-if="(a.status === 'starting' || a.restarting) && startingEffect !== 'none'" class="startup-wake" aria-hidden="true"></span>
     <header class="head">
       <div class="name-row">
-        <button class="ghost icon drag-handle" :title="tr('拖动排序或移到分组；Alt + 左右方向键调整顺序')" :aria-label="tr('拖动项目')" :disabled="moving" @pointerdown.stop.prevent="emit('drag-start', $event, a.id)" @keydown.alt.left.stop.prevent="emit('reorder-key', a.id, -1)" @keydown.alt.right.stop.prevent="emit('reorder-key', a.id, 1)">
-          <UiIcon name="grip" :size="20" />
+        <button type="button" class="ghost icon drag-handle" :title="tr('拖动排序或移到分组；Alt + 左右方向键调整顺序')" :aria-label="tr('拖动项目')" :disabled="moving" @pointerdown.stop.prevent="emit('drag-start', $event, a.id)" @keydown.alt.left.stop.prevent="emit('reorder-key', a.id, -1)" @keydown.alt.right.stop.prevent="emit('reorder-key', a.id, 1)">
+          <svg :width="handleOnTitle ? 4 : 16" :height="handleOnTitle ? 16 : 4" :viewBox="handleOnTitle ? '0 0 4 16' : '0 0 16 4'" fill="currentColor" aria-hidden="true"><circle v-for="n in 3" :key="n" :cx="handleOnTitle ? 2 : 3 + (n - 1) * 5" :cy="handleOnTitle ? 3 + (n - 1) * 5 : 2" r="1.2" /></svg>
         </button>
+        <ProjectLogo v-if="cardDesign === 'icon'" :src="logoURL" />
         <h3 v-if="!editingName"><button ref="nameButton" type="button" class="name-trigger" :title="tr('单击修改名称')" @click="startRename">{{ a.name }}</button></h3>
         <input v-else ref="nameInput" v-model="nameDraft" class="name-edit" :aria-label="tr('项目名称')" @keydown.enter.prevent="commitRename(true)" @keydown.esc.stop.prevent="cancelRename" @blur="commitRename()" />
         <button v-if="cloudAlerts?.length" class="build-alert-badge" :class="{ failed: buildFailures.length }" :aria-label="tr('查看 {0} 的构建提醒（{1}）', [a.name, cloudAlerts.length])" :title="tr('点击查看失败版本和构建详情')" aria-haspopup="dialog" @click.stop="emit('cloud-details', a.id)"><UiIcon name="alert-circle" :size="13" /><span>{{ buildBadge }}</span><span v-if="cloudAlerts.length > 1" class="build-alert-count">{{ cloudAlerts.length }}</span></button>
@@ -241,7 +248,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
     </header>
 
     <div class="meta">
-      <div v-if="sortedServices.length" class="services-heading"><span>{{ tr('服务与端口') }}</span><span>{{ sortedServices.length }}</span></div>
+      <div v-if="sortedServices.length" class="services-heading">{{ tr('服务与端口') }}</div>
       <div v-if="sortedServices.length" class="services" :tabindex="sortedServices.length > 2 ? 0 : undefined" role="region" :aria-label="tr('服务与端口')">
         <div v-for="svc in sortedServices" :key="svc.id" class="svc-row">
           <div class="role-wrap" @focusout="onMenuFocusOut">
@@ -351,11 +358,12 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 .svc-dot.inactive { background: var(--card-muted, var(--text-faint)); }
 .card {
   position: relative;
+  isolation: isolate;
   background: var(--card-bg, var(--bg-elev));
   color: var(--card-fg, var(--text));
   border: 1px solid var(--card-border, var(--border));
   border-radius: var(--radius);
-  padding: 16px 16px 10px;
+  padding: 28px 16px 10px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -363,6 +371,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
   transition: border-color 0.2s, background-color 0.3s;
 }
 .card:hover { border-color: var(--card-muted, var(--text-faint)); }
+.card.handle-top-left { padding-top: 16px; }
 .card.s-stopped { background: var(--card-bg, color-mix(in srgb, var(--bg-elev) 62%, black)); }
 .startup-wake { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(120deg, color-mix(in srgb, var(--card-glow, var(--accent)) 16%, transparent), transparent 70%); animation: startup-wake .65s ease-out both; }
 @keyframes startup-wake { from { opacity: 1; } to { opacity: 0; } }
@@ -371,7 +380,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
   .startup-wake { display: none; animation: none; }
 }
 .card.s-degraded { --card-state-color: var(--card-status-amber, var(--amber)); }
-.card.s-failed { --card-state-color: var(--card-status-red, var(--red)); }
+.card.s-failed { --card-state-color: #ef4444; }
 .card:is(.s-degraded, .s-failed) {
   box-shadow: inset 0 3px 0 var(--card-state-color);
   border-color: color-mix(in srgb, var(--card-state-color) 45%, var(--card-bg, var(--bg-elev)));
@@ -379,19 +388,31 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
 .card:is(.s-degraded, .s-failed):hover { border-color: var(--card-state-color); }
 .card :is(button, a, summary, select, input):focus-visible { outline: 2px solid var(--card-fg, var(--accent)); outline-offset: 3px; }
 .head { display: flex; flex-direction: column; gap: 8px; }
-.name-row { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
-.name-row h3 { margin: 2px 0 0; font-size: 15px; line-height: 1.45; font-weight: 600; overflow-wrap: anywhere; color: var(--card-fg, var(--text)); }
+.project-decoration { position: absolute; z-index: -1; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.name-row { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 8px 10px; min-width: 0; min-height: 38px; }
+.design-watermark .name-row { grid-template-columns: minmax(0, 1fr); }
+.handle-top-left .name-row { grid-template-columns: 24px 38px minmax(0, 1fr); column-gap: 8px; }
+.handle-top-left.design-watermark .name-row { grid-template-columns: 24px minmax(0, 1fr); }
+.name-row h3 { margin: 0; font-size: 15px; line-height: 1.45; font-weight: 600; overflow-wrap: anywhere; color: var(--card-fg, var(--text)); }
 .name-row h3, .name-row .name-edit { flex: 1; min-width: 0; }
 .name-row .name-trigger { display: block; width: 100%; padding: 0; border: 0; border-radius: 3px; background: transparent; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; }
 .name-row .name-trigger:hover:not(:disabled) { background: transparent; text-decoration: none; }
 .card .build-alert-badge { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--card-status-amber, var(--amber)); background: var(--card-panel, var(--bg)); color: var(--card-status-amber, var(--amber)); font-size: 11px; line-height: 16px; white-space: nowrap; }
 .card .build-alert-badge.failed { color: var(--card-status-red, var(--red)); border-color: var(--card-status-red, var(--red)); }
+.name-row .build-alert-badge { grid-column: 2; justify-self: start; margin-left: 0; max-width: 100%; }
+.design-watermark .name-row .build-alert-badge { grid-column: 1; }
+.handle-top-left .name-row .build-alert-badge { grid-column: 3; }
+.handle-top-left.design-watermark .name-row .build-alert-badge { grid-column: 2; }
 .card .build-alert-badge:hover { background: var(--card-panel, var(--bg-elev)); text-decoration: underline; }
 .build-alert-count { font-weight: 700; }
-.drag-handle { flex: 0 0 auto; cursor: grab; user-select: none; touch-action: none; color: var(--card-fg, var(--text)); }
-/* Align the grip dots, rather than the SVG's internal padding, with the content edge. */
-.card .drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 4px; border: 1px solid transparent; border-radius: 6px; margin: -1px 0 0 -8px; }
-.card .drag-handle:hover, .card .drag-handle:focus-visible { background: var(--card-panel, var(--bg)); border-color: transparent; outline: none; }
+.drag-handle { cursor: grab; user-select: none; touch-action: none; color: var(--card-muted, var(--text-dim)); }
+.card .drag-handle { position: absolute; z-index: 2; top: 2px; left: calc(50% - 14px); display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; margin: 0; }
+.card.handle-top-left .drag-handle { position: static; grid-column: 1; grid-row: 1; width: 24px; height: 28px; }
+.card .drag-handle, .card .drag-handle:hover:not(:disabled) { background: transparent; border-color: transparent; box-shadow: none; }
+.card .drag-handle:focus-visible { outline: 2px solid var(--card-fg, var(--accent)); outline-offset: 0; }
+@media (hover: hover) {
+  .card .drag-handle:hover:not(:disabled) { color: var(--card-fg, var(--text)); background: color-mix(in srgb, var(--card-fg, var(--text)) 14%, var(--card-bg, var(--bg-elev))); }
+}
 .drag-handle:active { cursor: grabbing; }
 .name-edit { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; padding: 3px 6px; color: var(--card-fg, var(--text)); background: var(--card-panel, var(--bg)); border-color: var(--card-border, var(--border)); border-radius: 4px; }
 .temporary-port-note { margin: 8px 0; color: var(--card-fg, var(--text)); font-size: 12px; line-height: 1.5; }
@@ -500,7 +521,7 @@ button.dim { color: var(--card-muted, var(--text-dim)); }
 .color-menu .clear-color { justify-content: flex-start; text-align: left; background: none; border: 0; padding: 4px; font-size: 12px; color: var(--card-muted, var(--text-dim)); }
 .color-menu .clear-color:hover { background: var(--card-panel, var(--bg-elev-2)); border-color: var(--card-border, var(--border)); }
 @media (max-width: 420px) {
-  .card { padding: 15px 14px 10px; }
+  .card { padding: 28px 14px 10px; }
   .group-select { max-width: 112px; }
 }
 </style>

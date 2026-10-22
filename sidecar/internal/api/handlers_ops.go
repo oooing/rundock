@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"github.com/launcher-sidecar/internal/app"
 	"github.com/launcher-sidecar/internal/launcher"
 	"github.com/launcher-sidecar/internal/probe"
+	"github.com/launcher-sidecar/internal/projecticon"
 	"github.com/launcher-sidecar/internal/store"
 )
 
@@ -94,6 +96,7 @@ func applyUpdate(a *store.App, b *updateAppBody) {
 func appView(a *store.App, s *Server) map[string]any {
 	row := map[string]any{
 		"id":            a.ID,
+		"iconUrl":       "/api/apps/" + url.PathEscape(a.ID) + "/icon?v=" + projecticon.Key(a.Cwd, a.EntryScript),
 		"name":          a.Name,
 		"entryScript":   a.EntryScript,
 		"cwd":           a.Cwd,

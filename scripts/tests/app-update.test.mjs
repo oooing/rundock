@@ -628,11 +628,50 @@ test('completed failed transaction can be acknowledged and checked again explici
 test('installed dialog makes acknowledgement primary and activation secondary without offering cancellation', async () => {
   const s = store(native([])); ready(s, 'installed')
   const html = await renderDialog(s)
-  assert.match(html, /新版已安装，下次启动生效。项目保持运行。/)
-  assert.match(html, /需完整退出后再打开；收起到托盘不算退出。/)
+  assert.match(html, /新版已安装，完整重启后生效。项目暂不受影响。/)
+  assert.match(html, /保留项目退出只会更新窗口；后台更新需停止项目。/)
   assert.match(html, /<button>立即生效<\/button>/)
   assert.match(html, /<button class="primary">知道了<\/button>/)
   assert.doesNotMatch(html, /取消安排|自动恢复|暂停并恢复/)
+})
+
+test('reopening an updated shell with a retained old backend explains activation and never stops projects', async () => {
+  const calls = []
+  let value = report('staged', { version: '2.1.0', currentVersion: '2.1.0', backendVersion: '2.0.49', activationState: 'backend_pending' })
+  const s = store(native(calls, { app_update_status: () => value }))
+  await s.prepareStartupUpdate()
+  assert.equal(s.appUpdate.phase, 'installed')
+  assert.equal(s.installedUpdateCopy.value.title, '后台待更新')
+  assert.equal(s.timers.size, 0)
+  const html = await renderDialog(s)
+  assert.match(html, /窗口已更新，项目继续运行；后台暂用旧版。/)
+  assert.match(html, /后台版本.*2\.0\.49/)
+  assert.match(html, /立即生效/)
+  assert.doesNotMatch(html, /下次启动生效|更新完成|项目已恢复/)
+  s.openAppUpdate(); await setImmediate()
+  assert.equal(s.timers.size, 1)
+  s.dismissAppUpdate()
+  assert.equal(s.timers.size, 0)
+  // Native verification retires the persisted record once both processes run the new version.
+  value = null
+  s.openAppUpdate(); await setImmediate()
+  assert.equal(s.appUpdate.phase, 'current')
+  assert.equal(s.appUpdate.info, null)
+  assert.equal(s.appUpdate.report, null)
+  assert.equal(s.timers.size, 0)
+  assert.ok(commands(calls).every(cmd => cmd === 'app_update_status'))
+})
+
+test('unconfirmed retained backend does not claim pending restart or allow activation', async () => {
+  const calls = [], s = store(native(calls, { app_update_status: () => report('staged', {
+    currentVersion: info.version, backendVersion: null, activationState: 'unconfirmed',
+  }) }))
+  await s.refreshUpdateStatus({ background: true })
+  const html = await renderDialog(s)
+  assert.match(html, /状态待确认/)
+  assert.doesNotMatch(html, /立即生效|下次启动生效|更新完成/)
+  await s.planAppUpdate()
+  assert.deepEqual(commands(calls), ['app_update_status'])
 })
 
 test('ready and legacy scheduled dialogs only offer silent installation', async () => {

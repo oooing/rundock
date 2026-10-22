@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { tr } from '@/i18n'
 import { getAppVersion, openProjectReleases } from '@/tauri/window'
-import { appUpdate as update, dismissAppUpdate, downloadAppUpdate, stageAppUpdate, installAppUpdate, planAppUpdate, cancelAppUpdatePlan, cancelScheduledUpdate, retryUpdateRestore, recheckAppUpdate, checkAppUpdate } from '@/stores/appUpdate'
+import { appUpdate as update, installedUpdateCopy, dismissAppUpdate, downloadAppUpdate, stageAppUpdate, installAppUpdate, planAppUpdate, cancelAppUpdatePlan, cancelScheduledUpdate, retryUpdateRestore, recheckAppUpdate, checkAppUpdate } from '@/stores/appUpdate'
 
 const currentVersion = ref('')
 const dialog = ref<HTMLElement | null>(null)
@@ -43,10 +43,10 @@ onUnmounted(() => {
   <div class="update-overlay" @click.self="dismissAppUpdate">
     <section ref="dialog" class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-title" tabindex="-1">
       <header>
-        <h2 id="update-title">{{ finished && backendPending && !update.report?.statusError && !update.report?.remaining.length ? tr('后台待更新') : title }}</h2>
+        <h2 id="update-title">{{ update.phase === 'installed' ? tr(installedUpdateCopy.title) : finished && backendPending && !update.report?.statusError && !update.report?.remaining.length ? tr('后台待更新') : title }}</h2>
         <button class="ghost icon" :aria-label="tr('关闭')" :disabled="busy" @click="dismissAppUpdate">✕</button>
       </header>
-      <p v-if="finished" class="version">
+      <p v-if="finished || (update.phase === 'installed' && update.report?.currentVersion)" class="version">
         {{ tr('当前版本') }} <strong>v{{ actualVersion }}</strong>
         <span v-if="update.report?.backendVersion && update.report.backendVersion !== actualVersion"> · {{ tr('后台版本') }} v{{ update.report.backendVersion }}</span>
         <span v-if="!update.report?.versionActive && update.info"> · {{ tr('本次目标') }} v{{ update.info.version }}</span>
@@ -60,8 +60,8 @@ onUnmounted(() => {
         <p v-else-if="update.phase === 'ready'" role="status">{{ tr('静默安装后，下次启动生效。项目保持运行。') }}</p>
         <p v-else-if="update.phase === 'staging'" role="status">{{ tr('正在后台静默安装，可关闭此窗口。项目保持运行。') }}</p>
         <template v-else-if="update.phase === 'installed'">
-          <p role="status">{{ tr('新版已安装，下次启动生效。项目保持运行。') }}</p>
-          <p class="hint">{{ tr('需完整退出后再打开；收起到托盘不算退出。') }}</p>
+          <p role="status">{{ tr(installedUpdateCopy.message) }}</p>
+          <p v-if="installedUpdateCopy.hint" class="hint">{{ tr(installedUpdateCopy.hint) }}</p>
         </template>
         <p v-else-if="installing" role="status">{{ tr('正在启用新版，完成后尝试重新启动项目。') }}</p>
         <template v-else-if="update.phase === 'confirming'">
@@ -88,7 +88,7 @@ onUnmounted(() => {
       </div>
       <footer>
         <template v-if="update.phase === 'installed'">
-          <button @click="planAppUpdate">{{ tr('立即生效') }}</button>
+          <button v-if="installedUpdateCopy.canActivate" @click="planAppUpdate">{{ tr('立即生效') }}</button>
           <button class="primary" @click="dismissAppUpdate">{{ tr('知道了') }}</button>
         </template>
         <template v-else-if="update.phase === 'ready'">

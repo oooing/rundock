@@ -17,6 +17,7 @@ import (
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/launcher"
 	"github.com/launcher-sidecar/internal/logbus"
+	"github.com/launcher-sidecar/internal/projecticon"
 	"github.com/launcher-sidecar/internal/publisher"
 	"github.com/launcher-sidecar/internal/releaseconfig"
 	"github.com/launcher-sidecar/internal/store"
@@ -42,6 +43,7 @@ type Server struct {
 	cloudDone          chan struct{}
 	runtimeMonitor     *runtimeMonitor
 	webEntries         *webEntryCache
+	projectIcons       projecticon.Resolver
 	runtimeDone        chan struct{}
 	portPlans          map[string]portPlan          // Guarded by startupMu; short-lived, single-use.
 	temporaryPortPlans map[string]temporaryPortPlan // Independent, non-destructive start tokens.

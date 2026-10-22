@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/launcher-sidecar/internal/recovery"
@@ -17,8 +18,9 @@ import (
 )
 
 type restartProcess struct {
-	PID  int    `json:"pid"`
-	Name string `json:"name"`
+	PID   int    `json:"pid"`
+	Name  string `json:"name"`
+	Entry string `json:"entry,omitempty"`
 }
 type restartView struct {
 	Kind              string           `json:"kind"`
@@ -27,23 +29,23 @@ type restartView struct {
 	Processes         []restartProcess `json:"processes"`
 	ConfirmationToken string           `json:"confirmationToken,omitempty"`
 	ExpiresAt         string           `json:"expiresAt,omitempty"`
+	Mode              string           `json:"mode,omitempty"`
+	ReasonCode        string           `json:"reasonCode,omitempty"`
+	NextSteps         []string         `json:"nextSteps,omitempty"`
+	LaunchCommand     string           `json:"launchCommand,omitempty"`
+	LaunchDirectory   string           `json:"launchDirectory,omitempty"`
 }
 
-// A complete, unique launch tree is required. Ambiguous, shared or detached
-// processes fail closed instead of acquiring ownership from a listening port.
+// Restart only a verified script tree or a unique, detached service worker.
 func restartTree(a *store.App, snap recovery.RuntimeSnapshot, self int) ([]recovery.Process, error) {
 	byPID := map[int]recovery.Process{}
-	var roots []recovery.Process
 	for _, p := range snap.Processes {
 		byPID[p.PID] = p
-		if recovery.IsEntryProcess(p, a.EntryScript) {
-			roots = append(roots, p)
-		}
 	}
-	if len(roots) != 1 {
-		return nil, fmt.Errorf("无法唯一确认项目启动进程，请先从原启动窗口退出；不会按端口强制关闭程序")
+	root, err := selectRestartRoot(a, snap, byPID)
+	if err != nil {
+		return nil, err
 	}
-	root := roots[0]
 	owned := recovery.OwnedProcesses(a, snap)
 	var result []recovery.Process
 	for _, p := range snap.Processes {
@@ -51,27 +53,27 @@ func restartTree(a *store.App, snap recovery.RuntimeSnapshot, self int) ([]recov
 			continue
 		}
 		if !ancestryContains(p.PID, root.PID, byPID) || p.PID <= 4 || p.Created == "" || p.Executable == "" || ancestryContains(self, p.PID, byPID) {
-			return nil, fmt.Errorf("进程身份不完整或涉及 RunDock 启动器，无法安全重启")
+			return nil, blockedRestart("incomplete_identity", "进程身份不完整或涉及 RunDock 启动器，无法安全重启。", "请在原开发工具中停止项目；若系统权限不足，请由启动该项目的用户处理。")
 		}
 		if recovery.IsConsoleHost(p) {
 			continue
 		}
 		if !owned[p.PID] {
-			return nil, fmt.Errorf("启动进程包含其他项目或归属不明的程序，无法安全重启；未关闭任何程序")
+			return nil, blockedRestart("mixed_tree", "启动进程包含其他项目或归属不明的程序，未关闭任何程序。", "请在原开发工具中分别停止相关任务，再通过各自的项目卡片启动。")
 		}
 		if p.PID != root.PID && !recovery.IsProjectWorker(p, a.Cwd) {
-			return nil, fmt.Errorf("启动进程还包含无法确认归属的程序 %s，请从原启动位置处理；未关闭任何程序", filepath.Base(p.Executable))
+			return nil, blockedRestart("shared_child", fmt.Sprintf("启动进程包含共享或归属不明的程序 %s。", filepath.Base(p.Executable)), "请先保存工作，在原开发工具中停止项目；这里不会结束共享程序。")
 		}
 		result = append(result, p)
 	}
 	observation := recovery.InspectRuntime(a, nil, snap)
 	if observation.State != "running" || len(observation.Conflicts) > 0 || len(observation.ReservedPorts) > 0 {
-		return nil, fmt.Errorf("项目运行状态或端口归属已变化，请重新查看")
+		return nil, blockedRestart("state_changed", "项目运行状态或端口归属已变化。", "点击“重新检查”获取当前状态；若卡片显示端口冲突，请先处理占用。")
 	}
 	for _, service := range observation.Services {
 		for _, listener := range snap.Listeners {
 			if listener.Port == service.Port && !ancestryContains(listener.PID, root.PID, byPID) {
-				return nil, fmt.Errorf("项目包含独立启动的服务，无法确认完整归属，请从原启动位置处理")
+				return nil, blockedRestart("independent_services", "项目还包含独立启动的服务，无法确认完整归属。", "请从原开发工具停止项目的全部服务，再通过卡片统一启动。")
 			}
 		}
 	}
@@ -89,6 +91,9 @@ func restartTree(a *store.App, snap recovery.RuntimeSnapshot, self int) ([]recov
 			result[0], result[i] = result[i], result[0]
 			break
 		}
+	}
+	if err := checkOtherManagedTargets(result, snap, a.ID); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -120,6 +125,8 @@ func (s *Server) restartEvidence(ctx context.Context, id string) (restartView, [
 	resume, err := s.Publisher.BeginRestart()
 	if err != nil {
 		v.Message = err.Error()
+		v.ReasonCode = "busy"
+		v.NextSteps = []string{"等待当前构建、发布或检查结束后，再打开重启。"}
 		return v, nil, "", nil
 	}
 	resume()
@@ -165,9 +172,33 @@ func (s *Server) restartEvidence(ctx context.Context, id string) (restartView, [
 		targets = []recovery.Process{self, parent}
 		v.Message = "将由独立启动器重启 RunDock 后台。页面会暂时断开，连接恢复后自动更新；不会启动新的发布任务。"
 	} else {
+		v.LaunchCommand = strings.TrimSpace(a.Cmd + " " + strings.Join(a.Args, " "))
+		v.LaunchDirectory = a.Cwd
+		observed := recovery.InspectRuntime(a, nil, snap)
+		if observed.State == "clear" {
+			v.ReasonCode = "stopped"
+			v.Message = "外部服务已停止，可从项目卡片重新启动。"
+			v.NextSteps = []string{"关闭此窗口，点击项目卡片的“启动”。"}
+			return v, nil, "", nil
+		}
+		// Diagnostic evidence is not permission to terminate. Keep it visible
+		// for blocked plans so the user can identify the actual service.
+		owned := recovery.OwnedProcesses(a, snap)
+		seen := map[int]bool{}
+		for _, listener := range snap.Listeners {
+			if !owned[listener.PID] || seen[listener.PID] {
+				continue
+			}
+			for _, p := range snap.Processes {
+				if p.PID == listener.PID {
+					v.Processes = append(v.Processes, restartProcess{PID: p.PID, Name: filepath.Base(p.Executable), Entry: recovery.DirectWorkerEntry(p, a.Cwd)})
+					seen[p.PID] = true
+				}
+			}
+		}
 		targets, err = restartTree(a, snap, os.Getpid())
 		if err != nil {
-			v.Message = err.Error()
+			applyRestartBlock(&v, err)
 			return v, nil, "", nil
 		}
 		// Never take over another managed project's process tree.
@@ -175,7 +206,7 @@ func (s *Server) restartEvidence(ctx context.Context, id string) (restartView, [
 			if s.Manager.Registry.IsRunning(rt.AppID) {
 				for _, p := range targets {
 					if p.PID == rt.RootPID || p.PID == rt.PID {
-						v.Message = "该进程属于另一个已托管项目，请从原项目卡片重启"
+						applyRestartBlock(&v, blockedRestart("other_managed_project", "该进程属于另一个已托管项目。", "请从原项目卡片重启。"))
 						return v, nil, "", nil
 					}
 				}
@@ -183,14 +214,21 @@ func (s *Server) restartEvidence(ctx context.Context, id string) (restartView, [
 		}
 		_, closeHandles, e := recovery.OpenRestartGroup(targets)
 		if e != nil {
-			v.Message = e.Error()
+			applyRestartBlock(&v, e)
 			return v, nil, "", nil
 		}
 		closeHandles()
-		v.Message = "已核实这些进程属于此项目。确认后将关闭它们，再按项目启动脚本重新启动并接管；未保存内容可能丢失。"
+		v.Mode = "entry_tree"
+		v.Message = "已核实进程归属。确认后结束下列进程，再按保存的配置启动并接管；请先保存工作。"
+		if len(targets) > 0 && !recovery.IsEntryProcess(targets[0], a.EntryScript) {
+			v.Mode = "detached_worker"
+			v.Message = "原启动器已退出，独立服务归属已核实。确认后结束下列进程，再按保存的配置启动并接管。"
+			v.NextSteps = []string{"请先保存工作；调试连接和未完成任务会中断。", "启动命令可能与当前预览不同，请确认后再继续。"}
+		}
 	}
+	v.Processes = []restartProcess{}
 	for _, p := range targets {
-		v.Processes = append(v.Processes, restartProcess{PID: p.PID, Name: filepath.Base(p.Executable)})
+		v.Processes = append(v.Processes, restartProcess{PID: p.PID, Name: filepath.Base(p.Executable), Entry: recovery.DirectWorkerEntry(p, a.Cwd)})
 	}
 	hash, err := hashOf(a.EntryScript)
 	if err != nil {

@@ -2,7 +2,12 @@ export interface RestartPlan {
   kind: 'managed' | 'external' | 'self'
   canRestart: boolean
   message: string
-  processes: { pid: number; name: string }[]
+  processes: { pid: number; name: string; entry?: string }[]
+  mode?: 'entry_tree' | 'detached_worker'
+  reasonCode?: string
+  nextSteps?: string[]
+  launchCommand?: string
+  launchDirectory?: string
   confirmationToken?: string
   expiresAt?: string
 }

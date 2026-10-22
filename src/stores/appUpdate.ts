@@ -1,16 +1,26 @@
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { Channel, invoke } from '@tauri-apps/api/core'
 
 export type AppUpdateInfo = { version: string; notes: string; url: string; size: number; installedLocally?: boolean }
 export type UpdateProject = { id: string; name: string; runId: string; configHash: string; temporaryPort?: number }
 type UpdatePlan = { fingerprint: string; projects: UpdateProject[] }
-type UpdateReport = { version: string; phase: string; projects: UpdateProject[]; remaining: UpdateProject[]; error: string; failures: string[]; installer?: unknown; currentVersion?: string; backendVersion?: string; versionActive?: boolean; statusError?: string }
+type UpdateReport = { version: string; phase: string; projects: UpdateProject[]; remaining: UpdateProject[]; error: string; failures: string[]; installer?: unknown; currentVersion?: string; backendVersion?: string; versionActive?: boolean; statusError?: string; activationState?: 'restart_required' | 'backend_pending' | 'active' | 'unconfirmed' }
 type UpdateOptions = { background?: boolean }
 export const appUpdate = reactive({
   phase: 'idle' as 'idle' | 'checking' | 'available' | 'current' | 'downloading' | 'ready' | 'staging' | 'planning' | 'confirming' | 'scheduled' | 'installing' | 'installed' | 'restoring' | 'finished',
   info: null as AppUpdateInfo | null,
   downloaded: 0, total: 0, error: '', dialogOpen: false,
   plan: null as UpdatePlan | null, report: null as UpdateReport | null,
+})
+// One explanation for the sidebar, settings and dialog. Installed files do not
+// imply that the retained backend has switched versions.
+export const installedUpdateCopy = computed(() => {
+  switch (appUpdate.report?.activationState) {
+    case 'backend_pending': return { title: '后台待更新', short: '窗口已更新', message: '窗口已更新，项目继续运行；后台暂用旧版。', hint: '只退出窗口不会更新后台；立即生效前会列出要重启的项目。', canActivate: true }
+    case 'unconfirmed': return { title: '状态待确认', short: '后台状态待确认', message: '暂时无法确认后台版本，项目保持运行。', hint: '稍后打开此窗口会自动核对，不会重复安装。', canActivate: false }
+    case 'active': return { title: '更新完成', short: '新版已生效', message: '窗口和后台均已更新，项目保持原状。', hint: '', canActivate: false }
+    default: return { title: '新版已安装', short: '等待完整重启', message: '新版已安装，完整重启后生效。项目暂不受影响。', hint: '保留项目退出只会更新窗口；后台更新需停止项目。', canActivate: true }
+  }
 })
 let startupUpdateStarted = false
 let stagePending = false
@@ -20,7 +30,8 @@ let reportTimer: ReturnType<typeof setTimeout> | undefined
 let statusRevision = 0
 let statusRequest: { revision: number; promise: Promise<boolean> } | undefined
 const busy = () => stagePending || cancelPending || ['checking', 'downloading', 'staging', 'planning', 'installing', 'restoring'].includes(appUpdate.phase)
-const waitingForStatus = () => ['staging', 'restoring'].includes(appUpdate.phase) || (appUpdate.phase === 'finished' && appUpdate.dialogOpen)
+const hasInstalledRecord = () => appUpdate.phase === 'installed' && appUpdate.report?.phase === 'staged'
+const waitingForStatus = () => ['staging', 'restoring'].includes(appUpdate.phase) || ((hasInstalledRecord() || appUpdate.phase === 'finished') && appUpdate.dialogOpen)
 function clearReportTimer() {
   if (reportTimer !== undefined) clearTimeout(reportTimer)
   reportTimer = undefined
@@ -35,7 +46,7 @@ function pollStatus() {
 }
 export function openAppUpdate() {
   if (appUpdate.info || appUpdate.error) appUpdate.dialogOpen = true
-  if (appUpdate.phase === 'finished') {
+  if (hasInstalledRecord() || appUpdate.phase === 'finished') {
     void refreshUpdateStatus({ background: true }).catch(e => { appUpdate.error = String(e) })
   }
 }
@@ -48,7 +59,7 @@ export function dismissAppUpdate() {
   if (['installing', 'planning'].includes(appUpdate.phase)) return
   cancelAppUpdatePlan()
   appUpdate.dialogOpen = false
-  if (appUpdate.phase === 'finished') clearReportTimer()
+  if (['installed', 'finished'].includes(appUpdate.phase)) clearReportTimer()
 }
 export function refreshUpdateStatus({ background = false }: UpdateOptions = {}): Promise<boolean> {
   if (statusRequest?.revision === statusRevision) return statusRequest.promise
@@ -60,7 +71,7 @@ export function refreshUpdateStatus({ background = false }: UpdateOptions = {}):
       if (revision !== statusRevision) return false
       if (!report) {
         // A verified obsolete result can be archived by the native layer.
-        if (appUpdate.phase === 'finished') {
+        if (hasInstalledRecord() || appUpdate.phase === 'finished') {
           appUpdate.report = null; appUpdate.info = null; appUpdate.error = ''
           appUpdate.phase = 'current'
         }
@@ -155,7 +166,7 @@ export async function stageAppUpdate() {
 // Keep callers of the former next-start action on the non-disruptive path.
 export const scheduleAppUpdate = stageAppUpdate
 export async function planAppUpdate() {
-  if (busy() || !['installed', 'confirming'].includes(appUpdate.phase) || appUpdate.info?.installedLocally !== true) return
+  if (busy() || !['installed', 'confirming'].includes(appUpdate.phase) || appUpdate.info?.installedLocally !== true || (appUpdate.phase === 'installed' && !installedUpdateCopy.value.canActivate)) return
   if (appUpdate.phase !== 'confirming') confirmationPhase = appUpdate.phase as typeof confirmationPhase
   invalidateStatus()
   appUpdate.phase = 'planning'; appUpdate.error = ''; appUpdate.plan = null

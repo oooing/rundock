@@ -480,19 +480,28 @@ pub async fn app_update_status(
         // its bounded wait. Never race the spawn/persist window.
         if let Ok(mut session) = state.0.try_lock() {
             reconcile_staging_with_identity(&directory, &mut session.installer_identity)?;
+            let mut had_staged_record = false;
             if let Some(p) = crate::update_transaction::load(&directory)? {
                 if p.phase == "staged" {
+                    had_staged_record = true;
                     session.installed = Some((p.version, false));
                     session.ready = None;
                 }
             }
             // Keep the session lock through reconciliation: otherwise an
             // activation can replace the record while this read is in flight.
-            return crate::update_transaction::status(&directory, crate::SIDECAR_PORT.parse().unwrap(), env!("CARGO_PKG_VERSION"));
+            let report = crate::update_transaction::status(&directory, crate::SIDECAR_PORT.parse().unwrap(), env!("CARGO_PKG_VERSION"))?;
+            if had_staged_record && report.is_none() {
+                // Do not let a retired activation override a future download.
+                session.installed = None;
+                session.plan = None;
+            }
+            return Ok(report);
         }
         Ok(crate::update_transaction::load(&directory)?.map(|pending| crate::update_transaction::Status {
             pending, current_version: env!("CARGO_PKG_VERSION").into(),
             backend_version: None, version_active: false, status_error: String::new(),
+            activation_state: "unconfirmed",
         }))
     })
     .await

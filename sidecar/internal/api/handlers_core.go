@@ -146,6 +146,8 @@ func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch rest {
+	case "icon":
+		s.handleAppIcon(w, r, id)
 	case "start":
 		s.handleStart(w, r, id)
 	case "startup-issue":

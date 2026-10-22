@@ -7,7 +7,7 @@ import { useAppsStore } from '@/stores/apps'
 import UiIcon from '@/components/UiIcon.vue'
 import { getAppVersion, isTauri, openProjectGitHub } from '@/tauri/window'
 import pkg from '../../package.json'
-import { appUpdate, openAppUpdate } from '@/stores/appUpdate'
+import { appUpdate, installedUpdateCopy, openAppUpdate } from '@/stores/appUpdate'
 
 const props = defineProps<{ selected: string | null; dropGroupId?: string | null }>()
 const emit = defineEmits<{
@@ -33,6 +33,8 @@ const countByGroup = (id: string) => apps.apps.filter((a) => a.groupId === id).l
 
 // 版本号：Tauri 壳里读打包版本，浏览器开发模式回退到 package.json
 const appVersion = ref(pkg.version)
+const updateVersion = computed(() => appUpdate.phase === 'finished' || (appUpdate.phase === 'installed' && ['backend_pending', 'active'].includes(appUpdate.report?.activationState || ''))
+  ? (appUpdate.report?.currentVersion || appVersion.value) : appUpdate.info?.version)
 onMounted(() => {
   getAppVersion().then((v) => {
     appVersion.value = v
@@ -139,7 +141,7 @@ async function createGroup() {
     <div class="footer">
       <button v-if="isTauri && (appUpdate.info || appUpdate.error)" class="update-link" :class="{ ready: appUpdate.phase === 'ready' || appUpdate.phase === 'installed', failed: !!appUpdate.error }" @click="openAppUpdate">
         <UiIcon :name="appUpdate.phase === 'ready' ? 'check-circle' : 'refresh'" :size="16" />
-        <span><strong>{{ appUpdate.error ? tr('更新未完成，点击查看') : appUpdate.phase === 'staging' ? tr('正在静默安装') : appUpdate.phase === 'scheduled' ? tr('下次启动安装') : appUpdate.phase === 'restoring' ? tr('正在恢复项目') : appUpdate.phase === 'finished' ? tr(appUpdate.report?.remaining.length ? '项目待恢复' : '更新结果，点击查看') : appUpdate.phase === 'installing' ? tr('正在安装…') : appUpdate.phase === 'installed' ? tr('新版已安装，点击查看') : appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small v-if="appUpdate.info">v{{ appUpdate.phase === 'finished' ? (appUpdate.report?.currentVersion || appVersion) : appUpdate.info.version }}<template v-if="appUpdate.phase === 'installed'"> · {{ tr('下次启动生效') }}</template><template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
+        <span><strong>{{ appUpdate.error ? tr('更新未完成，点击查看') : appUpdate.phase === 'staging' ? tr('正在静默安装') : appUpdate.phase === 'scheduled' ? tr('下次启动安装') : appUpdate.phase === 'restoring' ? tr('正在恢复项目') : appUpdate.phase === 'finished' ? tr(appUpdate.report?.remaining.length ? '项目待恢复' : '更新结果，点击查看') : appUpdate.phase === 'installing' ? tr('正在安装…') : appUpdate.phase === 'installed' ? tr(installedUpdateCopy.title) : appUpdate.phase === 'ready' ? tr('新版已就绪，点击升级') : appUpdate.phase === 'downloading' ? tr('正在后台下载更新') : tr('有新版本，点击查看') }}</strong><small v-if="appUpdate.info">v{{ updateVersion }}<template v-if="appUpdate.phase === 'installed'"> · {{ tr(installedUpdateCopy.short) }}</template><template v-if="appUpdate.phase === 'downloading' && appUpdate.total"> · {{ Math.min(100, Math.floor(appUpdate.downloaded / appUpdate.total * 100)) }}%</template></small></span>
       </button>
       <div class="footer-row">
         <button class="ghost settings-link" @click="emit('settings')"><UiIcon name="settings" :size="16" />{{ tr('设置') }}</button>

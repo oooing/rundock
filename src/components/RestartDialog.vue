@@ -23,6 +23,7 @@ let timer: ReturnType<typeof setTimeout> | undefined
 const busy = computed(() => loading.value || submitting.value)
 const canConfirm = computed(() => !error.value && !expired.value && restartConfirmationValid(plan.value))
 const canRenew = computed(() => !error.value && expired.value && plan.value?.canRestart && !!plan.value.confirmationToken)
+const canRecheck = computed(() => !plan.value?.canRestart && !!plan.value?.reasonCode && !['busy', 'stopped'].includes(plan.value.reasonCode))
 watch(busy, value => emit('busy', value))
 
 function invalidate() {
@@ -48,6 +49,7 @@ async function refresh() {
     const result = await api.restartPlan(id, abort.signal)
     if (disposed || current !== generation || id !== props.appId) return
     plan.value = result
+    if (result.reasonCode === 'stopped') await store.load()
     if (result.expiresAt) {
       const remaining = Date.parse(result.expiresAt) - Date.now()
       expired.value = !Number.isFinite(remaining) || remaining <= 0
@@ -120,7 +122,19 @@ defineExpose({ open })
     <p v-if="loading || submitting" role="status" class="progress"><span class="spinner" aria-hidden="true"></span>{{ loading ? tr('正在核验进程归属和执行中的任务…') : message }}</p>
     <template v-else-if="!done && !error && plan">
       <p>{{ tr(plan.message) }}</p>
-      <ul v-if="plan.processes?.length"><li v-for="process in plan.processes" :key="process.pid"><strong>{{ process.name }}</strong><span>PID {{ process.pid }}</span></li></ul>
+      <section v-if="plan.processes?.length" class="process-evidence">
+        <h3>{{ plan.canRestart ? tr('将关闭的进程') : tr('检测到的进程') }}</h3>
+        <ul><li v-for="process in plan.processes" :key="process.pid"><strong>{{ process.name }}</strong><span>PID {{ process.pid }}</span><code v-if="process.entry">{{ process.entry }}</code></li></ul>
+      </section>
+      <section v-if="plan.canRestart && plan.launchCommand" class="launch-config">
+        <h3>{{ tr('接管后启动方式') }}</h3>
+        <code>{{ plan.launchCommand }}</code>
+        <small>{{ plan.launchDirectory }}</small>
+      </section>
+      <section v-if="plan.nextSteps?.length" class="next-steps">
+        <h3>{{ plan.canRestart ? tr('请先确认') : tr('如何处理') }}</h3>
+        <p v-for="step in plan.nextSteps" :key="step">{{ tr(step) }}</p>
+      </section>
       <p v-if="canRenew" role="status">{{ tr('确认信息已过期。更新后需再次确认，才会执行操作。') }}</p>
     </template>
     <p v-if="done" class="success" role="status">{{ message }}</p>
@@ -128,7 +142,8 @@ defineExpose({ open })
     <footer>
       <button type="button" autofocus :disabled="submitting" @click="close">{{ done ? tr('完成') : busy || canConfirm || canRenew || (!error && plan?.kind === 'managed') ? tr('取消') : tr('关闭') }}</button>
       <button v-if="!busy && !done && canRenew" type="button" @click="refresh">{{ tr('更新确认信息') }}</button>
-      <button v-if="!done && canConfirm" type="button" class="primary" :disabled="busy" @click="confirm">{{ plan?.kind === 'self' ? tr('重启 RunDock') : tr('确认重启') }}</button>
+      <button v-if="!busy && !done && !error && canRecheck" type="button" @click="refresh">{{ tr('重新检查') }}</button>
+      <button v-if="!done && canConfirm" type="button" class="primary" :disabled="busy" @click="confirm">{{ plan?.kind === 'self' ? tr('重启 RunDock') : plan?.mode ? tr('重启并接管') : tr('确认重启') }}</button>
       <button v-if="plan?.kind === 'managed' && !busy && !done && !error" type="button" class="primary" @click="managedRestart">{{ tr('重启项目') }}</button>
     </footer>
   </dialog>
@@ -142,6 +157,11 @@ p { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 ul { padding: 0; list-style: none; display: grid; gap: 6px; max-height: 240px; overflow: auto; }
 li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
 li strong { overflow-wrap: anywhere; } li span { color: var(--text-dim); }
+h3 { font-size: 12px; color: var(--text-dim); margin: 16px 0 8px; font-weight: 500; }
+li code { flex-basis: 100%; color: var(--text-dim); overflow-wrap: anywhere; font-size: 11px; }
+.launch-config { padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.launch-config code,.launch-config small { display: block; overflow-wrap: anywhere; line-height: 1.6; }.launch-config small { color: var(--text-dim); margin-top: 6px; }
+.next-steps p { margin: 6px 0; }
 .progress { display: flex; align-items: center; gap: 8px; color: var(--accent); }
 .spinner { flex: 0 0 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: restart-spin .85s linear infinite; }
 .error { color: var(--red); } .success { color: var(--green); }

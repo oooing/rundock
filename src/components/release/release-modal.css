@@ -214,6 +214,8 @@
 .progress-block .run-target { min-height: 48px; padding: 10px 14px; border-radius: 9px; font-size: 12px; }
 .progress-block .run-target.waiting { color: var(--text-faint); }
 .progress-block .run-target.running { background: #203047; }
+.failure-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.failure-actions button { min-height: 40px; white-space: nowrap; }
 .progress-block .run-target.failed { background: #42272e; }
 .progress-block .run-target.succeeded { background: #1c332c; }
 .target-result-detail { display: block; margin-top: 4px; line-height: 1.5; overflow-wrap: anywhere; font-size: 11px; color: var(--text-dim); }

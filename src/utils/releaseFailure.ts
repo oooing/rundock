@@ -9,7 +9,7 @@ const buildStages = new Set(['building_targets', 'target_build', 'target_package
 export function releaseFailureAdvice(run: { status: string; stage: string; errorCode: string },
   logs: ReadonlyArray<Pick<ReleaseLog, 'stream' | 'text'>> = []) {
   if (run.status !== 'failed' || !buildStages.has(run.stage)
-    || !['target_step_failed', 'local_build_failed', 'build_disk_full'].includes(run.errorCode)) return null
+    || !['target_step_failed', 'local_build_failed', 'build_disk_full', 'build_native_source_missing', 'build_native_module_missing'].includes(run.errorCode)) return null
 
   let attemptStart = 0
   for (let i = logs.length - 1; i >= 0; i--) {
@@ -24,6 +24,14 @@ export function releaseFailureAdvice(run: { status: string; stage: string; error
       output = logs[i].text
       break
     }
+  }
+  if (run.errorCode === 'build_native_source_missing' || output.includes('[ANDROID_NATIVE_SOURCE_MISSING]')) return {
+    reason: '发布副本缺少原生模块构建文件。', values: [],
+    action: '将模块的 Gradle 配置、Manifest 和混淆规则纳入发布，返回检查后重新生成。',
+  }
+  if (run.errorCode === 'build_native_module_missing' || output.includes('[ANDROID_NATIVE_MODULE_MISSING]')) return {
+    reason: 'Android 原生模块校验失败。', values: [],
+    action: '检查原生模块构建文件是否纳入发布，以及混淆保留规则是否生效；返回检查后重新生成。',
   }
   const evidence = output.split(/\r?\n/).filter(line => diskFull.test(line))
   if (run.errorCode !== 'build_disk_full' && !evidence.length) return null

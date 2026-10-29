@@ -1,3 +1,30 @@
+# BEGIN RunDock managed ignores v1
+# Local files stay on disk. Restore groups in RunDock; tracked files are unchanged.
+# ignored: demos
+/[dD][eE][mM][oO]/
+/[dD][eE][mM][oO][sS]/
+# ignored: verification
+/artifacts/
+/outputs/
+/reports/
+# ignored: caches
+node_modules/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.gradle/
+.next/
+.nuxt/
+.vite/
+.wxt/
+.svelte-kit/
+.turbo/
+.parcel-cache/
+.tmp/
+**/src-tauri/target/
+# END RunDock managed ignores v1
 # 依赖
 node_modules/
 sidecar/dist/

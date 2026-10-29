@@ -84,6 +84,15 @@ const {
   retry, confirmSensitiveAction, startNew, preparation, preparationHistory, restorePreparation, submissionUncertain, runConnectionError,
 } = useReleaseModel(props, emit)
 const advancedSettings = ref<HTMLDetailsElement | null>(null)
+const executionLogs = ref<HTMLDetailsElement | null>(null)
+async function showFailureLogs() {
+  if (executionLogs.value) executionLogs.value.open = true
+  await nextTick()
+  executionLogs.value?.scrollIntoView({ block: 'nearest' })
+  executionLogs.value?.querySelector('summary')?.focus()
+  const box = executionLogs.value?.querySelector('.log-box')
+  if (box) box.scrollTop = box.scrollHeight
+}
 async function openAdvancedSettings() {
   if (advancedSettings.value) advancedSettings.value.open = true
   await nextTick()
@@ -191,7 +200,7 @@ async function returnToRelease() {
       </nav>
 
       <ReleaseProgressOverview v-if="activeRun" :run="activeRun" :logs="logs" :targets="runTargets" :deliveries="runDeliveries" :definitions="configuredTargets" :artifacts="runArtifacts" :cloud-handoff="automationHandedOff" :cloud-build="cloudBuild" :connection-lost="!!runConnectionError" :pending-result="!retryMetadataLoaded">
-        <template #actions><ReleaseCancelButton :key="activeRun.id" :run-id="activeRun.id" :status="activeRun.status" @refresh="poll" /></template>
+        <template #actions><div v-if="activeRun.status === 'failed'" class="failure-actions"><CopyErrorButton :text="localFailureText(app.name, activeRun, runTargets, logs)" /><button type="button" @click="showFailureLogs">{{ tr('查看失败日志') }}</button></div><ReleaseCancelButton v-else :key="activeRun.id" :run-id="activeRun.id" :status="activeRun.status" @refresh="poll" /></template>
       </ReleaseProgressOverview>
 
       <div ref="bodyRef" class="m-body" :inert="publishing || autoSubmitting">
@@ -224,7 +233,7 @@ async function returnToRelease() {
             <div class="progress-title"><strong>{{ runTargets.length ? tr('平台进度') : tr('本次操作') }}</strong><span class="release-version">{{ activeRun.createTag === false ? tr("代码更新") : (activeRun.versions?.map(version => version.tagName).join('、') || activeRun.tagName) }}</span></div>
             <ReleaseTargetProgress v-if="runTargets.length" :targets="runTargets" :deliveries="runDeliveries" :definitions="configuredTargets" :cloud-build="cloudBuild" />
             <details v-if="runDeliveries.length" class="execution-details delivery-details" :open="activeRun.status === 'succeeded'"><summary>{{ tr('发布详情') }}</summary><ReleaseDeliveryStatus :run="activeRun" :deliveries="runDeliveries" :artifacts="runArtifacts" :definitions="configuredTargets" @refresh="poll" /></details>
-            <details class="execution-details"><summary>{{ tr("执行日志") }}</summary><CopyErrorButton v-if="activeRun.status === 'failed'" :text="localFailureText(app.name, activeRun, runTargets, logs)" /><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">{{ tr("等待发布日志…") }}</div></div></details>
+            <details ref="executionLogs" class="execution-details" :open="activeRun.status === 'failed'"><summary>{{ tr("执行日志") }}</summary><div class="log-box"><div v-for="line in logs" :key="line.id" :class="['log-line', line.stream]">{{ line.text }}</div><div v-if="!logs.length" class="muted">{{ tr("等待发布日志…") }}</div></div></details>
             <SavedReleaseArtifacts v-if="hasLocalSavedOutputs" :run-id="activeRun.id" @sealed="sealedArtifactsPresent = $event" />
             <details v-if="runArtifacts.length && !sealedArtifactsPresent" class="artifacts"><summary>{{ tr('已生成产物（{0}）', [runArtifacts.length]) }} · {{ tr('总大小：{0}', [artifactSizeSummary(runArtifacts).size]) }}<template v-if="artifactSizeSummary(runArtifacts).missing"> · {{ tr('{0} 个大小未知', [artifactSizeSummary(runArtifacts).missing]) }}</template></summary><div v-for="artifact in runArtifacts" :key="`${artifact.targetId}-${artifact.path}`" class="artifact-row"><code :title="artifact.path">{{ artifact.path }}</code><span>{{ formatArtifactSize(artifact.sizeBytes) }}</span><code>{{ artifact.sha256.slice(0, 12) }}</code></div></details>
             <p v-if="connectionFailedBeforeBuild" class="muted">{{ tr('尚未构建或上传。返回发布后可继续；内容未变时会保留已通过的检查。') }}</p>

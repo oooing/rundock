@@ -17,6 +17,12 @@ func targetCommandFailure(targetName, step, output string, err error) (string, s
 		return "target_step_timeout", prefix + "超时，请查看执行记录并调整该步骤的时限后重试"
 	}
 	text := strings.ToLower(output)
+	if strings.Contains(text, "[android_native_source_missing]") {
+		return "build_native_source_missing", prefix + "缺少原生模块构建文件。请将模块的 Gradle 配置、Manifest 和混淆规则纳入发布，返回检查后重新生成。"
+	}
+	if strings.Contains(text, "[android_native_module_missing]") {
+		return "build_native_module_missing", prefix + "未通过原生模块校验。请检查原生模块构建文件是否纳入发布，以及混淆保留规则是否生效；返回检查后重新生成。"
+	}
 	if strings.Contains(text, "[rundock_required_asset_missing]") {
 		return "build_required_asset_missing", prefix + "图标或启动图缺失或无效。请补齐并纳入发布，移除对应忽略规则后重试。"
 	}

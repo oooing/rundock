@@ -51,3 +51,16 @@ test('all failure advice is translated', () => {
   assert.ok(dict[advice.reason]); assert.ok(dict[advice.action])
   assert.ok(dict[releaseFailureAdvice({ ...failed, errorCode: 'build_disk_full' }).reason])
 })
+
+test('native failure markers explain old task logs without attributing a previous attempt', () => {
+  const dict = JSON.parse(readFileSync(new URL('../../src/i18n/en.json', import.meta.url), 'utf8'))
+  for (const kind of ['SOURCE', 'MODULE']) {
+    const output = stdout(`BUILD SUCCESSFUL\n[ANDROID_NATIVE_${kind}_MISSING] private-path`)
+    const advice = releaseFailureAdvice(failed, [output, event('已清理本次临时副本')])
+    assert.ok(advice)
+    assert.match(advice.action, /返回检查/)
+    assert.ok(dict[advice.reason]); assert.ok(dict[advice.action])
+    assert.doesNotMatch(JSON.stringify(advice), /private-path/)
+    assert.equal(releaseFailureAdvice(failed, [output, event('Android：正在构建'), stdout('different failure')]), null)
+  }
+})

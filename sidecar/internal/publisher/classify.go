@@ -402,7 +402,9 @@ func looksReleaseSource(rel string) bool {
 	switch base {
 	case ".gitignore", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "go.mod", "go.sum",
 		"cargo.toml", "cargo.lock", "gemfile", "gemfile.lock", "pipfile", "poetry.lock",
-		"makefile", "dockerfile", "tsconfig.json", "vite.config.ts", "vite.config.js":
+		"makefile", "dockerfile", "tsconfig.json", "vite.config.ts", "vite.config.js",
+		"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+		"consumer-rules.pro", "proguard-rules.pro", "androidmanifest.xml":
 		return true
 	}
 	ext := strings.ToLower(path.Ext(base))

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import ts from 'typescript'
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 
 const source = readFileSync(new URL('../../src/components/release/preferences.ts', import.meta.url), 'utf8')
 const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
@@ -20,6 +20,7 @@ function fixture({ preparationsError = false } = {}) {
   api.listReleasePreparations = async () => { if (preparationsError) throw Error('offline'); return [] }
   const exports = {}
   new Function('require', 'exports', code)(id => {
+    if (id === 'vue') return { nextTick }
     if (id === '@/api/http') return { api, ApiError: Error }
     if (id === '@/i18n') return { tr: text => text }
     if (id === '@/utils/releasePreferences') return { readReleasePreferences: () => ({}) }

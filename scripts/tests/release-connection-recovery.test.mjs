@@ -13,7 +13,7 @@ function loadInstaller(file, name, deps) {
 function fixture(stage, commitSha = '', ready = true) {
   const calls = [], ctx = { props: { app: { id: 'fixture' } } }
   loadInstaller('state', 'installState', { ref })(ctx)
-  Object.assign(ctx, { candidateReady: ref(ready), load: () => { calls.push('load') } })
+  Object.assign(ctx, { candidateReady: ref(ready), cancelReleaseNotesDraft() {}, load: () => { calls.push('load') } })
   loadInstaller('progress', 'installProgress', { api: {}, tr: s => s, ApiError: Error, rememberReleaseSession: () => {} })(ctx)
   ctx.activeRun.value = { id: 'failed-run', status: 'failed', stage, commitSha }
   ctx.candidate.value = { id: 'accepted', accepted: true }

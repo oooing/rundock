@@ -100,12 +100,12 @@ export function installNotes(ctx: ReleaseContext) {
             if (!ctx.editedReleaseOptions.has('checks') && remembered.checksEnabled !== undefined)
                 ctx.checksEnabled.value = remembered.checksEnabled;
             if (!ctx.editedReleaseOptions.has('push')) {
-                ctx.syncPolicy.value = pf.profile?.syncPolicy || remembered.syncPolicy || 'auto';
+                ctx.syncPolicy.value = remembered.syncPolicy || pf.profile?.syncPolicy || 'auto';
                 ctx.localSyncPolicy.value = remembered.localSyncPolicy || ctx.syncPolicy.value;
             }
             const keepTargets = ctx.editedReleaseOptions.has('targets') || ctx.editedReleaseOptions.has('build');
             if (!keepTargets) {
-                ctx.buildMode.value = pf.profile?.buildMode || remembered.buildMode || 'github';
+                ctx.buildMode.value = remembered.buildMode || pf.profile?.buildMode || 'github';
                 for (const target of ctx.configuredTargets.value)
                     ctx.targetChoices.value[target.id] = ctx.defaultTargetChoice(target);
                 ctx.restoreTargetPreferences();

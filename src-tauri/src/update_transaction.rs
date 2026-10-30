@@ -172,9 +172,10 @@ pub fn status(directory: &Path, port: u16, current: &str) -> Result<Option<Statu
                     archive(directory, &before)?;
                     save(directory, &p)?;
                 }
-                // A fully resolved old attempt must not block future checks.
+                // A fully resolved attempt, including the current version, must
+                // not keep a result reminder or block future update checks.
                 if active && p.remaining.is_empty() && p.error.is_empty()
-                    && current != p.version && backend.as_deref() == Some(current)
+                    && backend.as_deref() == Some(current)
                 {
                     archive(directory, &p)?;
                     fs::remove_file(path(directory)).map_err(|e| e.to_string())?;
@@ -693,11 +694,21 @@ mod tests {
 
     #[test]
     fn old_record_is_archived_only_after_verified_version_and_recovery() {
+        assert_finished_record_reconciled("2.0.46");
+    }
+
+    #[test]
+    fn same_version_record_is_archived_only_after_verified_version_and_recovery() {
+        assert_finished_record_reconciled("2.0.47");
+    }
+
+    fn assert_finished_record_reconciled(target: &str) {
         use std::{io::Read, net::TcpListener};
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let dir = std::env::temp_dir().join(format!("rundock-reconcile-{}-{port}", std::process::id()));
-        let original = failed_record();
+        let mut original = failed_record();
+        original.version = target.into();
         save(&dir, &original).unwrap();
         let server = std::thread::spawn(move || {
             for body in [

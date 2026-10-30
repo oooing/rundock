@@ -97,7 +97,7 @@ test('a newer window with an older backend offers continued activation instead o
   const html = await renderDialog(s)
   assert.match(html, /后台待更新/)
   assert.match(html, /继续更新/)
-  assert.doesNotMatch(html, /更新完成|v2\.0\.46/)
+  assert.doesNotMatch(html, /更新完成|项目已恢复，可以继续使用|v2\.0\.46/)
   await s.recheckAppUpdate()
   assert.equal(s.appUpdate.phase, 'installed')
   assert.equal(s.appUpdate.info.version, '2.0.48')

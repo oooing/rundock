@@ -1,4 +1,5 @@
-// Only reusable choices belong here. Never persist versions, files, checks or approvals.
+// Only reusable choices belong here, including the check switch. Never persist
+// version numbers, selected files, check results or approvals.
 export interface ReleasePreferences {
   buildMode?: 'github' | 'local'
   syncPolicy?: 'auto' | 'local'

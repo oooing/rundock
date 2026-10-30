@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import ts from 'typescript'
+import { nextTick } from 'vue'
 
 // Exercise the real modal loader with an isolated API. No build or retry endpoint exists.
 function fixture(history, { saved, historyError } = {}) {
@@ -10,6 +11,7 @@ function fixture(history, { saved, historyError } = {}) {
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const shown = [], calls = []
   const deps = {
+    nextTick,
     api: {
       async releasePreflight() { calls.push('preflight'); return {} },
       async listReleases() { calls.push('history'); if (historyError) throw historyError; return history },

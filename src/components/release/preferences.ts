@@ -1,5 +1,6 @@
 import { api, ApiError } from '@/api/http';
 import { tr } from '@/i18n';
+import { nextTick } from 'vue';
 import type { ReleaseTarget, ReleaseVersionMode } from '@/types';
 import { readReleasePreferences, writeReleasePreferences, releasePreferenceKey } from '@/utils/releasePreferences';
 import type { ReleasePreferences } from '@/utils/releasePreferences';
@@ -27,6 +28,17 @@ export function installPreferences(ctx: ReleaseContext) {
         }
         return true;
     };
+    const persistLocalPreferences = () => {
+        ctx.captureTargetPreferences();
+        const preferences: ReleasePreferences = { buildMode: ctx.buildMode.value, syncPolicy: ctx.syncPolicy.value,
+            localSyncPolicy: ctx.localSyncPolicy.value,
+            releaseIntent: ctx.releaseIntent.value, localVersionMode: ctx.localVersionMode.value,
+            versionMode: ctx.versionMode.value, checksEnabled: ctx.checksEnabled.value,
+            releaseTargets: structuredClone(targetSelections) };
+        // These choices belong to this machine. A slow or failed profile API
+        // must not discard them when the dialog or application closes.
+        writeReleasePreferences(ctx.props.app.id, preferences);
+    };
     ctx.rememberPreferences = function () {
         if (!ctx.profileReady.value)
             return;
@@ -35,6 +47,13 @@ export function installPreferences(ctx: ReleaseContext) {
         ctx.preferenceError.value = '';
         if (ctx.preferenceTimer)
             clearTimeout(ctx.preferenceTimer);
+        ctx.preferenceTimer = null;
+        try { persistLocalPreferences(); }
+        catch (reason) {
+            ctx.preferenceStatus.value = 'error';
+            ctx.preferenceError.value = ctx.messageOf(reason);
+            return;
+        }
         ctx.preferenceTimer = setTimeout(ctx.saveRememberedPreferences, 250);
     };
     ctx.saveRememberedPreferences = function () {
@@ -43,18 +62,17 @@ export function installPreferences(ctx: ReleaseContext) {
         ctx.preferenceTimer = null;
         const body = ctx.profileBody();
         const appId = ctx.props.app.id;
-        ctx.captureTargetPreferences();
-        const preferences: ReleasePreferences = { buildMode: ctx.buildMode.value, syncPolicy: ctx.syncPolicy.value,
-            localSyncPolicy: ctx.localSyncPolicy.value,
-            releaseIntent: ctx.releaseIntent.value, localVersionMode: ctx.localVersionMode.value,
-            versionMode: ctx.versionMode.value, checksEnabled: ctx.checksEnabled.value,
-            releaseTargets: structuredClone(targetSelections) };
         const revision = ctx.preferenceRevision;
         ctx.preferenceStatus.value = 'saving';
         ctx.preferenceError.value = '';
+        try { persistLocalPreferences(); }
+        catch (reason) {
+            ctx.preferenceStatus.value = 'error';
+            ctx.preferenceError.value = ctx.messageOf(reason);
+            return Promise.resolve();
+        }
         ctx.preferenceSave = ctx.preferenceSave.catch(() => undefined).then(async () => {
             await api.saveReleaseProfile(appId, body);
-            writeReleasePreferences(appId, preferences);
             if (!ctx.disposed && revision === ctx.preferenceRevision)
                 ctx.preferenceStatus.value = 'saved';
         }).catch(reason => {
@@ -181,6 +199,10 @@ export function installPreferences(ctx: ReleaseContext) {
             if (preflightResult.status === 'rejected')
                 throw preflightResult.reason;
             ctx.applyPreflight(preflightResult.value, true);
+            // Flush hydration watchers while the form is still read-only. Loading
+            // saved values is not a user edit and must not autosave defaults.
+            await nextTick();
+            if (!isCurrent()) return;
             ctx.profileReady.value = true;
             if (ctx.editedReleaseOptions.size)
                 ctx.rememberPreferences();

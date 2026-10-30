@@ -12,7 +12,7 @@ export function load(file, dependencies) {
 }
 const pure = { ...load('utils/releaseContent', {}), ...load('utils/releasePresentation', {}), ...load('utils/releaseSafety', {}),
   ...load('utils/releasePreferences', { localStorage: { getItem: () => null, setItem() {} } }) }
-export function fixture({ local = false, single = false, api = {}, preferences = {}, realVersionSync = false, realNotes = false } = {}) {
+export function fixture({ local = false, single = false, api = {}, preferences = {}, preferenceStorage, realVersionSync = false, realNotes = false } = {}) {
   const requests = []
   const deps = {
     ref: vue.ref, computed: vue.computed, watch: vue.watch, nextTick: vue.nextTick,
@@ -21,6 +21,7 @@ export function fixture({ local = false, single = false, api = {}, preferences =
     navigator: { platform: 'Win32', userAgent: '' },
     api: { async saveReleaseProfile(_, body) { return body }, async createRelease(_, body) { requests.push(body); return { id: 'captured' } }, ...api },
     readReleasePreferences: () => preferences,
+    ...(preferenceStorage ? load('utils/releasePreferences', { localStorage: preferenceStorage }) : {}),
   }
   const ctx = { props: { app: { id: 'fixture', name: 'Fixture', status: 'stopped' } }, emit() {} }
   const scope = vue.effectScope()

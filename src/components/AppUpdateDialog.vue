@@ -75,7 +75,7 @@ onUnmounted(() => {
           <p v-if="update.report?.statusError" class="error" role="alert">{{ update.report.statusError }}</p>
           <p v-else-if="backendPending" class="hint">{{ tr('窗口已更新，后台仍是旧版。继续更新可启用新版后台。') }}</p>
           <p v-else-if="update.report?.versionActive && update.report.remaining.length" class="ready">{{ tr('版本已生效，以下项目尚未恢复。') }}</p>
-          <p v-if="!update.report?.statusError && !update.error && !update.report?.remaining.length" class="ready">{{ tr('项目已恢复，可以继续使用。') }}</p>
+          <p v-if="update.report?.versionActive && !backendPending && !update.report.statusError && !update.error && !update.report.remaining.length" class="ready">{{ tr('项目已恢复，可以继续使用。') }}</p>
           <ul v-if="!update.report?.statusError && update.report?.failures.length" class="project-list error"><li v-for="failure in update.report.failures" :key="failure">{{ failure }}</li></ul>
           <p v-if="update.report?.remaining.length" class="hint">{{ tr('保持现状会结束本次恢复，不启动或停止项目。') }}</p>
         </template>

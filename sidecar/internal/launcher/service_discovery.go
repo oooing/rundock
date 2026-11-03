@@ -89,6 +89,13 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 	for p := range treePIDs {
 		treeSet[p] = true
 	}
+	var auxiliaryPIDs map[int]bool
+	if l.AuxiliaryServiceProcesses != nil {
+		auxiliaryPIDs = l.AuxiliaryServiceProcesses(treePIDs)
+	}
+	// Only auxiliary records expire with their listener. Required services must
+	// remain registered when they crash so health monitoring can report it.
+	l.retireAuxiliaryServices(rt.RunID, all, col)
 
 	// === 证据2：日志里出现的端口 URL（时间窗内）===
 	// 从 runState 收集的 candidateURLs 提取端口
@@ -125,9 +132,6 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 
 	registered := 0
 	for _, p := range all {
-		if l.Store.HasService(rt.RunID, p.Port) {
-			continue
-		}
 		if rejectedPID, ok := rejectedPorts[p.Port]; ok && rejectedPID == p.PID {
 			continue
 		}
@@ -138,6 +142,15 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 		isNew := !beforePorts[p.Port] // 不在启动前快照里 = 启动后新出现
 		logEvidence := inLog && isNew
 		if !ownedByTree && (authoritative || !logEvidence) {
+			continue
+		}
+		scope := discoveredServiceScope(readiness, p.Port, auxiliaryPIDs[p.PID], inLog || hintedPorts[p.Port] || declaredRoles[p.Port] != "" || manualRoles[p.Port] != "")
+		if l.Store.HasService(rt.RunID, p.Port) {
+			// A shared process snapshot can arrive after the first observation.
+			// Refresh classification for still-live ports before health aggregation.
+			if auxiliaryPIDs[p.PID] {
+				_ = l.Store.UpdateRunServiceStatusScope(rt.RunID, p.Port, scope)
+			}
 			continue
 		}
 		url := probe.JoinHostPort("localhost", p.Port)
@@ -187,14 +200,14 @@ func (l *Launcher) discoverServices(appID string, rt *app.Runtime, before []prob
 			DetectedAt:  time.Now().UTC().Format(time.RFC3339),
 			Role:        roleStr,
 			RoleSource:  roleSource,
-			StatusScope: serviceStatusScope(readiness, p.Port),
+			StatusScope: scope,
 		}
 		_ = l.Store.UpsertService(svc)
 		_ = l.Store.InsertPort(rt.RunID, p.Port, "tcp")
 		registered++
 		if col != nil {
-			col.Info(fmt.Sprintf("[发现] 登记服务 port=%d url=%s role=%s source=%s evidence=%s pid=%d",
-				p.Port, url, roleStr, roleSource, evidence, p.PID))
+			col.Info(fmt.Sprintf("[发现] 登记服务 port=%d url=%s role=%s source=%s evidence=%s pid=%d scope=%s",
+				p.Port, url, roleStr, roleSource, evidence, p.PID, scope))
 		}
 		if l.Hub != nil {
 			l.Hub.BroadcastURL(appID, url, []int{p.Port})
@@ -226,6 +239,34 @@ func serviceStatusScope(readiness *startupReadiness, port int) string {
 		return "auxiliary"
 	}
 	return "required"
+}
+
+func discoveredServiceScope(readiness *startupReadiness, port int, internalWorker, explicit bool) string {
+	if readiness != nil && len(readiness.urls) > 0 {
+		return serviceStatusScope(readiness, port)
+	}
+	if internalWorker && !explicit {
+		return "auxiliary"
+	}
+	return "required"
+}
+
+func (l *Launcher) retireAuxiliaryServices(runID string, listeners []probe.PortListener, col *logbus.Collector) {
+	listening := map[int]bool{}
+	for _, p := range listeners {
+		listening[p.Port] = true
+	}
+	services, err := l.Store.ListServicesByRun(runID)
+	if err != nil {
+		return
+	}
+	for _, svc := range services {
+		if svc.StatusScope == "auxiliary" && !listening[svc.Port] {
+			if err := l.Store.DeleteAuxiliaryService(svc.ID); err == nil && col != nil {
+				col.Info(fmt.Sprintf("[发现] 辅助端口 %d 已关闭，移出当前服务列表", svc.Port))
+			}
+		}
+	}
 }
 
 const (

@@ -54,6 +54,7 @@ export const useAppsStore = defineStore('apps', () => {
   async function createFromCandidate(c: ImportCandidate, groupId?: string): Promise<AppView> {
     const body: CreateAppBody = {
       name: c.name,
+      accessLinks: c.accessLinks || [],
       entryScript: c.entryScript,
       cwd: c.cwd,
       adapterType: c.adapterType,

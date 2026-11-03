@@ -1812,5 +1812,18 @@
   "恢复只撤销本组规则；你原有的忽略规则仍然生效。": "Restoring removes only this group’s rules. Your existing ignore rules still apply.",
   "正在更新文件列表，请稍候…": "Updating the file list. Please wait…",
   "已长期忽略，本地文件保留。": "Ignored persistently. Local files are preserved.",
-  "已撤销本组规则。未被其他规则忽略的文件可重新选择。": "Group rules removed. Files not ignored by other rules can be selected again."
+  "已撤销本组规则。未被其他规则忽略的文件可重新选择。": "Group rules removed. Files not ignored by other rules can be selected again.",
+  "访问入口": "Access links",
+  "添加访问入口": "Add access link",
+  "编辑访问入口": "Edit access links",
+  "入口名称 {0}": "Link name {0}",
+  "入口地址 {0}": "Link URL {0}",
+  "移除入口 {0}": "Remove link {0}",
+  "与「{0}」内容相同": "Same content as “{0}”",
+  "与已添加的「{0}」脚本内容相同": "Same script content as existing “{0}”",
+  "仍作为独立项目添加": "Add as a separate project anyway",
+  "与「{0}」调用相同启动脚本": "Calls the same startup script as “{0}”",
+  "将访问入口合并到已有项目": "Merge links into existing project",
+  "名称": "Name",
+  "编辑": "Edit"
 }

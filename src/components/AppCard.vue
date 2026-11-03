@@ -15,6 +15,7 @@ import AppStartupNotice from './AppStartupNotice.vue'
 import PortResolutionDialog from './PortResolutionDialog.vue'
 import RestartDialog from './RestartDialog.vue'
 import ProjectLogo from './ProjectLogo.vue'
+import ProjectAccessLinks from './ProjectAccessLinks.vue'
 import { getBaseURL } from '@/api/base'
 
 const props = defineProps<{ app: AppView; groups: Group[]; moving?: boolean; cloudAlerts?: CloudBuildStatus[] }>()
@@ -276,6 +277,7 @@ const cardStyle = computed(() => getCardVisualStyle(a.value.cardColor, a.value.s
         <span class="k">{{ tr('访问地址') }}</span>
         <a class="v mono" :href="a.lastUrl" :title="a.lastUrl + (urlReachable ? '' : tr('（服务未运行）'))" @click.prevent="emit('open-url', a.id)">{{ a.lastUrl }}</a>
       </div>
+      <ProjectAccessLinks :app="a" @open="url => openServiceUrl(url)" />
       <p v-if="a.temporaryPort" class="temporary-port-note" role="status">{{ tr('本次临时端口：{0} → {1}（原配置未修改）', [a.temporaryPort.originalPort, a.temporaryPort.port]) }}</p>
       <div class="meta-row path" :title="a.entryScript">
         <span class="k">{{ tr('启动脚本') }}</span>

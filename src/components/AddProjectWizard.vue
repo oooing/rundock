@@ -6,6 +6,7 @@ import { isTauri } from '@/tauri/window'
 import { useAppsStore } from '@/stores/apps'
 import UiIcon from './UiIcon.vue'
 import StartupEntryPanel from './StartupEntryPanel.vue'
+import AccessLinkFields from './AccessLinkFields.vue'
 import './projectImport.css'
 import type { ImportCandidate, StartupDiscovery } from '@/types'
 
@@ -21,6 +22,8 @@ const dropHint = ref('')
 const result = ref<StartupDiscovery | null>(null)
 const selected = ref('')
 const candidate = ref<ImportCandidate | null>(null)
+const allowDuplicate = ref(false)
+const duplicateBlocked = computed(() => !!candidate.value?.duplicateApps?.length && !allowDuplicate.value)
 const busy = ref(false)
 const loadingEntry = ref(false)
 const saving = ref(false)
@@ -160,7 +163,7 @@ async function loadEntry(entry: string) {
   entryAbort?.abort()
   clearTimeout(entryTimer)
   entryTimer = undefined
-  candidate.value = null; error.value = ''; loadingEntry.value = !!entry
+  candidate.value = null; allowDuplicate.value = false; error.value = ''; loadingEntry.value = !!entry
   if (!entry) return
   errorPhase.value = 'entry'
   const controller = new AbortController()
@@ -170,7 +173,7 @@ async function loadEntry(entry: string) {
   entryTimer = timeout
   try {
     const value = await api.import(entry, controller.signal)
-    if (!disposed && request === entryRequest && selected.value === entry && cleanPath.value === source) candidate.value = value
+    if (!disposed && request === entryRequest && selected.value === entry && cleanPath.value === source) candidate.value = { ...value, accessLinks: value.accessLinks || [] }
   } catch (cause: unknown) {
     if (!disposed && request === entryRequest && (!controller.signal.aborted || timedOut)) error.value = timedOut ? tr('识别超时，请重试。') : cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -181,10 +184,21 @@ async function loadEntry(entry: string) {
 watch(selected, entry => { void loadEntry(entry) }, { flush: 'sync' })
 function retry() { if (errorPhase.value === 'entry') void loadEntry(selected.value); else void inspect(true) }
 async function save() {
-  if (!candidate.value || busy.value || loadingEntry.value || saving.value || !candidate.value.name.trim() || existing.value) return
+  if (!candidate.value || busy.value || loadingEntry.value || saving.value || duplicateBlocked.value || !candidate.value.name.trim() || existing.value) return
   saving.value = true; error.value = ''; errorPhase.value = 'save'
   try { const created = await apps.createFromCandidate(candidate.value, props.groupId); emit('added', created.name) }
   catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { saving.value = false }
+}
+async function mergeAccessLinks(id: string) {
+  if (!candidate.value || saving.value) return
+  const existingApp = apps.apps.find(a => a.id === id)
+  if (!existingApp) return
+  saving.value = true; error.value = ''; errorPhase.value = 'save'
+  try {
+    await apps.update(id, { accessLinks: [...(existingApp.accessLinks || []), ...(candidate.value.accessLinks || [])] })
+    emit('added', existingApp.name)
+  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { saving.value = false }
 }
 onMounted(() => { pathInput.value?.focus({ preventScroll: true }); if (props.initialPath) void inspect() })
@@ -230,22 +244,34 @@ onUnmounted(() => { disposed = true; invalidateSource(); if (previousFocus?.isCo
             <legend class="sr-only">{{ tr('启动方式') }}</legend>
             <section v-for="option in result!.options" :key="option.path" class="entry-scope" :class="{ selected: selected === option.path }" :data-entry="option.path">
               <label class="entry-heading"><input v-model="selected" type="radio" name="startup-option" :value="option.path" /><span><strong>{{ option.command || option.relativePath }}</strong><small v-if="option.command">{{ option.relativePath }}</small></span><em v-if="option.recommended">{{ tr('推荐') }}</em></label>
+              <p v-if="option.duplicateOf" class="duplicate-note">{{ tr('与「{0}」内容相同', [option.duplicateOf]) }}</p>
               <StartupEntryPanel v-if="selected === option.path" :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" @retry="retry" />
             </section>
           </fieldset>
         </details>
+        <section v-if="candidate?.duplicateApps?.length && !existing" class="duplicate-note" role="status">
+          <p>{{ tr('与已添加的「{0}」脚本内容相同', [candidate.duplicateApps.map(a => a.name).join('、')]) }}</p>
+          <label><input v-model="allowDuplicate" type="checkbox" :disabled="saving" />{{ tr('仍作为独立项目添加') }}</label>
+        </section>
+        <section v-if="candidate?.relatedApps?.length" class="duplicate-note">
+          <div v-for="related in candidate.relatedApps" :key="related.id"><p>{{ tr('与「{0}」调用相同启动脚本', [related.name]) }}</p><button :disabled="saving || !candidate.accessLinks?.length" @click="mergeAccessLinks(related.id)">{{ tr('将访问入口合并到已有项目') }}</button></div>
+        </section>
         <section v-if="candidate" class="import-details">
           <label for="import-app-name">{{ tr('应用名称') }}</label>
           <input id="import-app-name" v-model="candidate.name" :disabled="saving" />
         </section>
+        <section v-if="candidate" class="import-details"><h3>{{ tr('访问入口') }}</h3><AccessLinkFields v-model="candidate.accessLinks" :disabled="saving" /></section>
         <section v-if="help" class="preparation"><h3>{{ tr('如何准备启动入口') }}</h3><p>{{ tr('先查看项目说明中的“本地运行”或“快速开始”。') }}</p><p>{{ tr('Windows 项目可提供 .bat、.cmd 或 .ps1 启动脚本；Node 项目可在 package.json 中提供 dev、start 或 serve 命令。') }}</p><p>{{ tr('如果项目由 AI 或开发者提供，请让对方提供一个能够启动完整项目的脚本，再把脚本导入这里。') }}</p></section>
       </div>
-      <footer><span>{{ tr('添加后不会自动启动') }}</span><button class="cancel" :disabled="saving" @click="emit('close')">{{ tr('取消') }}</button><button class="primary" :disabled="recognizing || saving || !candidate?.name.trim() || !!existing" @click="save">{{ saving ? tr('正在添加…') : hasDanger ? tr('我已知晓风险，确认导入') : tr('确认添加') }}</button></footer>
+      <footer><span>{{ tr('添加后不会自动启动') }}</span><button class="cancel" :disabled="saving" @click="emit('close')">{{ tr('取消') }}</button><button class="primary" :disabled="recognizing || saving || duplicateBlocked || !candidate?.name.trim() || !!existing" @click="save">{{ saving ? tr('正在添加…') : hasDanger ? tr('我已知晓风险，确认导入') : tr('确认添加') }}</button></footer>
     </section>
   </div>
 </template>
 
 <style scoped>
+.duplicate-note { margin: 10px 0; color: var(--amber); font-size: 12px; line-height: 1.6; }
+.duplicate-note p { margin: 6px 0; }
+.duplicate-note label { display:flex; gap:8px; align-items:center; }
 .add-overlay { background: #0008; }
 .add-modal { display: flex; flex-direction: column; }
 header { display: flex; align-items: center; padding: 24px 24px 18px; gap: 12px; }

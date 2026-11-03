@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/launcher-sidecar/internal/accesslink"
 	"time"
 )
 
@@ -11,6 +12,7 @@ import (
 
 // App 是一个被托管的启动单元。
 type App struct {
+	AccessLinks []accesslink.Link `json:"accessLinks"`
 	// Run-only launch metadata; never part of persistent configuration or exports.
 	TemporaryPort *TemporaryPort    `json:"-"`
 	ID            string            `json:"id"`
@@ -158,6 +160,17 @@ func (s *Store) UpdateServiceStatusScope(id, scope string) error {
 	return err
 }
 
+func (s *Store) UpdateRunServiceStatusScope(runID string, port int, scope string) error {
+	_, err := s.db.Exec(`UPDATE app_services SET status_scope=? WHERE app_run_id=? AND port=?`, scope, runID, port)
+	return err
+}
+
+// Keep the discovery/retirement log and port history for diagnosis.
+func (s *Store) DeleteAuxiliaryService(id string) error {
+	_, err := s.db.Exec(`DELETE FROM app_services WHERE id=? AND status_scope='auxiliary'`, id)
+	return err
+}
+
 // ListServicesByApp 返回某项目下所有服务（按端口排序）。
 func (s *Store) ListServicesByApp(appID string) ([]*AppService, error) {
 	rows, err := s.db.Query(`SELECT id,app_id,app_run_id,port,url,health,last_checked,detected_at,role,role_source,status_scope,health_reason,health_probe_url
@@ -284,12 +297,13 @@ func (s *Store) CreateApp(a *App) error {
 	env, _ := json.Marshal(a.Env)
 	tags, _ := json.Marshal(a.Tags)
 	hints := hintsJSON(a.PortHints)
+	links, _ := json.Marshal(a.AccessLinks)
 	_, err := s.db.Exec(`INSERT INTO apps
-		(id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,last_status,sort_order,card_color)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,last_status,sort_order,card_color,access_links_json)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.Name, a.EntryScript, a.Cwd, a.AdapterType, a.Cmd, string(args), string(env),
 		string(tags), nullableString(a.GroupID), hints, a.HealthURL, a.ScriptHash, boolToInt(a.Confirmed),
-		a.ConfirmedHash, a.LastStatus, a.SortOrder, a.CardColor)
+		a.ConfirmedHash, a.LastStatus, a.SortOrder, a.CardColor, string(links))
 	return err
 }
 
@@ -297,7 +311,7 @@ func (s *Store) CreateApp(a *App) error {
 func (s *Store) GetApp(id string) (*App, error) {
 	row := s.db.QueryRow(`SELECT id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,
 		group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,created_at,
-		last_started_at,last_url,last_status,sort_order,card_color FROM apps WHERE id=?`, id)
+		last_started_at,last_url,last_status,sort_order,card_color,access_links_json FROM apps WHERE id=?`, id)
 	return scanApp(row)
 }
 
@@ -305,7 +319,7 @@ func (s *Store) GetApp(id string) (*App, error) {
 func (s *Store) ListApps() ([]*App, error) {
 	rows, err := s.db.Query(`SELECT id,name,entry_script,cwd,adapter_type,cmd,args_json,env_json,tags_json,
 		group_id,port_hints_json,health_url,script_hash,confirmed,confirmed_hash,created_at,
-		last_started_at,last_url,last_status,sort_order,card_color FROM apps ORDER BY sort_order ASC, name ASC`)
+		last_started_at,last_url,last_status,sort_order,card_color,access_links_json FROM apps ORDER BY sort_order ASC, name ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -327,12 +341,13 @@ func (s *Store) UpdateApp(a *App) error {
 	env, _ := json.Marshal(a.Env)
 	tags, _ := json.Marshal(a.Tags)
 	hints := hintsJSON(a.PortHints)
+	links, _ := json.Marshal(a.AccessLinks)
 	_, err := s.db.Exec(`UPDATE apps SET name=?,entry_script=?,cwd=?,adapter_type=?,cmd=?,args_json=?,env_json=?,
 		tags_json=?,group_id=?,port_hints_json=?,health_url=?,script_hash=?,confirmed=?,confirmed_hash=?,
-		last_started_at=?,last_url=?,last_status=?,sort_order=?,card_color=? WHERE id=?`,
+		last_started_at=?,last_url=?,last_status=?,sort_order=?,card_color=?,access_links_json=? WHERE id=?`,
 		a.Name, a.EntryScript, a.Cwd, a.AdapterType, a.Cmd, string(args), string(env), string(tags),
 		nullableString(a.GroupID), hints, a.HealthURL, a.ScriptHash, boolToInt(a.Confirmed), a.ConfirmedHash,
-		nullableString(a.LastStartedAt), nullableStringEmpty(a.LastURL), a.LastStatus, a.SortOrder, a.CardColor, a.ID)
+		nullableString(a.LastStartedAt), nullableStringEmpty(a.LastURL), a.LastStatus, a.SortOrder, a.CardColor, string(links), a.ID)
 	return err
 }
 
@@ -634,17 +649,21 @@ type scanner interface {
 
 func scanApp(sc scanner) (*App, error) {
 	a := &App{}
-	var argsJSON, envJSON, tagsJSON, hintsJSON string
+	var argsJSON, envJSON, tagsJSON, hintsJSON, linksJSON string
 	var groupID, lastStarted sql.NullString
 	var lastURL sql.NullString
 	var confirmed int
 	if err := sc.Scan(&a.ID, &a.Name, &a.EntryScript, &a.Cwd, &a.AdapterType, &a.Cmd,
 		&argsJSON, &envJSON, &tagsJSON, &groupID, &hintsJSON, &a.HealthURL, &a.ScriptHash,
-		&confirmed, &a.ConfirmedHash, &a.CreatedAt, &lastStarted, &lastURL, &a.LastStatus, &a.SortOrder, &a.CardColor); err != nil {
+		&confirmed, &a.ConfirmedHash, &a.CreatedAt, &lastStarted, &lastURL, &a.LastStatus, &a.SortOrder, &a.CardColor, &linksJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
+	}
+	_ = json.Unmarshal([]byte(linksJSON), &a.AccessLinks)
+	if a.AccessLinks == nil {
+		a.AccessLinks = []accesslink.Link{}
 	}
 	_ = json.Unmarshal([]byte(argsJSON), &a.Args)
 	_ = json.Unmarshal([]byte(envJSON), &a.Env)

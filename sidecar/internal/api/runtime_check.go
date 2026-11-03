@@ -126,6 +126,18 @@ func (s *Server) filterServiceProcesses(id string, members map[int]uint64) map[i
 	return nil
 }
 
+// Classification uses the same cached process evidence as ownership discovery.
+func (s *Server) auxiliaryServiceProcesses(members map[int]uint64) map[int]bool {
+	m := s.runtimeMonitor
+	m.mu.RLock()
+	snapshot, checked, err := m.snapshot, m.checked, m.err
+	m.mu.RUnlock()
+	if err != nil || checked.IsZero() || time.Since(checked) > 30*time.Second {
+		return nil
+	}
+	return recovery.AuxiliaryServiceProcesses(snapshot, members)
+}
+
 func (s *Server) checkBeforeStart(ctx context.Context, a *store.App) error {
 	if s.runtimeMonitor == nil {
 		return nil

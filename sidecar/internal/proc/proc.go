@@ -46,6 +46,7 @@ type Handle struct {
 	OnRootExit      func(int, bool) // set before Wait; bool means owned children remain
 	cancel          context.CancelFunc
 	pty             interface{} // Windows ConPTY 会话（*conPTYSession），非 Windows 或普通模式为 nil
+	cleanupEnv      func()
 }
 
 // IsConPTY 是否运行在 ConPTY 模式下。
@@ -66,6 +67,9 @@ func (h *Handle) Close() error {
 		}
 		if h.pty != nil {
 			closeConPTY(h.pty)
+		}
+		if h.cleanupEnv != nil {
+			h.cleanupEnv()
 		}
 	})
 	return h.closeErr

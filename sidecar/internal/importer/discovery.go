@@ -18,6 +18,7 @@ type StartupOption struct {
 	Kind         string `json:"kind"`
 	Command      string `json:"command,omitempty"`
 	Recommended  bool   `json:"recommended"`
+	DuplicateOf  string `json:"duplicateOf,omitempty"`
 	score        int
 }
 type Discovery struct {
@@ -48,7 +49,7 @@ func Discover(ctx context.Context, path string) (*Discovery, error) {
 		result.Options = append(result.Options, StartupOption{Path: root, RelativePath: filepath.Base(root), Kind: "script", Recommended: true})
 		return result, nil
 	}
-	excluded := map[string]bool{"node_modules": true, "vendor": true, "target": true, "dist": true, "build": true, "coverage": true, "venv": true, "__pycache__": true, "work": true}
+	excluded := map[string]bool{"node_modules": true, "vendor": true, "target": true, "dist": true, "build": true, "coverage": true, "venv": true, "__pycache__": true, "work": true, "backups": true, "backup": true, "备份": true}
 	visited := 0
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if ctx.Err() != nil {
@@ -82,6 +83,11 @@ func Discover(ctx context.Context, path string) (*Discovery, error) {
 		option := StartupOption{Path: p, RelativePath: rel, Kind: "script", score: 10 - depth}
 		if supportedScript(p) {
 			stem := strings.TrimSuffix(name, filepath.Ext(name))
+			for _, prefix := range []string{"安装", "卸载", "部署", "发布", "构建", "清理", "删除", "重置", "停止", "结束", "测试"} {
+				if strings.HasPrefix(stem, prefix) {
+					return nil
+				}
+			}
 			words := strings.FieldsFunc(stem, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == ' ' })
 			for _, word := range words {
 				if containsWord([]string{"install", "uninstall", "deploy", "release", "publish", "build", "clean", "delete", "remove", "reset", "stop", "kill", "test"}, word) {
@@ -90,6 +96,19 @@ func Discover(ctx context.Context, path string) (*Discovery, error) {
 			}
 			if len(words) > 0 && containsWord([]string{"start", "run", "dev", "serve", "launch"}, words[0]) {
 				option.score = 100 - depth*10
+			}
+			for _, prefix := range []string{"启动", "运行", "开启"} {
+				if strings.HasPrefix(stem, prefix) {
+					option.score = 100 - depth*10
+				}
+			}
+			for _, prefix := range []string{"预览", "打开", "查看", "管理"} {
+				if strings.HasPrefix(stem, prefix) {
+					option.score = 75 - depth*10
+				}
+			}
+			if strings.Contains(stem, "demo") || strings.Contains(stem, "演示") || strings.Contains(stem, "预览") {
+				option.score -= 15
 			}
 		} else if name == "package.json" {
 			runner, script, e := packageStartup(p)
@@ -119,6 +138,17 @@ func Discover(ctx context.Context, path string) (*Discovery, error) {
 		}
 		return a.RelativePath < b.RelativePath
 	})
+	seen := map[string]string{}
+	for i := range result.Options {
+		option := &result.Options[i]
+		if key := EntryFingerprint(option.Path); key != "" {
+			if first := seen[key]; first != "" {
+				option.DuplicateOf = first
+			} else {
+				seen[key] = option.RelativePath
+			}
+		}
+	}
 	if len(result.Options) > 20 {
 		result.Options = result.Options[:20]
 		result.Truncated = true

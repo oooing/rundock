@@ -112,21 +112,29 @@ func StartWithConPTY(ctx context.Context, pc *PreparedCommand, onLine func(line 
 	innerCtx, cancel := context.WithCancel(ctx)
 	lb := newLineBuffer(onLine)
 	env := mergeEnv(pc.Env)
-	sess, pid, err := startConPTY(innerCtx, pc.Cmd, pc.Args, pc.Cwd, env, lb.feed, true)
+	env, cleanupEnv, err := managedNodeEnvironment(env)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	sess, pid, err := startConPTY(innerCtx, pc.Cmd, pc.Args, pc.Cwd, env, lb.feed, true)
+	if err != nil {
+		cleanupEnv()
+		cancel()
+		return nil, err
+	}
 	h := &Handle{
-		exited:  make(chan struct{}),
-		rootPID: pid,
-		cancel:  cancel,
-		pty:     sess,
+		exited:     make(chan struct{}),
+		rootPID:    pid,
+		cancel:     cancel,
+		pty:        sess,
+		cleanupEnv: cleanupEnv,
 	}
 	// 把根进程加入 Job Object，sidecar 退出时整棵进程树仍会被回收。
 	h.group, err = newProcessGroup(pid)
 	if err != nil {
 		_ = sess.close()
+		cleanupEnv()
 		cancel()
 		return nil, fmt.Errorf("无法建立项目进程托管，已取消启动: %w", err)
 	}

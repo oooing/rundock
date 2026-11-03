@@ -92,6 +92,11 @@ func CheckHealth(ctx context.Context, baseURL string) *HealthResult {
 	for _, u := range candidates {
 		if r := probeURL(ctx, u); r != nil {
 			if r.Reachable {
+				// A working homepage cannot cancel an explicit health endpoint's
+				// server error (e.g. /api/health=503 while / still renders HTML).
+				if failure != nil && failure.StatusCode >= 500 {
+					return failure
+				}
 				return r
 			}
 			// Keep a concrete server failure rather than replacing it with a

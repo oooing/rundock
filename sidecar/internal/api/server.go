@@ -133,6 +133,7 @@ func (s *Server) ListenAndServe(addr string) (int, error) {
 	s.runtimeMonitor = &runtimeMonitor{gate: make(chan struct{}, 1), read: s.readProjectRuntimeSnapshot}
 	s.Launcher.BeforeStart = s.checkBeforeStart
 	s.Launcher.FilterServiceProcesses = s.filterServiceProcesses
+	s.Launcher.AuxiliaryServiceProcesses = s.auxiliaryServiceProcesses
 	s.runtimeDone = make(chan struct{})
 	go func() { defer close(s.runtimeDone); s.monitorRuntime(cloudCtx) }()
 	go func() { defer close(s.cloudDone); s.Publisher.MonitorCloudBuilds(cloudCtx) }()

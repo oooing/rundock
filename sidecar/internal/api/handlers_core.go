@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/launcher-sidecar/internal/accesslink"
 	"github.com/launcher-sidecar/internal/app"
 	"github.com/launcher-sidecar/internal/importer"
 	"github.com/launcher-sidecar/internal/store"
@@ -43,6 +44,21 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if key := importer.EntryFingerprint(cand.EntryScript); key != "" {
+		target := importer.EntryLaunchTarget(cand.EntryScript)
+		apps, err := s.Store.ListApps()
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		for _, a := range apps {
+			if importer.EntryFingerprint(a.EntryScript) == key {
+				cand.DuplicateApps = append(cand.DuplicateApps, importer.DuplicateApp{ID: a.ID, Name: a.Name})
+			} else if target != "" && importer.EntryLaunchTarget(a.EntryScript) == target {
+				cand.RelatedApps = append(cand.RelatedApps, importer.DuplicateApp{ID: a.ID, Name: a.Name})
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, cand)
 }
 
@@ -70,7 +86,13 @@ func (s *Server) handleApps(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 			return
 		}
+		links, err := accesslink.Normalize(body.AccessLinks)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
 		a := &store.App{
+			AccessLinks: links,
 			ID:          app.NewID(),
 			Name:        body.Name,
 			EntryScript: body.EntryScript,
@@ -264,6 +286,14 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request, id string
 				writeError(w, http.StatusBadRequest, "group not found")
 				return
 			}
+		}
+		if body.AccessLinks != nil {
+			links, err := accesslink.Normalize(*body.AccessLinks)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			body.AccessLinks = &links
 		}
 		applyUpdate(a, &body)
 		// 若脚本路径或内容变了，重新计算哈希并要求重新确认

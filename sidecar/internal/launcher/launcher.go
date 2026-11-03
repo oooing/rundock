@@ -30,8 +30,9 @@ type Launcher struct {
 	BeforeStart func(context.Context, *store.App) error
 	// Service discovery may narrow a native Job at known project boundaries.
 	// This never changes the process group's lifetime or stop ownership.
-	FilterServiceProcesses func(string, map[int]uint64) map[int]uint64
-	startProcess           func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
+	FilterServiceProcesses    func(string, map[int]uint64) map[int]uint64
+	AuxiliaryServiceProcesses func(map[int]uint64) map[int]bool
+	startProcess              func(context.Context, *proc.PreparedCommand, func(string)) (*proc.Handle, error)
 
 	// 每个 appID 的活跃编排上下文，停止时取用
 	mu   sync.Mutex

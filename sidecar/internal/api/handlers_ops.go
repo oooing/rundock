@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/launcher-sidecar/internal/accesslink"
 	"github.com/launcher-sidecar/internal/app"
 	"github.com/launcher-sidecar/internal/launcher"
 	"github.com/launcher-sidecar/internal/probe"
@@ -21,6 +22,7 @@ import (
 // ----- 请求/响应体 -----
 
 type createAppBody struct {
+	AccessLinks []accesslink.Link `json:"accessLinks"`
 	Name        string            `json:"name"`
 	EntryScript string            `json:"entryScript"`
 	Cwd         string            `json:"cwd"`
@@ -38,6 +40,7 @@ type createAppBody struct {
 }
 
 type updateAppBody struct {
+	AccessLinks *[]accesslink.Link `json:"accessLinks"`
 	Name        *string            `json:"name"`
 	EntryScript *string            `json:"entryScript"`
 	Cwd         *string            `json:"cwd"`
@@ -53,6 +56,9 @@ type updateAppBody struct {
 }
 
 func applyUpdate(a *store.App, b *updateAppBody) {
+	if b.AccessLinks != nil {
+		a.AccessLinks = *b.AccessLinks
+	}
 	if b.Name != nil {
 		a.Name = *b.Name
 	}
@@ -114,6 +120,7 @@ func appView(a *store.App, s *Server) map[string]any {
 		"lastUrl":       a.LastURL,
 		"sortOrder":     a.SortOrder,
 		"cardColor":     a.CardColor,
+		"accessLinks":   a.AccessLinks,
 	}
 	if a.GroupID != nil {
 		row["groupId"] = *a.GroupID

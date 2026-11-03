@@ -102,6 +102,12 @@ func (s *Store) ensureSchema() error {
 		}
 	}
 
+	if !appCols["ACCESS_LINKS_JSON"] {
+		if _, err := s.db.Exec("ALTER TABLE apps ADD COLUMN access_links_json TEXT NOT NULL DEFAULT '[]'"); err != nil {
+			return err
+		}
+	}
+
 	// v2 发布编排：旧的 003_releases 表需要补充 Tag 偏好和目标快照。
 	profileCols, err := s.tableColumns("release_profiles")
 	if err != nil {

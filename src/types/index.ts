@@ -31,7 +31,12 @@ export interface Finding {
 }
 
 /** 导入候选（POST /api/import 返回） */
+export interface AccessLink { name: string; url: string }
+
 export interface ImportCandidate {
+ accessLinks?: AccessLink[]
+ duplicateApps?: { id: string; name: string }[]
+ relatedApps?: { id: string; name: string }[]
   name: string
   entryScript: string
   cwd: string
@@ -49,12 +54,13 @@ export interface ImportCandidate {
 
 export interface StartupDiscovery {
   root: string
-  options: { path: string; relativePath: string; kind: 'script' | 'package'; command?: string; recommended: boolean }[]
+  options: { path: string; relativePath: string; kind: 'script' | 'package'; command?: string; recommended: boolean; duplicateOf?: string }[]
   truncated: boolean
 }
 
 /** App 视图（GET /api/apps 返回，含运行态） */
 export interface AppView {
+ accessLinks?: AccessLink[]
   /** Read-only, local artwork endpoint; absent on older backends. */
   iconUrl?: string
   temporaryPort?: { originalPort: number; port: number; host: string }
@@ -114,6 +120,7 @@ export type PendingOp = 'start' | 'restart'
 
 /** 创建 App 请求体 */
 export interface CreateAppBody {
+ accessLinks?: AccessLink[]
   name: string
   entryScript: string
   cwd: string

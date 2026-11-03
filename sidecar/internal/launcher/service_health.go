@@ -27,8 +27,20 @@ func (l *Launcher) recheckAndAggregate(appID string, rt *app.Runtime, col *logbu
 
 	now := checkedAt.UTC().Format(time.RFC3339)
 	healthy, unhealthy := 0, 0
+	active := map[string]bool{}
 	for _, svc := range svcs {
-		scope := serviceStatusScope(readiness, svc.Port)
+		active[svc.ID] = true
+	}
+	for id := range checks {
+		if !active[id] {
+			delete(checks, id)
+		}
+	}
+	for _, svc := range svcs {
+		scope := svc.StatusScope
+		if scope == "" || (readiness != nil && len(readiness.urls) > 0) {
+			scope = serviceStatusScope(readiness, svc.Port)
+		}
 		if svc.StatusScope != scope {
 			svc.StatusScope = scope
 			_ = l.Store.UpdateServiceStatusScope(svc.ID, scope)

@@ -57,6 +57,28 @@ func TestCheckRootDoesNotUseHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestHealthyHomepageDoesNotMaskFailingHealthEndpoint(t *testing.T) {
+	status := http.StatusServiceUnavailable
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(status)
+		case "/":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+	if got := CheckHealth(context.Background(), s.URL); got.Reachable || got.StatusCode != 503 || got.URL != s.URL+"/api/health" {
+		t.Fatalf("homepage masked backend health failure: %+v", got)
+	}
+	status = http.StatusOK
+	if got := CheckHealth(context.Background(), s.URL); !got.Reachable || got.URL != s.URL+"/api/health" {
+		t.Fatalf("backend recovery not detected: %+v", got)
+	}
+}
+
 func TestParseNetstat(t *testing.T) {
 	// 真实 netstat 片段（含 LISTENING 与 ESTABLISHED 噪声）
 	text := `

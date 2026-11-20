@@ -7,7 +7,7 @@
 - 把手可选“顶部居中”（默认，横向三点、28×24px 操作区）或“图标左侧”（竖向三点、24×28px 操作区）。后者与标题 Logo 居中对齐，不占顶边；水印模式下位于名称左边。保留原 `top-left` 存储值，不重置已有选择。悬浮显示轻淡背景，键盘焦点与原有鼠标/键盘排序保留。
 - 外观立即生效，按语言/动效设置惯例保存在当前设备的 `rundock.ui.cardAppearance`，不改项目配置或运行状态；不可保存时明确提示仅本次生效。
 - 启动失败顶条使用明确红色 `#ef4444`，状态文字仍按卡片底色保证可读；服务地址标题不再显示数量。
-- 优先读取启动文件同名 `.ico` / `.png` / `.svg`；其次读取项目中 Tauri、Electron、扩展的 JSON 图标配置，再查常见桌面图标、favicon 和 Logo 位置。
+- 优先读取启动文件同名 `.ico` / `.png` / `.svg`；其次读取 Tauri、Electron、扩展的 JSON 图标配置或 HTML 入口的 `rel="icon"`。找不到声明的本地图标时，再查常见桌面图标和 `public`、`static`、`src/assets`、`src/brand` 等位置的 favicon 或 Logo。
 - 支持工作目录及固定的 `code`、`frontend`、`web`、`client`、`desktop`、`apps/web`、`apps/desktop`、`apps/extension` 等位置。不递归扫描依赖、备份、Demo 或构建输出。
 - 不需要设置，不改项目配置，不执行启动文件，不联网抓 favicon，也不依赖 PowerShell 7。不提取 EXE / LNK 内嵌图标（目前启动入口支持脚本和包配置）。
 

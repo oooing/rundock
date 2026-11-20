@@ -120,9 +120,12 @@ var commonIcons = []string{
 	"public/favicon.svg", "public/favicon.ico", "public/favicon.png",
 	"favicon.svg", "favicon.ico", "favicon.png", "app/favicon.ico", "src/app/favicon.ico",
 	"public/icons/icon-128.png", "public/icon/128.png", "public/icon.png", "public/logo.svg", "public/logo.png",
-	"public/brand/logo.svg", "public/assets/logo.svg", "public/assets/logo256.png",
+	"public/brand/logo.svg", "public/brand/logo.png", "public/assets/logo.svg", "public/assets/logo.png", "public/assets/logo256.png",
 	"assets/icon.ico", "assets/icon.png", "assets/logo.svg", "assets/logo.png",
 	"build/icon.ico", "resources/icon.ico", "icon.ico", "icon.png", "logo.svg", "logo.png",
+	"src/favicon.ico", "static/favicon.ico", "static/favicon.png", "static/favicon.svg",
+	"static/logo.svg", "static/logo.png", "brand/logo.svg", "brand/logo.png",
+	"src/assets/logo.svg", "src/assets/logo.png", "src/brand/logo.svg", "src/brand/logo.png",
 }
 
 func Discover(cwd, script string) Icon {
@@ -136,27 +139,36 @@ func Discover(cwd, script string) Icon {
 	if err != nil || !localAbsolute(root) {
 		return Icon{}
 	}
-	var candidates []string
 	// An explicitly adjacent startup icon wins over framework defaults.
 	if localAbsolute(script) && within(cwd, script) {
 		rel, _ := filepath.Rel(cwd, script)
 		stem := strings.TrimSuffix(rel, filepath.Ext(rel))
 		for _, ext := range []string{".ico", ".png", ".svg"} {
-			candidates = append(candidates, filepath.Join(root, stem+ext))
+			if icon := loadIcon(root, filepath.Join(root, stem+ext)); len(icon.Data) > 0 {
+				return icon
+			}
 		}
 	}
+	// Check declarations before guessing, including when the UI is in a subdirectory.
+	bases := make([]string, 0, len(projectDirs))
 	for _, dir := range projectDirs {
 		base := filepath.Join(root, filepath.FromSlash(dir))
-		candidates = append(candidates, configuredIcons(root, base)...)
-		for _, name := range commonIcons {
-			candidates = append(candidates, filepath.Join(base, filepath.FromSlash(name)))
+		if _, err := os.Lstat(base); err != nil {
+			continue
 		}
-		for _, path := range candidates {
+		bases = append(bases, base)
+		for _, path := range configuredIcons(root, base) {
 			if icon := loadIcon(root, path); len(icon.Data) > 0 {
 				return icon
 			}
 		}
-		candidates = nil
+	}
+	for _, base := range bases {
+		for _, name := range commonIcons {
+			if icon := loadIcon(root, filepath.Join(base, filepath.FromSlash(name))); len(icon.Data) > 0 {
+				return icon
+			}
+		}
 	}
 	return Icon{}
 }
@@ -209,7 +221,7 @@ func configuredIcons(root, base string) []string {
 			}
 		}
 	}
-	return result
+	return append(result, htmlIcons(root, base)...)
 }
 
 func relativeIcon(base, name string) string {

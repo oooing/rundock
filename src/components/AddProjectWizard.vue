@@ -219,49 +219,53 @@ onUnmounted(() => { disposed = true; invalidateSource(); if (previousFocus?.isCo
         <button :aria-label="tr('关闭')" :disabled="saving" @click="emit('close')"><UiIcon name="close" /></button>
       </header>
       <div class="add-body">
-        <section v-if="!path && !result" class="drop-zone" :class="{ dragging: dragging || nativeDragOver }" :aria-label="tr('拖入项目文件或文件夹')" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop.prevent.stop="handleDrop">
-          <UiIcon name="folder" :size="24" /><span>{{ tr('拖入项目文件或文件夹') }}</span>
-          <small>{{ isTauri ? '.bat · .cmd · .ps1' : tr('Web 版无法获取完整路径时，请使用下方输入框。') }}</small>
-        </section>
-        <p v-if="dropHint" class="drop-hint" role="status">{{ dropHint }}</p>
-        <form class="path-form" @submit.prevent="inspect()">
-          <label for="project-source-path">{{ tr('文件或文件夹完整路径') }}</label>
-          <input id="project-source-path" ref="pathInput" v-model="path" :disabled="saving" placeholder="D:\Projects\my-app" autocomplete="off" spellcheck="false" @keydown.enter="onEnter" @compositionstart="composing = true" @compositionend="endComposition" />
-        </form>
-        <p v-if="busy || (!result && !error)" class="recognition-status" role="status">{{ busy ? tr('正在识别…') : tr('粘贴完整路径后自动识别。') }}</p>
-        <div v-if="error && errorPhase !== 'entry'" class="import-error" role="alert"><span>{{ error }}</span><button v-if="errorPhase === 'discovery'" :disabled="recognizing || saving || !completePath" @click="retry">{{ tr('重试') }}</button></div>
-        <section v-if="result && (!result.options.length || result.truncated)" class="startup-results">
-          <div v-if="!result.options.length" class="not-found"><h3>{{ tr('暂未识别到启动方式') }}</h3><p>{{ tr('可以换一个文件或文件夹，或查看如何准备启动入口。') }}</p><div><button :disabled="recognizing || saving" @click="inspect(true)">{{ tr('重新识别') }}</button><button @click="enterPath">{{ tr('重新输入路径') }}</button><button @click="help = !help" :aria-expanded="help">{{ tr('查看准备方法') }}</button></div></div>
-          <p v-if="result.truncated" class="muted">{{ tr('文件较多或部分目录无法读取，仅展示部分结果。可选择更具体的子文件夹继续识别。') }}</p>
-        </section>
-        <section v-if="result?.options.length === 1" class="entry-scope" :data-entry="result.options[0].path">
-          <div class="entry-heading"><UiIcon name="log" :size="18" /><strong>{{ result.options[0].command || result.options[0].relativePath }}</strong><span v-if="candidate && !candidate.findings?.length" class="recognized"><UiIcon name="check" :size="14" />{{ tr('已识别') }}</span></div>
-          <StartupEntryPanel :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" collapsible @retry="retry" />
-        </section>
-        <details v-else-if="multipleEntries" class="startup-details" :open="detailsOpen" @toggle="detailsOpen = ($event.target as HTMLDetailsElement).open">
-          <summary>{{ tr('启动详情') }}<span>{{ tr('选择一个启动方式') }}</span></summary>
-          <fieldset class="startup-options" :disabled="saving">
-            <legend class="sr-only">{{ tr('启动方式') }}</legend>
-            <section v-for="option in result!.options" :key="option.path" class="entry-scope" :class="{ selected: selected === option.path }" :data-entry="option.path">
-              <label class="entry-heading"><input v-model="selected" type="radio" name="startup-option" :value="option.path" /><span><strong>{{ option.command || option.relativePath }}</strong><small v-if="option.command">{{ option.relativePath }}</small></span><em v-if="option.recommended">{{ tr('推荐') }}</em></label>
-              <p v-if="option.duplicateOf" class="duplicate-note">{{ tr('与「{0}」内容相同', [option.duplicateOf]) }}</p>
-              <StartupEntryPanel v-if="selected === option.path" :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" @retry="retry" />
-            </section>
-          </fieldset>
-        </details>
-        <section v-if="candidate?.duplicateApps?.length && !existing" class="duplicate-note" role="status">
-          <p>{{ tr('与已添加的「{0}」脚本内容相同', [candidate.duplicateApps.map(a => a.name).join('、')]) }}</p>
-          <label><input v-model="allowDuplicate" type="checkbox" :disabled="saving" />{{ tr('仍作为独立项目添加') }}</label>
-        </section>
-        <section v-if="candidate?.relatedApps?.length" class="duplicate-note">
-          <div v-for="related in candidate.relatedApps" :key="related.id"><p>{{ tr('与「{0}」调用相同启动脚本', [related.name]) }}</p><button :disabled="saving || !candidate.accessLinks?.length" @click="mergeAccessLinks(related.id)">{{ tr('将访问入口合并到已有项目') }}</button></div>
-        </section>
-        <section v-if="candidate" class="import-details">
-          <label for="import-app-name">{{ tr('应用名称') }}</label>
-          <input id="import-app-name" v-model="candidate.name" :disabled="saving" />
-        </section>
-        <section v-if="candidate" class="import-details"><h3>{{ tr('访问入口') }}</h3><AccessLinkFields v-model="candidate.accessLinks" :disabled="saving" /></section>
-        <section v-if="help" class="preparation"><h3>{{ tr('如何准备启动入口') }}</h3><p>{{ tr('先查看项目说明中的“本地运行”或“快速开始”。') }}</p><p>{{ tr('Windows 项目可提供 .bat、.cmd 或 .ps1 启动脚本；Node 项目可在 package.json 中提供 dev、start 或 serve 命令。') }}</p><p>{{ tr('如果项目由 AI 或开发者提供，请让对方提供一个能够启动完整项目的脚本，再把脚本导入这里。') }}</p></section>
+        <div class="source-block">
+          <section v-if="!path && !result" class="drop-zone" :class="{ dragging: dragging || nativeDragOver }" :aria-label="tr('拖入项目文件或文件夹')" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop.prevent.stop="handleDrop">
+            <UiIcon name="folder" :size="24" /><span>{{ tr('拖入项目文件或文件夹') }}</span>
+            <small>{{ isTauri ? '.bat · .cmd · .ps1' : tr('Web 版无法获取完整路径时，请使用下方输入框。') }}</small>
+          </section>
+          <p v-if="dropHint" class="drop-hint" role="status">{{ dropHint }}</p>
+          <form class="path-form" @submit.prevent="inspect()">
+            <label for="project-source-path">{{ tr('文件或文件夹完整路径') }}</label>
+            <input id="project-source-path" ref="pathInput" v-model="path" :disabled="saving" placeholder="D:\Projects\my-app" autocomplete="off" spellcheck="false" @keydown.enter="onEnter" @compositionstart="composing = true" @compositionend="endComposition" />
+          </form>
+          <p v-if="busy || (!result && !error)" class="recognition-status" role="status">{{ busy ? tr('正在识别…') : tr('粘贴完整路径后自动识别。') }}</p>
+          <div v-if="error && errorPhase !== 'entry'" class="import-error" role="alert"><span>{{ error }}</span><button v-if="errorPhase === 'discovery'" :disabled="recognizing || saving || !completePath" @click="retry">{{ tr('重试') }}</button></div>
+          <section v-if="result && (!result.options.length || result.truncated)" class="startup-results">
+            <div v-if="!result.options.length" class="not-found"><h3>{{ tr('暂未识别到启动方式') }}</h3><p>{{ tr('可以换一个文件或文件夹，或查看如何准备启动入口。') }}</p><div><button :disabled="recognizing || saving" @click="inspect(true)">{{ tr('重新识别') }}</button><button @click="enterPath">{{ tr('重新输入路径') }}</button><button @click="help = !help" :aria-expanded="help">{{ tr('查看准备方法') }}</button></div></div>
+            <p v-if="result.truncated" class="muted">{{ tr('文件较多或部分目录无法读取，仅展示部分结果。可选择更具体的子文件夹继续识别。') }}</p>
+          </section>
+          <section v-if="help" class="preparation"><h3>{{ tr('如何准备启动入口') }}</h3><p>{{ tr('先查看项目说明中的“本地运行”或“快速开始”。') }}</p><p>{{ tr('Windows 项目可提供 .bat、.cmd 或 .ps1 启动脚本；Node 项目可在 package.json 中提供 dev、start 或 serve 命令。') }}</p><p>{{ tr('如果项目由 AI 或开发者提供，请让对方提供一个能够启动完整项目的脚本，再把脚本导入这里。') }}</p></section>
+        </div>
+        <div v-if="result?.options.length || candidate" class="project-block">
+          <section v-if="candidate" class="import-details">
+            <label for="import-app-name">{{ tr('应用名称') }}</label>
+            <input id="import-app-name" v-model="candidate.name" :disabled="saving" />
+          </section>
+          <section v-if="result?.options.length === 1" class="entry-scope" :data-entry="result.options[0].path">
+            <div class="entry-heading"><UiIcon name="log" :size="18" /><strong>{{ result.options[0].command || result.options[0].relativePath }}</strong><span v-if="candidate && !candidate.findings?.length" class="recognized"><UiIcon name="check" :size="14" />{{ tr('已识别') }}</span></div>
+            <StartupEntryPanel :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" collapsible @retry="retry" />
+          </section>
+          <details v-else-if="multipleEntries" class="startup-details" :open="detailsOpen" @toggle="detailsOpen = ($event.target as HTMLDetailsElement).open">
+            <summary>{{ tr('启动详情') }}<span>{{ tr('选择一个启动方式') }}</span></summary>
+            <fieldset class="startup-options" :disabled="saving">
+              <legend class="sr-only">{{ tr('启动方式') }}</legend>
+              <section v-for="option in result!.options" :key="option.path" class="entry-scope" :class="{ selected: selected === option.path }" :data-entry="option.path">
+                <label class="entry-heading"><input v-model="selected" type="radio" name="startup-option" :value="option.path" /><span><strong>{{ option.command || option.relativePath }}</strong><small v-if="option.command">{{ option.relativePath }}</small></span><em v-if="option.recommended">{{ tr('推荐') }}</em></label>
+                <p v-if="option.duplicateOf" class="duplicate-note">{{ tr('与「{0}」内容相同', [option.duplicateOf]) }}</p>
+                <StartupEntryPanel v-if="selected === option.path" :candidate="candidate" :loading="loadingEntry" :error="errorPhase === 'entry' ? error : ''" :duplicate="!!existing" :disabled="saving" @retry="retry" />
+              </section>
+            </fieldset>
+          </details>
+          <section v-if="candidate?.duplicateApps?.length && !existing" class="duplicate-note" role="status">
+            <p>{{ tr('与已添加的「{0}」脚本内容相同', [candidate.duplicateApps.map(a => a.name).join('、')]) }}</p>
+            <label><input v-model="allowDuplicate" type="checkbox" :disabled="saving" />{{ tr('仍作为独立项目添加') }}</label>
+          </section>
+          <section v-if="candidate?.relatedApps?.length" class="duplicate-note">
+            <div v-for="related in candidate.relatedApps" :key="related.id"><p>{{ tr('与「{0}」调用相同启动脚本', [related.name]) }}</p><button :disabled="saving || !candidate.accessLinks?.length" @click="mergeAccessLinks(related.id)">{{ tr('将访问入口合并到已有项目') }}</button></div>
+          </section>
+          <section v-if="candidate" class="import-details"><h3>{{ tr('访问入口') }}</h3><AccessLinkFields v-model="candidate.accessLinks" :disabled="saving" /></section>
+        </div>
       </div>
       <footer><span>{{ tr('添加后不会自动启动') }}</span><button class="cancel" :disabled="saving" @click="emit('close')">{{ tr('取消') }}</button><button class="primary" :disabled="recognizing || saving || duplicateBlocked || !candidate?.name.trim() || !!existing" @click="save">{{ saving ? tr('正在添加…') : hasDanger ? tr('我已知晓风险，确认导入') : tr('确认添加') }}</button></footer>
     </section>
@@ -279,6 +283,9 @@ header { display: flex; align-items: center; padding: 24px 24px 18px; gap: 12px;
 h2 { font-size: 20px; margin: 0; letter-spacing: -.3px; }header p { margin: 5px 0 0; color: var(--text-dim); font-size: 12px; }
 header>button { margin-left: auto; align-self: flex-start; border: 0; background: transparent; padding: 6px; color: var(--text-dim); }
 .add-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 24px 24px; display: grid; gap: 16px; }
+.source-block,.project-block { min-width: 0; display: grid; gap: 16px; }
+.source-block { padding-bottom: 8px; }
+.project-block { padding-top: 24px; border-top: 1px solid var(--border); }
 .path-form>label,.import-details>label { display: block; color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
 .path-form>input,.import-details>input { width: 100%; height: 42px; }
 .path-form>input { font-size: 12px; }.import-details>input { font-size: 15px; }

@@ -56,6 +56,8 @@ func TestDiscoveryPriorityAndSources(t *testing.T) {
 		{"next", "src/app/icon.svg", "image/svg+xml", []byte(`<svg viewBox="0 0 24 24"><path d="M0 0h24v24z"/></svg>`)},
 		{"wxt", "apps/extension/public/icons/icon-128.png", "image/png", pngData(t, 128)},
 		{"root script with code", "code/public/favicon.ico", "image/x-icon", icoData(t)},
+		{"static favicon", "static/favicon.png", "image/png", pngData(t, 64)},
+		{"source brand", "code/frontend/src/brand/logo.png", "image/png", pngData(t, 64)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -71,6 +73,50 @@ func TestDiscoveryPriorityAndSources(t *testing.T) {
 	put(t, root, "src-tauri/icons/128x128.png", pngData(t, 128))
 	if got := Discover(root, filepath.Join(root, "start.bat")); got.MIME != "image/x-icon" {
 		t.Fatal("startup icon must take precedence")
+	}
+}
+
+func TestHTMLIconDeclaration(t *testing.T) {
+	want := pngData(t, 64)
+	for _, tc := range []struct {
+		name, document, link, image string
+	}{
+		{"nested Vite", "code/frontend/index.html", `<LINK href='/src/brand/studio-mark.png?v=2#icon' REL='shortcut ICON'/>`, "code/frontend/src/brand/studio-mark.png"},
+		{"public URL", "index.html", `<link rel=icon href="/images/site%20mark.png">`, "public/images/site mark.png"},
+		{"relative URL", "public/index.html", `<link rel=icon href=images/mark.png>`, "public/images/mark.png"},
+		{"public placeholder", "public/index.html", `<link rel=icon href="%PUBLIC_URL%/images/mark.png">`, "public/images/mark.png"},
+		{"source entry", "src/index.html", `<link rel=icon href="/assets/site.png">`, "src/assets/site.png"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			put(t, root, "logo.png", pngData(t, 32))
+			put(t, root, tc.document, []byte(tc.link))
+			put(t, root, tc.image, want)
+			if got := Discover(root, filepath.Join(root, "start.cmd")); !bytes.Equal(got.Data, want) {
+				t.Fatal("declared favicon must take precedence over a guessed logo")
+			}
+		})
+	}
+}
+
+func TestHTMLIconFallback(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "project")
+	put(t, parent, "outside.png", pngData(t, 64))
+	put(t, root, "hidden.png", pngData(t, 64))
+	put(t, root, "index.html", []byte(`
+		<!-- <link rel="icon" href="hidden.png"> -->
+		<script>const example = '<link rel="icon" href="hidden.png">';</script>
+		<link rel="preload" href="hidden.png">
+		<link rel="icon" href="../outside.png">
+		<link rel="icon" href="//example.test/hidden.png">
+		<link rel="icon" href="https://example.test/hidden.png">
+		<link rel="icon" href="/missing.png">
+	`))
+	want := pngData(t, 32)
+	put(t, root, "src/assets/logo.png", want)
+	if got := Discover(root, ""); !bytes.Equal(got.Data, want) {
+		t.Fatal("invalid and unrelated links must fall back to the local logo")
 	}
 }
 

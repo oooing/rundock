@@ -38,7 +38,10 @@ test('never misattributes old disk errors to another retry, target or phase', ()
     assert.equal(releaseFailureAdvice(failed, [disk, event(latest), stdout('error: missing SDK')]), null)
     assert.equal(releaseFailureAdvice(failed, [disk, event(latest)]), null)
   }
-  assert.equal(releaseFailureAdvice({ ...failed, errorCode: 'build_changed_tree' }, [disk]), null)
+  const sourceChange = releaseFailureAdvice({ ...failed, errorCode: 'build_changed_tree' }, [disk])
+  assert.match(sourceChange.reason, /源码有变动/)
+  assert.match(sourceChange.action, /返回检查/)
+  assert.doesNotMatch(JSON.stringify(sourceChange), /空间不足|private-user/)
   assert.equal(releaseFailureAdvice({ ...failed, status: 'running' }, [disk]), null)
   assert.equal(releaseFailureAdvice({ ...failed, status: 'succeeded' }, [disk]), null)
   assert.equal(releaseFailureAdvice({ ...failed, stage: 'pushing_branch' }, [disk]), null)
@@ -50,6 +53,8 @@ test('all failure advice is translated', () => {
   const advice = releaseFailureAdvice(failed, [disk])
   assert.ok(dict[advice.reason]); assert.ok(dict[advice.action])
   assert.ok(dict[releaseFailureAdvice({ ...failed, errorCode: 'build_disk_full' }).reason])
+  const sourceChange = releaseFailureAdvice({ ...failed, stage: 'delivery_preflight', errorCode: 'build_changed_tree' })
+  assert.ok(dict[sourceChange.reason]); assert.ok(dict[sourceChange.action])
 })
 
 test('native failure markers explain old task logs without attributing a previous attempt', () => {

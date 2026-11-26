@@ -32,6 +32,9 @@ func targetCommandFailure(targetName, step, output string, err error) (string, s
 	if strings.Contains(text, "get-filehash") && strings.Contains(text, "commandnotfoundexception") {
 		return "build_verification_tool_missing", prefix + "无法计算文件校验码：PowerShell 的 Get-FileHash 命令不可用。请更新项目的打包脚本后重新构建；重复上传无法解决。"
 	}
+	if strings.Contains(text, "native zip differs from frozen runtime script:") {
+		return "build_runtime_script_mismatch", prefix + "未通过校验：发布包中的运行脚本与冻结源码不一致。请检查项目打包脚本后重新生成。"
+	}
 	for _, marker := range []string{"os error 112", "no space left on device", "磁盘空间不足", "there is not enough space on the disk", "error_disk_full", "code enospc", "enospc:"} {
 		if strings.Contains(text, marker) {
 			return "build_disk_full", prefix + "因磁盘空间不足而停止。请清理构建目录或系统临时目录所在磁盘，再重新构建；更换项目目录不会改变系统临时目录。"

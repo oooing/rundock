@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"github.com/launcher-sidecar/internal/diagnostics"
 	"github.com/launcher-sidecar/internal/releaseconfig"
 	"github.com/launcher-sidecar/internal/store"
@@ -57,6 +56,10 @@ func verifyBuildSideEffects(before, after worktreeSnapshot, allowedPatterns []st
 	}
 	sort.Strings(unsafe)
 	return len(unsafe) == 0, unsafe
+}
+
+func worktreeChangedMessage(paths []string) string {
+	return "发现源码有变动，发布已停止。请返回检查，重新核对文件后再生成。\n变动文件：" + strings.Join(paths, "、")
 }
 
 func (s *Service) executeTargetChecks(ctx context.Context, run *store.ReleaseRun, plan *executionPlan) error {
@@ -138,7 +141,7 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 	}
 	baseline, err := s.worktreeSnapshot(ctx, run.RepoRoot)
 	if err != nil {
-		return &targetExecutionError{Stage: "target_check", Code: "git_status_failed", Message: "无法检查构建副作用"}
+		return &targetExecutionError{Stage: "target_check", Code: "git_status_failed", Message: "无法检查构建前的工作区状态"}
 	}
 	for _, target := range plan.Targets {
 		targetRun := state[target.ID]
@@ -201,11 +204,6 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			stepCtx, cancel := commandContext(ctx, stepTimeout(target, step.name))
 			out, commandErr := runTargetCommand(stepCtx, s.targetRunner, workingDir, command)
 			cancel()
-			if candidate != nil {
-				if err := validateCandidateBytes(candidate); err != nil {
-					return &targetExecutionError{Stage: stage, Code: "build_changed_tree", Message: "构建命令修改了已验收的候选源码，已停止后续上传", TargetID: target.ID}
-				}
-			}
 			stepStatus, stepSeverity, stepCode, stepMessage, stepKind := "succeeded", "info", "", target.Name+" 的命令执行完成", "performance"
 			if commandErr != nil {
 				stepStatus, stepSeverity, stepKind = "failed", "error", "error"
@@ -220,31 +218,43 @@ func (s *Service) executeTargetPhaseInternal(ctx context.Context, run *store.Rel
 			if strings.TrimSpace(out) != "" {
 				s.log(run.ID, "stdout", target.Name+"\n"+truncateTargetOutput(out))
 			}
-			if run.CommitSHA != "" {
-				if err := s.ensureFrozenCommit(ctx, run); err != nil {
-					message := target.Name + " 的命令改变了 Git 提交，已停止发布"
-					_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, "release_commit_changed", message, true, true)
-					return &targetExecutionError{Stage: stage, Code: "release_commit_changed", Message: message, TargetID: target.ID}
+			failStep := func(code, message string) error {
+				_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, code, message, true, true)
+				return &targetExecutionError{Stage: stage, Code: code, Message: message, TargetID: target.ID}
+			}
+			stopForSourceChange := func(code, message string) error {
+				if commandErr != nil {
+					message += "\n" + stepMessage
+				}
+				return failStep(code, message)
+			}
+			if candidate != nil {
+				if err := validateCandidateBytes(candidate); err != nil {
+					return stopForSourceChange("build_changed_tree", "生成使用的源码副本有变动，发布已停止。请返回检查，重新核对文件后再生成。")
 				}
 			}
-			after, statusErr := s.worktreeSnapshot(ctx, run.RepoRoot)
-			if statusErr != nil {
-				commandErr = errors.New("无法检查命令执行后的仓库状态")
+			if run.CommitSHA != "" {
+				if err := s.ensureFrozenCommit(ctx, run); err != nil {
+					return stopForSourceChange("release_commit_changed", "发布所用的 Git 提交已变化，已停止发布")
+				}
 			}
-			allowed := targetArtifactPatterns(target)
-			for i := range allowed {
-				allowed[i] = expandTargetCommand(allowed[i], run, plan, target)
+			after, err := s.worktreeSnapshot(ctx, run.RepoRoot)
+			if err != nil {
+				return stopForSourceChange("git_status_failed", "无法确认命令执行后的工作区状态")
+			}
+			var allowed []string
+			if candidate == nil {
+				allowed = targetArtifactPatterns(target)
+				for i := range allowed {
+					allowed[i] = expandTargetCommand(allowed[i], run, plan, target)
+				}
 			}
 			if ok, changed := verifyBuildSideEffects(baseline, after, allowed); !ok {
-				message := target.Name + " 的命令修改了未声明的仓库文件：" + strings.Join(changed, "、")
-				_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, "build_changed_tree", message, true, true)
-				return &targetExecutionError{Stage: stage, Code: "build_changed_tree", Message: message, TargetID: target.ID}
+				return stopForSourceChange("build_changed_tree", worktreeChangedMessage(changed))
 			}
 			baseline = after
 			if commandErr != nil {
-				code, message := targetCommandFailure(target.Name, step.name, out, commandErr)
-				_ = s.store.UpdateReleaseTargetRun(run.ID, target.ID, "failed", step.name, code, message, true, true)
-				return &targetExecutionError{Stage: stage, Code: code, Message: message, TargetID: target.ID}
+				return failStep(stepCode, stepMessage)
 			}
 			if err := s.store.MarkReleaseTargetStepDone(run.ID, target.ID, step.name); err != nil {
 				return err

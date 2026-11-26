@@ -1,4 +1,6 @@
 {
+  "发现源码有变动，发布已停止。": "Source files changed. Publishing stopped.",
+  "返回检查，重新核对并勾选文件，再生成。": "Go back to the review, check and select the files, then build again.",
   "发布副本缺少原生模块构建文件。": "The release snapshot is missing native module build files.",
   "将模块的 Gradle 配置、Manifest 和混淆规则纳入发布，返回检查后重新生成。": "Include the modules' Gradle files, manifests and ProGuard rules, then return to checks and rebuild.",
   "Android 原生模块校验失败。": "Android native module verification failed.",

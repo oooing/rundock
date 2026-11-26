@@ -341,6 +341,79 @@ func TestTargetExecutorRecordsDeclaredArtifactsAndRejectsOtherChanges(t *testing
 	})
 }
 
+func TestTargetExecutorReportsEditsAndRetainsCommandFailure(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		isolated    bool
+		editSource  bool
+		editRoot    bool
+		failBuild   bool
+		wantCode    string
+		wantMessage string
+	}{
+		{"editing during an isolated build", true, false, true, false, "build_changed_tree", "变动文件：tracked.txt"},
+		{"failed isolated build during an edit", true, false, true, true, "build_changed_tree", "运行脚本与冻结源码不一致"},
+		{"isolated source changed", true, true, false, false, "build_changed_tree", "源码副本有变动"},
+		{"isolated build failed without edits", true, false, false, true, "build_runtime_script_mismatch", "运行脚本与冻结源码不一致"},
+		{"legacy build failed and changed files", false, false, true, true, "build_changed_tree", "运行脚本与冻结源码不一致"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, repo, cleanup := newShortTargetExecutorFixture(t)
+			defer cleanup()
+			selection := store.ReleaseTargetSelection{TargetID: "web", Build: true}
+			target := validExecutorTarget()
+			target.Steps.Check = ""
+			plan := executorPlan(target, selection)
+			if tt.isolated {
+				writeTestFile(t, filepath.Join(repo, "tracked.txt"), "accepted edit\n")
+				pf, err := svc.PreflightLocal(context.Background(), "app1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				view, err := svc.PrepareCandidate(context.Background(), "app1", CandidateRequest{
+					Intent: IntentSaveProgress, StatusFingerprint: pf.StatusFingerprint, SelectedPaths: []string{"tracked.txt"},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan.CandidateID = view.ID
+			}
+			svc.targetRunner = targetExecutorTestRunner(func(dir string) (string, error) {
+				if tt.editSource {
+					writeTestFile(t, filepath.Join(dir, "tracked.txt"), "edited by build\n")
+				}
+				if tt.editRoot {
+					writeTestFile(t, filepath.Join(repo, "tracked.txt"), "edited during build\n")
+				}
+				if tt.failBuild {
+					return "Native ZIP differs from frozen runtime script: pull_desktop_release.py", errors.New("exit status 1")
+				}
+				return "build completed", nil
+			})
+			run := createTargetExecutionRun(t, svc, repo, "run-isolation", selection)
+			run.CommitSHA = strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+			err := svc.executeTargetPhase(context.Background(), run, plan, false)
+			var failure *targetExecutionError
+			if !errors.As(err, &failure) || failure.Code != tt.wantCode || !strings.Contains(failure.Message, tt.wantMessage) {
+				t.Fatalf("failure = %#v, want %s / %s", err, tt.wantCode, tt.wantMessage)
+			}
+			if tt.wantCode == "build_changed_tree" && !strings.Contains(strings.SplitN(failure.Message, "\n", 2)[0], "返回检查") {
+				t.Fatalf("source change lacks recovery in summary: %s", failure.Message)
+			}
+			states, err := svc.store.ReleaseTargetRuns(run.ID)
+			if err != nil || len(states) != 1 || states[0].ErrorCode != failure.Code {
+				t.Fatalf("target state = %+v, %v", states, err)
+			}
+		})
+	}
+}
+
+type targetExecutorTestRunner func(string) (string, error)
+
+func (run targetExecutorTestRunner) Run(_ context.Context, dir, _ string, _ ...string) (string, error) {
+	return run(dir)
+}
+
 func TestExecutionPlanSnapshotDoesNotFollowLaterConfigEdits(t *testing.T) {
 	svc, repo, cleanup := newReleaseFixture(t)
 	defer cleanup()

@@ -85,6 +85,7 @@ const {
 } = useReleaseModel(props, emit)
 const advancedSettings = ref<HTMLDetailsElement | null>(null)
 const executionLogs = ref<HTMLDetailsElement | null>(null)
+const sourceChanged = computed(() => activeRun.value?.errorCode === 'build_changed_tree')
 async function showFailureLogs() {
   if (executionLogs.value) executionLogs.value.open = true
   await nextTick()
@@ -469,10 +470,11 @@ async function returnToRelease() {
         <p v-if="error" class="run-action-error" role="alert">{{ error }}</p>
         <p v-if="retryable && !customRetryConfirmation" class="run-action-hint">{{ savedOutputsReady && retryUpload ? tr('文件已保留，重试会继续上传，不会重新生成。') : retryGuidance }}</p>
         <p v-else-if="uploadPaused" class="run-action-hint">{{ tr('记录已保留，可从发布历史继续上传。') }}</p>
-        <button v-if="activeRun.status === 'failed' && !historyOpen" type="button" class="ghost return-check" :disabled="retrying || !retryMetadataLoaded" @click="startNew">{{ connectionFailedBeforeBuild ? tr('返回发布') : tr('返回检查') }}</button>
+        <button v-if="activeRun.status === 'failed' && !historyOpen && !sourceChanged" type="button" class="ghost return-check" :disabled="retrying || !retryMetadataLoaded" @click="startNew">{{ connectionFailedBeforeBuild ? tr('返回发布') : tr('返回检查') }}</button>
         <div class="run-primary-actions">
           <button type="button" class="defer-release" :disabled="closeLocked" @click="closePanel">{{ tr(uploadPaused ? '稍后处理' : '关闭') }}</button>
-          <button v-if="retryable" type="button" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded || !!runConnectionError" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button>
+          <button v-if="sourceChanged && !historyOpen" type="button" class="primary" :disabled="!retryMetadataLoaded" @click="startNew">{{ tr('返回检查') }}</button>
+          <button v-else-if="retryable" type="button" class="primary retry-submit" :disabled="retrying || !retryMetadataLoaded || !!runConnectionError" :aria-busy="retrying" @click="retry()">{{ retryButtonLabel }}</button>
         </div>
       </footer>
       <footer v-if="!historyOpen && !localBuildVisible && !activeRun && !loading && profileReady && preflight && releaseTab === 'publish'" class="m-foot" :inert="publishing">

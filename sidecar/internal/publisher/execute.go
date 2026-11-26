@@ -292,6 +292,15 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 
 	if plan.hasDelivery() {
 		setStage("delivery_preparing")
+		var beforeVerification worktreeSnapshot
+		if plan.CandidateID != "" {
+			var err error
+			beforeVerification, err = s.worktreeSnapshot(ctx, run.RepoRoot)
+			if err != nil {
+				fail("delivery_preparing", "git_status_failed", "无法检查产物验证前的工作区状态")
+				return
+			}
+		}
 		if err := s.sealDeliveries(ctx, run, plan); err != nil {
 			s.failDelivery(run, "delivery_preparing", err)
 			return
@@ -300,6 +309,17 @@ func (s *Service) execute(run *store.ReleaseRun, pf *Preflight, selected []strin
 		if err := s.deliveryPreflight(ctx, run); err != nil {
 			s.failDelivery(run, "delivery_preflight", err)
 			return
+		}
+		if beforeVerification != nil {
+			after, err := s.worktreeSnapshot(ctx, run.RepoRoot)
+			if err != nil {
+				fail("delivery_preflight", "git_status_failed", "无法检查上传前的工作区状态")
+				return
+			}
+			if ok, changed := verifyBuildSideEffects(beforeVerification, after, nil); !ok {
+				fail("delivery_preflight", "build_changed_tree", worktreeChangedMessage(changed))
+				return
+			}
 		}
 	}
 	if run.CreateTag {

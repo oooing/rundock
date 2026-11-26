@@ -194,7 +194,7 @@ export function installSelection(ctx: ReleaseContext) {
     ctx.retryable = computed(() => ctx.canRetryRun(ctx.activeRun.value));
     ctx.customRetryConfirmation = computed(() => ctx.retryConfirmationRequired.value ?? (!!ctx.activeRun.value
         && ['publishing_targets', 'target_publish', 'target_deploy'].includes(ctx.activeRun.value.stage)));
-    ctx.retryUpload = computed(() => !!ctx.activeRun.value?.pushRemote
+    ctx.retryUpload = computed(() => !!ctx.activeRun.value?.pushRemote && ctx.activeRun.value.errorCode !== 'build_changed_tree'
         && ['pushing_branch', 'pushing_tag', 'delivery_preflight', 'delivery_publish'].includes(ctx.activeRun.value.stage));
     ctx.uploadPaused = computed(() => ctx.retryUpload.value && ctx.activeRun.value?.status === 'failed' && !!ctx.activeRun.value.commitSha);
     ctx.runFailureSummary = computed(() => ctx.activeRun.value?.errorMessage?.split('\n')[0] || '');

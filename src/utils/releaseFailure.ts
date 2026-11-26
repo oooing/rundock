@@ -8,6 +8,11 @@ const buildStages = new Set(['building_targets', 'target_build', 'target_package
 // into a later failure. Only fixed copy and a drive letter reach the summary.
 export function releaseFailureAdvice(run: { status: string; stage: string; errorCode: string },
   logs: ReadonlyArray<Pick<ReleaseLog, 'stream' | 'text'>> = []) {
+  if (run.status === 'failed' && run.errorCode === 'build_changed_tree') return {
+    reason: '发现源码有变动，发布已停止。',
+    values: [],
+    action: '返回检查，重新核对并勾选文件，再生成。',
+  }
   if (run.status !== 'failed' || !buildStages.has(run.stage)
     || !['target_step_failed', 'local_build_failed', 'build_disk_full', 'build_native_source_missing', 'build_native_module_missing'].includes(run.errorCode)) return null
 
